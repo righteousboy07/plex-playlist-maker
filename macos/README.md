@@ -152,25 +152,20 @@ The first app is intentionally **not App-Sandboxed**. Sandboxing/signing/notariz
 10. Check History.
 11. Check Logs -> `api-server`.
 
-## Current limitations
+## v13.1 additions
 
-v13.0 does not yet edit/create/delete station profiles from the GUI. Use the CLI for that:
+The current client now includes:
 
-```bash
-./plex-curator station-update ...
-```
+- station profile editing
+- station enable/disable
+- station and history search/filtering
+- launchd Automation management
+- native notifications after refresh/automation actions
+- friendlier history date formatting
 
-This is intentional: the first goal is validating API reads plus safe Refresh/Backup-style authenticated writes before broadening GUI permissions.
+Station creation/deletion still remains CLI-first while the GUI write surface continues to mature.
 
-## Next improvements after this works
-
-### v13.1
-- station editor
-- enable/disable station
-- search/filter
-- automation/launchd screen
-- native notifications
-- better date formatting
+## Next improvements
 
 ### v13.2
 - Plex artwork/posters
