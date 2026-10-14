@@ -19,4 +19,4 @@ fi
 echo "Updating branch: $BRANCH"
 git pull --ff-only
 
-"$ROOT/scripts/install-all.sh" "$@"
+bash "$ROOT/scripts/install-all.sh" "$@"
