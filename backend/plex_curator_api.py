@@ -5,6 +5,7 @@ import json
 import secrets
 import sqlite3
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -156,7 +157,7 @@ def playlist_diff_payload(plex, cfg, proposed_items):
 
 def run_launchd_manager(*args):
     result = subprocess.run(
-        [str(LAUNCHD_MANAGER), *args],
+        [sys.executable, str(LAUNCHD_MANAGER), *args],
         cwd=str(core.APP_DIR),
         capture_output=True,
         text=True,
