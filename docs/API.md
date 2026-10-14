@@ -152,3 +152,56 @@ Known renamed titles can be resolved through:
 ```text
 backend/examples/title-aliases.json
 ```
+
+
+## Schedules
+
+List schedule definitions:
+
+```text
+GET /api/v1/schedules
+```
+
+Get one schedule:
+
+```text
+GET /api/v1/schedules/{id}
+```
+
+Read-only lineup preview:
+
+```text
+POST /api/v1/schedules/{id}/preview
+```
+
+Authenticated build:
+
+```text
+POST /api/v1/schedules/{id}/build
+```
+
+Preview/build options mirror the CLI schedule defaults:
+
+```json
+{
+  "playlist": "Saturday Morning TV",
+  "avoid_recent": 150,
+  "min_show_gap": 2,
+  "seasonal": "auto",
+  "special_every": 8,
+  "unwatched": false,
+  "ignore_watch_progress": false
+}
+```
+
+Build requests also accept:
+
+```json
+{
+  "replace": true
+}
+```
+
+Preview does not commit episode cursors/history. A successful build writes the playlist first, then applies pending episode cursors and build/history records.
+
+Clock-time scheduling remains owned by launchd/Automation rather than the schedule-definition API.

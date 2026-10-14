@@ -61,6 +61,10 @@ def test_api_routes_are_registered():
     assert "/api/v1/movies/preview" in paths
     assert "/api/v1/movies/playlist" in paths
     assert "/api/v1/wishlist/kids-scary" in paths
+    assert "/api/v1/schedules" in paths
+    assert "/api/v1/schedules/{schedule_id}" in paths
+    assert "/api/v1/schedules/{schedule_id}/preview" in paths
+    assert "/api/v1/schedules/{schedule_id}/build" in paths
 
 
 def test_station_update_config_persists_normalized_profile(tmp_path, monkeypatch):
@@ -257,3 +261,44 @@ def test_resolve_title_with_aliases(monkeypatch):
         ("Ghostbusters", 1984),
         ("Ghostbusters Remastered", 1984),
     ]
+
+
+def test_schedule_summary_totals_blocks():
+    cfg = {
+        "description": "Example schedule",
+        "playlist": "Example Playlist",
+        "blocks": [
+            {"name": "Cartoons", "type": "cartoons", "preset": "80s-cartoons", "minutes": 60},
+            {"name": "Movie", "type": "movie", "preset": "kids-scary", "minutes": 120},
+        ],
+    }
+
+    payload = api.schedule_summary("example", cfg)
+
+    assert payload["id"] == "example"
+    assert payload["playlist"] == "Example Playlist"
+    assert payload["total_minutes"] == 180
+    assert len(payload["blocks"]) == 2
+    assert payload["blocks"][0]["name"] == "Cartoons"
+
+
+def test_schedule_options_reject_invalid_seasonal():
+    request = api.ScheduleOptionsRequest(seasonal="spring")
+    try:
+        api.schedule_options(request)
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 422
+    else:
+        raise AssertionError("Expected invalid seasonal setting to be rejected")
+
+
+def test_schedule_options_match_cli_defaults():
+    request = api.ScheduleOptionsRequest()
+    options = api.schedule_options(request)
+
+    assert options["avoid_recent"] == 150
+    assert options["min_show_gap"] == 2
+    assert options["seasonal"] == "auto"
+    assert options["special_every"] == 8
+    assert options["unwatched"] is False
+    assert options["sync_watch_progress"] is True

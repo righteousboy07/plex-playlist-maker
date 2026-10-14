@@ -170,6 +170,7 @@ Station creation/deletion still remains CLI-first while the GUI write surface co
 - searchable Plex playlist browser with artwork
 - Movie Curator filter/preview/create workflow
 - Kids Scary Wishlist with present/missing status
+- Schedules screen with block timeline, preview, Build Now, and Automation status
 - localhost artwork proxy; Swift never receives the Plex token
 
 ## Next improvements

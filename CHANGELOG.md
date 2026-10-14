@@ -4,6 +4,15 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+### v13.2 schedules
+
+- Native Schedules browser with programming-block timeline and total duration.
+- Schedule cards show matching LaunchAgent automation state.
+- Read-only lineup preview grouped by programming block.
+- Authenticated Build Now / Replace action with cursor/history commit only after successful playlist creation.
+- Build options mirror the CLI defaults for recent avoidance, show gap, seasonal mode, specials, unwatched preference, and Plex watch progress.
+- Clock-time automation remains centralized in the Automation screen.
+
 ### v13.2 movie curator and wishlist
 
 - Native Movie Curator filter/preview screen using the existing Python movie-filter engine.
