@@ -14,8 +14,9 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.0"
+API_VERSION = "1.1"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
+LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
 
 app = FastAPI(
     title="Plex Curator Local API",
@@ -152,6 +153,24 @@ def playlist_diff_payload(plex, cfg, proposed_items):
     existing = core.find_playlist(plex, cfg["playlist"])
     current_items = list(existing.items()) if existing else []
     return core.calculate_playlist_diff(current_items, proposed_items)
+
+def run_launchd_manager(*args):
+    result = subprocess.run(
+        [str(LAUNCHD_MANAGER), *args],
+        cwd=str(core.APP_DIR),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "launchd manager failed").strip()
+        raise HTTPException(status_code=500, detail=detail)
+    return result.stdout.strip()
+
+def launchd_jobs_payload():
+    try:
+        return json.loads(run_launchd_manager("list-json"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"Invalid launchd manager JSON: {exc}")
 
 @app.get("/api/v1/ping")
 def ping():
@@ -396,6 +415,51 @@ def station_refresh_all(
         "dry_run": request.dry_run,
         "results": results,
     }
+
+@app.get("/api/v1/automation")
+def automation_jobs():
+    return launchd_jobs_payload()
+
+@app.post("/api/v1/automation/{job_name}/install")
+def automation_install(
+    job_name: str,
+    _authorized: bool = Depends(require_api_key),
+):
+    payload = launchd_jobs_payload()
+    known = {job["name"] for job in payload.get("jobs", [])}
+    if job_name not in known:
+        raise HTTPException(status_code=404, detail=f'Unknown automation job "{job_name}".')
+    run_launchd_manager("install", job_name)
+    return {"ok": True, "job": json.loads(run_launchd_manager("status-json", job_name))}
+
+@app.post("/api/v1/automation/{job_name}/uninstall")
+def automation_uninstall(
+    job_name: str,
+    _authorized: bool = Depends(require_api_key),
+):
+    if job_name == "api-server":
+        raise HTTPException(
+            status_code=409,
+            detail="The API server cannot uninstall its own LaunchAgent. Use launchd-manager.py from Terminal.",
+        )
+    payload = launchd_jobs_payload()
+    known = {job["name"] for job in payload.get("jobs", [])}
+    if job_name not in known:
+        raise HTTPException(status_code=404, detail=f'Unknown automation job "{job_name}".')
+    run_launchd_manager("uninstall", job_name)
+    return {"ok": True, "job": json.loads(run_launchd_manager("status-json", job_name))}
+
+@app.post("/api/v1/automation/{job_name}/run-now")
+def automation_run_now(
+    job_name: str,
+    _authorized: bool = Depends(require_api_key),
+):
+    payload = launchd_jobs_payload()
+    known = {job["name"] for job in payload.get("jobs", [])}
+    if job_name not in known:
+        raise HTTPException(status_code=404, detail=f'Unknown automation job "{job_name}".')
+    run_launchd_manager("run-now", job_name)
+    return {"ok": True, "job": json.loads(run_launchd_manager("status-json", job_name))}
 
 @app.get("/api/v1/playlists")
 def playlists():
