@@ -4,11 +4,17 @@ on:
   push:
     paths:
       - "backend/**"
+      - "scripts/**"
       - ".github/workflows/backend-tests.yml"
+      - ".github/workflows/deployment-validation.yml"
+      - ".github/workflows/release.yml"
   pull_request:
     paths:
       - "backend/**"
+      - "scripts/**"
       - ".github/workflows/backend-tests.yml"
+      - ".github/workflows/deployment-validation.yml"
+      - ".github/workflows/release.yml"
 
 jobs:
   test:
@@ -38,3 +44,14 @@ jobs:
       - name: Run tests
         working-directory: backend
         run: pytest -q
+
+      - name: Validate deployment scripts
+        run: |
+          bash -n scripts/install-backend.sh
+          bash -n scripts/install-macos-app.sh
+          bash -n scripts/install-all.sh
+          bash -n scripts/update-from-git.sh
+          bash -n backend/install.sh
+          bash scripts/install-backend.sh --dry-run --target "$RUNNER_TEMP/PlexCurator"
+          bash scripts/install-macos-app.sh --dry-run --no-open
+          bash scripts/install-all.sh --dry-run --no-open
