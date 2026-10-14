@@ -997,7 +997,8 @@ def choose_start_index(show, episodes, sync_watch_progress=True):
         return cursor_idx % max(len(episodes), 1), "curator"
     watch_idx, watch_updated = plex_watch_next_index(episodes)
     if watch_idx is None:
-        return cursor_idx % len(episodes), "curator"    if cursor_updated is None:
+        return cursor_idx % len(episodes), "curator"
+    if cursor_updated is None:
         return watch_idx, "plex"
     if watch_updated is not None and watch_updated > cursor_updated:
         return watch_idx, "plex"
@@ -1996,7 +1997,8 @@ def cmd_doctor(args):
         status, detail = json_file_check(path)
         report(status, label, detail)
 
-    try:        stations = load_stations()
+    try:
+        stations = load_stations()
         for sid, raw in stations.items():
             normalize_station(sid, raw)
         report("PASS", "Station profile validation", f"{len(stations)} valid")
