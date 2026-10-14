@@ -21,5 +21,5 @@ mac_args=()
 [[ "$DRY_RUN" -eq 1 ]] && backend_args+=(--dry-run) && mac_args+=(--dry-run)
 [[ "$NO_OPEN" -eq 1 ]] && mac_args+=(--no-open)
 
-"$ROOT/scripts/install-backend.sh" "${backend_args[@]}"
-"$ROOT/scripts/install-macos-app.sh" "${mac_args[@]}"
+bash "$ROOT/scripts/install-backend.sh" "${backend_args[@]}"
+bash "$ROOT/scripts/install-macos-app.sh" "${mac_args[@]}"
