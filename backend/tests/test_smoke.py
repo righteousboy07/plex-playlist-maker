@@ -162,3 +162,17 @@ def test_automation_install_uses_launchd_manager(monkeypatch):
     assert response["ok"] is True
     assert response["job"]["loaded"] is True
     assert ("install", "stations-nightly") in calls
+
+
+def test_launchd_wishlist_uses_packaged_example():
+    import importlib.util
+    from pathlib import Path
+
+    manager_path = Path(__file__).resolve().parents[1] / "launchd-manager.py"
+    spec = importlib.util.spec_from_file_location("plex_curator_launchd", manager_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    args = module.JOBS["kids-scary-wishlist"]["args"]
+    assert "examples" in args[1]
+    assert args[1].endswith("kids-scary-missing-wishlist.txt")
