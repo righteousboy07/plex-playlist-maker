@@ -4,6 +4,15 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+### v13.2 playlist browser and artwork
+
+- Native searchable Plex playlist browser.
+- Playlist detail grid with movie posters and episode thumbnails.
+- Watched state, runtime, content rating, and summaries in playlist cards.
+- Localhost artwork proxy with size-limited image transcoding.
+- Plex credentials remain entirely in the backend.
+- macOS app bundle explicitly allows local-network HTTP for the localhost API.
+
 ### Deployment and releases
 
 - Safe GitHub-to-Mac backend installer with timestamped live-code backup.
