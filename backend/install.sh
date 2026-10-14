@@ -18,10 +18,10 @@ python -m pip install -r requirements.txt
 chmod +x plex-curator launchd-manager.py plex-curator-api
 
 echo
-echo "Plex Curator v10.1 installed."
+echo "Plex Curator backend installed."
 echo "Permanent Plex config: ~/.config/plex-curator/.env"
 echo "Persistent state:       ~/.config/plex-curator/state.sqlite3"
 echo "Local API key:          ~/.config/plex-curator/api.key"
 echo
 echo "Run:"
-echo "  ./plex-curator test"
+echo "  ./plex-curator doctor"
