@@ -1,0 +1,43 @@
+# Secrets / runtime config
+.env
+.env.*
+!.env.example
+*.key
+api.key
+.config/
+
+# Plex Curator runtime state
+state.sqlite3
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+backups/
+exports/
+logs/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS / Swift / Xcode
+.DS_Store
+.build/
+dist/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.swiftpm/
+
+# Editors
+.vscode/
+.idea/
+
+# Local temp / archives
+*.zip
+*.tar.gz
+*.log
