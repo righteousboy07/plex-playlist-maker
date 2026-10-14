@@ -50,7 +50,7 @@ JOBS = {
     "kids-scary-wishlist": {
         "label": "com.ry.plexcurator.kidsscarywishlist",
         "calendar": {"Weekday": 1, "Hour": 9, "Minute": 0},
-        "args": ["wishlist-check", str(APP_DIR / "kids-scary-missing-wishlist.txt")],
+        "args": ["wishlist-check", str(APP_DIR / "examples" / "kids-scary-missing-wishlist.txt")],
         "description": "Sunday at 9:00 AM",
     },
     "stations-nightly": {

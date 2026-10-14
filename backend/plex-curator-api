@@ -3,7 +3,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from pathlib import Path
+
+APP_DIR = Path(__file__).resolve().parent
+VENV_PYTHON = APP_DIR / ".venv" / "bin" / "python"
+
+if VENV_PYTHON.exists():
+    current = Path(sys.executable).resolve()
+    target = VENV_PYTHON.resolve()
+    if current != target:
+        os.execv(str(target), [str(target), str(Path(__file__).resolve()), *sys.argv[1:]])
 import urllib.error
 import urllib.request
 
