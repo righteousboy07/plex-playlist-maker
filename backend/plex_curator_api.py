@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.3"
+API_VERSION = "1.4"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
 KIDS_SCARY_WISHLIST = core.APP_DIR / "examples" / "kids-scary-missing-wishlist.txt"
@@ -60,6 +60,18 @@ class MovieFilterRequest(BaseModel):
 
 class MoviePlaylistRequest(MovieFilterRequest):
     playlist: str = Field(min_length=1, max_length=120)
+    replace: bool = True
+
+class ScheduleOptionsRequest(BaseModel):
+    playlist: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    avoid_recent: int = Field(default=150, ge=0, le=100000)
+    min_show_gap: int = Field(default=2, ge=0, le=100)
+    seasonal: str = Field(default="auto")
+    special_every: int = Field(default=8, ge=1, le=1000)
+    unwatched: bool = False
+    ignore_watch_progress: bool = False
+
+class ScheduleBuildRequest(ScheduleOptionsRequest):
     replace: bool = True
 
 class StationUpdateRequest(BaseModel):
@@ -213,6 +225,105 @@ def resolve_title_with_aliases(section, title, year=None):
         if item:
             return item
     return None
+
+def schedule_summary(schedule_id: str, cfg: dict):
+    blocks = []
+    total_minutes = 0
+    for index, block in enumerate(cfg.get("blocks", []), 1):
+        minutes = int(block.get("minutes", 60))
+        total_minutes += minutes
+        blocks.append({
+            "index": index,
+            "name": block.get("name", f"Block {index}"),
+            "type": block.get("type"),
+            "preset": block.get("preset"),
+            "minutes": minutes,
+            "seasonal": block.get("seasonal"),
+        })
+    return {
+        "id": schedule_id,
+        "description": cfg.get("description", ""),
+        "playlist": cfg.get("playlist") or schedule_id.replace("-", " ").title(),
+        "total_minutes": total_minutes,
+        "blocks": blocks,
+    }
+
+def schedule_or_404(schedule_id: str):
+    schedules = core.load_schedules()
+    if schedule_id not in schedules:
+        raise HTTPException(status_code=404, detail=f'Unknown schedule "{schedule_id}".')
+    return schedules[schedule_id]
+
+def schedule_options(request: ScheduleOptionsRequest):
+    if request.seasonal not in {"auto", "none", "halloween", "christmas"}:
+        raise HTTPException(status_code=422, detail="Invalid seasonal setting.")
+    return {
+        "avoid_recent": request.avoid_recent,
+        "min_show_gap": request.min_show_gap,
+        "seasonal": request.seasonal,
+        "special_every": request.special_every,
+        "unwatched": request.unwatched,
+        "sync_watch_progress": not request.ignore_watch_progress,
+    }
+
+def build_schedule_payload(plex, schedule_id: str, request: ScheduleOptionsRequest):
+    cfg = schedule_or_404(schedule_id)
+    options = schedule_options(request)
+    items = []
+    pending_cursor_updates = {}
+    block_results = []
+
+    for index, block in enumerate(cfg.get("blocks", []), 1):
+        block_name = block.get("name", f"Block {index}")
+        block_type = block.get("type")
+        minutes = int(block.get("minutes", 60))
+
+        if block_type == "cartoons":
+            estimated = max(1, round(minutes / 22))
+            picked, _shows, mode, block_cursor_updates = core.build_channel(
+                plex=plex,
+                preset_name=block.get("preset", "all-cartoons"),
+                channel_name=f"schedule:{schedule_id}:{block_name}",
+                per_show=max(2, min(8, estimated)),
+                total=estimated,
+                unwatched=options["unwatched"],
+                avoid_recent=options["avoid_recent"],
+                sync_watch_progress=options["sync_watch_progress"],
+                min_show_gap=options["min_show_gap"],
+                seasonal=block.get("seasonal", options["seasonal"]),
+                special_every=options["special_every"],
+                adult=False,
+            )
+            pending_cursor_updates.update(block_cursor_updates)
+        elif block_type == "movie":
+            picked = core.choose_movie_block(
+                plex,
+                block.get("preset", "friday-movie-night"),
+                minutes,
+            )
+            mode = block.get("seasonal", options["seasonal"])
+        else:
+            picked = []
+            mode = block.get("seasonal", options["seasonal"])
+
+        serialized = [
+            serialize_item(item, len(items) + offset)
+            for offset, item in enumerate(picked, 1)
+        ]
+        block_results.append({
+            "index": index,
+            "name": block_name,
+            "type": block_type,
+            "preset": block.get("preset"),
+            "minutes": minutes,
+            "seasonal_mode": mode,
+            "item_count": len(picked),
+            "items": serialized,
+        })
+        items.extend(picked)
+
+    playlist = request.playlist or cfg.get("playlist") or schedule_id.replace("-", " ").title()
+    return cfg, playlist, items, pending_cursor_updates, block_results
 
 def build_station_payload(station_id: str, total: Optional[int] = None):
     cfg = station_or_404(station_id)
@@ -578,6 +689,72 @@ def automation_run_now(
         raise HTTPException(status_code=404, detail=f'Unknown automation job "{job_name}".')
     run_launchd_manager("run-now", job_name)
     return {"ok": True, "job": json.loads(run_launchd_manager("status-json", job_name))}
+
+@app.get("/api/v1/schedules")
+def schedules_list():
+    schedules = core.load_schedules()
+    return {
+        "schedules": [
+            schedule_summary(schedule_id, schedules[schedule_id])
+            for schedule_id in sorted(schedules)
+        ]
+    }
+
+@app.get("/api/v1/schedules/{schedule_id}")
+def schedule_detail(schedule_id: str):
+    return schedule_summary(schedule_id, schedule_or_404(schedule_id))
+
+@app.post("/api/v1/schedules/{schedule_id}/preview")
+def schedule_preview(schedule_id: str, request: ScheduleOptionsRequest):
+    plex = core.connect()
+    cfg, playlist, items, _cursor_updates, blocks = build_schedule_payload(
+        plex, schedule_id, request
+    )
+    return {
+        "schedule": schedule_summary(schedule_id, cfg),
+        "playlist": playlist,
+        "item_count": len(items),
+        "blocks": blocks,
+        "items": [serialize_item(item, i) for i, item in enumerate(items, 1)],
+        "read_only": True,
+    }
+
+@app.post("/api/v1/schedules/{schedule_id}/build")
+def schedule_build(
+    schedule_id: str,
+    request: ScheduleBuildRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    cfg, playlist_name, items, cursor_updates, blocks = build_schedule_payload(
+        plex, schedule_id, request
+    )
+    if not items:
+        raise HTTPException(status_code=409, detail="No schedule items were selected.")
+
+    try:
+        if request.replace:
+            playlist = core.replace_playlist_with_rollback(plex, playlist_name, items)
+        else:
+            playlist = core.create_playlist(plex, playlist_name, items, replace=False)
+
+        core.apply_cursor_updates(cursor_updates)
+        for item in items:
+            if getattr(item, "type", "") == "episode":
+                core.remember_episode(item, f"schedule:{schedule_id}")
+        core.remember_build(f"schedule:{schedule_id}", playlist.title, len(items))
+    except SystemExit as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "schedule": schedule_summary(schedule_id, cfg),
+        "playlist": playlist.title,
+        "item_count": len(items),
+        "blocks": blocks,
+    }
 
 @app.post("/api/v1/movies/preview")
 def movies_preview(request: MovieFilterRequest):
