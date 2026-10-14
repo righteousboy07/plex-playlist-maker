@@ -1041,21 +1041,21 @@ struct AutomationView: View {
                     Spacer()
 
                     Button("Run Now") {
-                        confirmJob = job
                         confirmAction = "run-now"
+                        confirmJob = job
                     }
                     .disabled(job.protected && job.name == "api-server")
 
                     if job.loaded || job.plistExists {
                         Button("Remove") {
-                            confirmJob = job
                             confirmAction = "uninstall"
+                            confirmJob = job
                         }
                         .disabled(job.protected)
                     } else {
                         Button("Install") {
-                            confirmJob = job
                             confirmAction = "install"
+                            confirmJob = job
                         }
                     }
                 }
