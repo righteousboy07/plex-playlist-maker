@@ -1,0 +1,40 @@
+name: Backend tests
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-tests.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-tests.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+      - name: Compile Python
+        working-directory: backend
+        run: python -m compileall -q plex_curator.py plex_curator_api.py launchd-manager.py
+      - name: CLI parser smoke test
+        working-directory: backend
+        run: python plex_curator.py --help >/dev/null
+      - name: Run tests
+        working-directory: backend
+        run: pytest -q
