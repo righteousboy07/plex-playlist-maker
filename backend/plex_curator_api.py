@@ -6,16 +6,18 @@ import secrets
 import sqlite3
 import subprocess
 import sys
+import requests
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.1"
+API_VERSION = "1.2"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
 
@@ -91,14 +93,20 @@ def station_or_404(station_id: str):
         raise HTTPException(status_code=422, detail=str(exc))
 
 def serialize_item(item, position: Optional[int] = None):
+    rating_key = str(getattr(item, "ratingKey", "") or "")
+    duration_ms = getattr(item, "duration", None)
     data = {
-        "rating_key": str(getattr(item, "ratingKey", "") or ""),
+        "rating_key": rating_key,
         "type": getattr(item, "type", None),
         "title": getattr(item, "title", None),
         "year": getattr(item, "year", None),
         "content_rating": getattr(item, "contentRating", None),
         "view_count": getattr(item, "viewCount", 0) or 0,
         "watched": core.is_watched(item),
+        "summary": getattr(item, "summary", None),
+        "duration_minutes": round(duration_ms / 60000) if duration_ms else None,
+        "thumb_available": bool(getattr(item, "thumb", None)),
+        "artwork_url": f"/api/v1/artwork/{rating_key}" if rating_key and getattr(item, "thumb", None) else None,
     }
     if position is not None:
         data["position"] = position
@@ -107,7 +115,6 @@ def serialize_item(item, position: Optional[int] = None):
             "show_title": getattr(item, "grandparentTitle", None),
             "season_number": getattr(item, "parentIndex", None),
             "episode_number": getattr(item, "index", None),
-            "summary": getattr(item, "summary", None),
         })
     return data
 
@@ -172,6 +179,51 @@ def launchd_jobs_payload():
         return json.loads(run_launchd_manager("list-json"))
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail=f"Invalid launchd manager JSON: {exc}")
+
+def fetch_artwork_bytes(rating_key: int, width: int, height: int):
+    plex = core.connect()
+    try:
+        item = plex.fetchItem(rating_key)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Media item {rating_key} was not found.") from exc
+
+    thumb = getattr(item, "thumb", None)
+    if not thumb:
+        raise HTTPException(status_code=404, detail="No artwork is available for this media item.")
+
+    source_url = plex.url(thumb, includeToken=True)
+    image_url = plex.transcodeImage(
+        source_url,
+        height=height,
+        width=width,
+        imageFormat="jpeg",
+    )
+
+    try:
+        result = requests.get(image_url, timeout=15)
+        result.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="Plex artwork request failed.") from exc
+
+    return result.content, result.headers.get("Content-Type", "image/jpeg")
+
+@app.get("/api/v1/artwork/{rating_key}")
+def artwork(
+    rating_key: str,
+    width: int = Query(default=240, ge=32, le=1200),
+    height: int = Query(default=360, ge=32, le=1200),
+):
+    try:
+        numeric_key = int(rating_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="rating_key must be numeric.") from exc
+
+    content, media_type = fetch_artwork_bytes(numeric_key, width, height)
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 @app.get("/api/v1/ping")
 def ping():
@@ -471,8 +523,31 @@ def playlists():
             "title": playlist.title,
             "item_count": getattr(playlist, "leafCount", None),
             "rating_key": str(getattr(playlist, "ratingKey", "") or ""),
+            "playlist_type": getattr(playlist, "playlistType", None),
+            "smart": bool(getattr(playlist, "smart", False)),
+            "updated_at": (
+                getattr(playlist, "updatedAt", None).isoformat()
+                if getattr(playlist, "updatedAt", None)
+                else None
+            ),
         })
     return {"playlists": result}
+
+@app.get("/api/v1/playlist")
+def playlist_detail_query(name: str = Query(min_length=1)):
+    plex = core.connect()
+    playlist = core.find_playlist(plex, name)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    items = list(playlist.items())
+    return {
+        "title": playlist.title,
+        "rating_key": str(getattr(playlist, "ratingKey", "") or ""),
+        "playlist_type": getattr(playlist, "playlistType", None),
+        "smart": bool(getattr(playlist, "smart", False)),
+        "item_count": len(items),
+        "items": [serialize_item(item, i) for i, item in enumerate(items, 1)],
+    }
 
 @app.get("/api/v1/playlists/{playlist_name}")
 def playlist_detail(playlist_name: str):
