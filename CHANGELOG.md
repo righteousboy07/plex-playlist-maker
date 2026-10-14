@@ -4,6 +4,14 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+### v13.2 movie curator and wishlist
+
+- Native Movie Curator filter/preview screen using the existing Python movie-filter engine.
+- Authenticated create/replace Plex playlist action with rollback-safe replacement.
+- Native Kids Scary Wishlist with All / Missing / Found filters.
+- Wishlist matches display actual Plex titles and artwork when present.
+- Packaged alias map prevents known renamed/remastered titles from becoming false misses.
+
 ### v13.2 playlist browser and artwork
 
 - Native searchable Plex playlist browser.
