@@ -131,7 +131,7 @@ struct APIErrorResponse: Codable { let detail: String }
 struct PreviewRequest: Codable { let total: Int? }
 struct RefreshRequest: Codable { let total: Int?; let dryRun: Bool; let force: Bool }
 
-struct StationUpdateRequest: Codable {
+struct StationUpdateRequest: Encodable {
     let name: String
     let description: String
     let enabled: Bool
@@ -151,6 +151,36 @@ struct StationUpdateRequest: Codable {
     let syncWatchProgress: Bool
     let includeShows: [String]
     let excludeShows: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case name, description, enabled, playlist, preset
+        case yearMin, yearMax, kidsOnly, adult, perShow, total
+        case avoidRecent, minShowGap, seasonal, specialEvery
+        case unwatched, syncWatchProgress, includeShows, excludeShows
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        try c.encode(description, forKey: .description)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encode(playlist, forKey: .playlist)
+        try c.encode(preset, forKey: .preset)
+        if let yearMin { try c.encode(yearMin, forKey: .yearMin) } else { try c.encodeNil(forKey: .yearMin) }
+        if let yearMax { try c.encode(yearMax, forKey: .yearMax) } else { try c.encodeNil(forKey: .yearMax) }
+        try c.encode(kidsOnly, forKey: .kidsOnly)
+        try c.encode(adult, forKey: .adult)
+        try c.encode(perShow, forKey: .perShow)
+        try c.encode(total, forKey: .total)
+        try c.encode(avoidRecent, forKey: .avoidRecent)
+        try c.encode(minShowGap, forKey: .minShowGap)
+        try c.encode(seasonal, forKey: .seasonal)
+        try c.encode(specialEvery, forKey: .specialEvery)
+        try c.encode(unwatched, forKey: .unwatched)
+        try c.encode(syncWatchProgress, forKey: .syncWatchProgress)
+        try c.encode(includeShows, forKey: .includeShows)
+        try c.encode(excludeShows, forKey: .excludeShows)
+    }
 }
 
 struct StationUpdateResponse: Codable {
