@@ -38,6 +38,28 @@ class RefreshAllRequest(BaseModel):
 class BackupRequest(BaseModel):
     reason: str = Field(default="api", min_length=1, max_length=80)
 
+class StationUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=500)
+    enabled: Optional[bool] = None
+    playlist: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    preset: Optional[str] = None
+    year_min: Optional[int] = Field(default=None, ge=1900, le=2200)
+    year_max: Optional[int] = Field(default=None, ge=1900, le=2200)
+    kids_only: Optional[bool] = None
+    adult: Optional[bool] = None
+    per_show: Optional[int] = Field(default=None, ge=1, le=100)
+    total: Optional[int] = Field(default=None, ge=1, le=1000)
+    avoid_recent: Optional[int] = Field(default=None, ge=0, le=100000)
+    min_show_gap: Optional[int] = Field(default=None, ge=0, le=100)
+    seasonal: Optional[str] = None
+    special_every: Optional[int] = Field(default=None, ge=1, le=1000)
+    unwatched: Optional[bool] = None
+    sync_watch_progress: Optional[bool] = None
+    include_shows: Optional[list[str]] = None
+    exclude_shows: Optional[list[str]] = None
+    genres_any: Optional[list[str]] = None
+
 def ensure_api_key() -> str:
     core.ensure_config()
     if not API_KEY_FILE.exists():
@@ -93,6 +115,30 @@ def station_summary(station_id: str, raw: dict):
         "id": station_id,
         **cfg,
     }
+
+def update_station_config(station_id: str, changes: dict):
+    stations = core.load_stations()
+    if station_id not in stations:
+        raise HTTPException(status_code=404, detail=f'Unknown station "{station_id}".')
+
+    current = core.normalize_station(station_id, stations[station_id])
+    merged = {**current, **changes}
+
+    if merged.get("preset") not in core.CHANNEL_PRESETS:
+        raise HTTPException(status_code=422, detail=f'Unknown station preset "{merged.get("preset")}".')
+    if merged.get("seasonal") not in {"auto", "none", "halloween", "christmas"}:
+        raise HTTPException(status_code=422, detail="Invalid seasonal setting.")
+
+    try:
+        normalized = core.normalize_station(station_id, merged)
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    # Persist normalized data so partial updates cannot leave incompatible types
+    # or omit fields expected by the CLI and future API clients.
+    stations[station_id] = normalized
+    core.save_stations(stations)
+    return station_summary(station_id, normalized)
 
 def build_station_payload(station_id: str, total: Optional[int] = None):
     cfg = station_or_404(station_id)
@@ -197,6 +243,18 @@ def stations():
 @app.get("/api/v1/stations/{station_id}")
 def station_detail(station_id: str):
     return station_summary(station_id, core.load_stations().get(station_id, {})) if station_id in core.load_stations() else station_or_404(station_id)
+
+@app.put("/api/v1/stations/{station_id}")
+def station_update(
+    station_id: str,
+    request: StationUpdateRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    changes = request.model_dump(exclude_unset=True)
+    return {
+        "ok": True,
+        "station": update_station_config(station_id, changes),
+    }
 
 @app.post("/api/v1/stations/{station_id}/preview")
 def station_preview(station_id: str, request: PreviewRequest):
