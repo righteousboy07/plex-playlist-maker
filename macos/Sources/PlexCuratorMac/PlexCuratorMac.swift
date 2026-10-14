@@ -127,6 +127,29 @@ struct LogResponse: Codable {
     let lines: [String]
 }
 
+struct AutomationJob: Codable, Identifiable, Hashable {
+    var id: String { name }
+    let name: String
+    let label: String
+    let description: String
+    let loaded: Bool
+    let plistExists: Bool
+    let state: String?
+    let lastExitCode: Int?
+    let runs: Int?
+    let keepAlive: Bool
+    let protected: Bool
+}
+
+struct AutomationJobsResponse: Codable {
+    let jobs: [AutomationJob]
+}
+
+struct AutomationActionResponse: Codable {
+    let ok: Bool
+    let job: AutomationJob
+}
+
 struct APIErrorResponse: Codable { let detail: String }
 struct PreviewRequest: Codable { let total: Int? }
 struct RefreshRequest: Codable { let total: Int?; let dryRun: Bool; let force: Bool }
@@ -331,6 +354,21 @@ final class APIClient {
         let escaped = job.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? job
         return try await request("/api/v1/logs/\(escaped)?errors=\(errors ? "true" : "false")&lines=250")
     }
+
+    func automationJobs() async throws -> [AutomationJob] {
+        let response: AutomationJobsResponse = try await request("/api/v1/automation")
+        return response.jobs
+    }
+
+    func automationAction(job: String, action: String) async throws -> AutomationJob {
+        let escaped = job.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? job
+        let response: AutomationActionResponse = try await request(
+            "/api/v1/automation/\(escaped)/\(action)",
+            method: "POST",
+            authenticated: true
+        )
+        return response.job
+    }
 }
 
 // MARK: - App Model
@@ -344,6 +382,7 @@ final class AppModel: ObservableObject {
     @Published var preview: PreviewResponse?
     @Published var diff: DiffResponse?
     @Published var log: LogResponse?
+    @Published var automationJobs: [AutomationJob] = []
     @Published var error: String?
     @Published var message: String?
     @Published var loading = false
@@ -422,6 +461,30 @@ final class AppModel: ObservableObject {
         do { log = try await api.logs(job: job, errors: errors); error = nil }
         catch { self.error = error.localizedDescription }
     }
+
+    func loadAutomation() async {
+        do {
+            automationJobs = try await api.automationJobs()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func automationAction(_ job: AutomationJob, action: String) async {
+        do {
+            let updated = try await api.automationAction(job: job.name, action: action)
+            if let index = automationJobs.firstIndex(where: { $0.name == updated.name }) {
+                automationJobs[index] = updated
+            } else {
+                automationJobs.append(updated)
+            }
+            message = "\(job.name): \(action) completed."
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
 }
 
 // MARK: - App
@@ -453,6 +516,7 @@ struct RootView: View {
                     NavigationLink(destination: StationsView()) { Label("Stations", systemImage: "tv") }
                     NavigationLink(destination: HistoryView()) { Label("History", systemImage: "clock.arrow.circlepath") }
                     NavigationLink(destination: HealthView()) { Label("Health", systemImage: "heart.text.square") }
+                    NavigationLink(destination: AutomationView()) { Label("Automation", systemImage: "clock.badge.checkmark") }
                     NavigationLink(destination: LogsView()) { Label("Logs", systemImage: "doc.text.magnifyingglass") }
                     NavigationLink(destination: SettingsView()) { Label("Settings", systemImage: "gearshape") }
                 }
@@ -921,6 +985,109 @@ struct HealthView: View {
                 }
             }
         }.navigationTitle("Health")
+    }
+}
+
+struct AutomationView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var confirmJob: AutomationJob?
+    @State private var confirmAction: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Automation").font(.title.bold())
+                    Text("Manage Plex Curator LaunchAgents")
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button("Reload") { Task { await model.loadAutomation() } }
+            }
+            .padding()
+
+            Divider()
+
+            List(model.automationJobs) { job in
+                HStack(alignment: .center, spacing: 14) {
+                    Image(systemName: job.loaded ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(job.loaded ? .green : .secondary)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(job.name).font(.headline)
+                            if job.protected {
+                                Text("Protected")
+                                    .font(.caption2)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.15))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        Text(job.description)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        HStack(spacing: 10) {
+                            Text(job.loaded ? "Loaded" : "Not loaded")
+                            if let state = job.state { Text("State: \(state)") }
+                            if let exit = job.lastExitCode { Text("Last exit: \(exit)") }
+                            if let runs = job.runs { Text("Runs: \(runs)") }
+                        }
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Run Now") {
+                        confirmJob = job
+                        confirmAction = "run-now"
+                    }
+                    .disabled(job.protected && job.name == "api-server")
+
+                    if job.loaded || job.plistExists {
+                        Button("Remove") {
+                            confirmJob = job
+                            confirmAction = "uninstall"
+                        }
+                        .disabled(job.protected)
+                    } else {
+                        Button("Install") {
+                            confirmJob = job
+                            confirmAction = "install"
+                        }
+                    }
+                }
+                .padding(.vertical, 5)
+            }
+        }
+        .navigationTitle("Automation")
+        .task { await model.loadAutomation() }
+        .alert(item: $confirmJob) { job in
+            let action = confirmAction ?? ""
+            let title: String
+            let message: String
+            switch action {
+            case "install":
+                title = "Install \(job.name)?"
+                message = "This will install and load its LaunchAgent."
+            case "uninstall":
+                title = "Remove \(job.name)?"
+                message = "This will unload the LaunchAgent and remove its plist."
+            default:
+                title = "Run \(job.name) now?"
+                message = "This will trigger the automation immediately."
+            }
+            return Alert(
+                title: Text(title),
+                message: Text(message),
+                primaryButton: .default(Text("Continue")) {
+                    Task { await model.automationAction(job, action: action) }
+                },
+                secondaryButton: .cancel()
+            )
+        }
     }
 }
 
