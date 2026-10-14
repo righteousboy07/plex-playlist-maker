@@ -25,9 +25,11 @@ macos/     SwiftUI macOS client
 
 ## Current milestones
 
-- Backend: localhost REST API, station editing, automation controls, reliability tooling
-- macOS v13.1: station editor, automation controls, search/filtering, notifications
-- Next: v13.2 artwork, playlist browser, movie curation, wishlist and schedules/calendar
+- Release candidate: **v13.2.0**
+- Backend: localhost REST API, station editing, automation controls, movie curation, wishlist and schedule programming
+- macOS: station editor, automation, search/filtering, notifications, playlist artwork browser, movie curator, wishlist and schedules
+- Deployment: safe GitHub-to-Mac installers, rollback backups, CI validation and tagged release artifacts
+- Next: live Mac Pro validation and the first v13.2.0 tag/release
 
 ## Backend quick start
 

@@ -4,7 +4,11 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
-### v13.2 schedules
+No unreleased changes yet.
+
+## v13.2.0 — 2026-10-14
+
+### Schedules
 
 - Native Schedules browser with programming-block timeline and total duration.
 - Schedule cards show matching LaunchAgent automation state.
@@ -13,7 +17,7 @@ This project uses milestone tags for major Plex Curator releases.
 - Build options mirror the CLI defaults for recent avoidance, show gap, seasonal mode, specials, unwatched preference, and Plex watch progress.
 - Clock-time automation remains centralized in the Automation screen.
 
-### v13.2 movie curator and wishlist
+### Movie curator and wishlist
 
 - Native Movie Curator filter/preview screen using the existing Python movie-filter engine.
 - Authenticated create/replace Plex playlist action with rollback-safe replacement.
@@ -21,7 +25,7 @@ This project uses milestone tags for major Plex Curator releases.
 - Wishlist matches display actual Plex titles and artwork when present.
 - Packaged alias map prevents known renamed/remastered titles from becoming false misses.
 
-### v13.2 playlist browser and artwork
+### Playlist browser and artwork
 
 - Native searchable Plex playlist browser.
 - Playlist detail grid with movie posters and episode thumbnails.
@@ -42,7 +46,7 @@ This project uses milestone tags for major Plex Curator releases.
 - Fixed API wrapper to re-exec inside the project virtualenv.
 - Fixed kids-scary wishlist LaunchAgent path for the monorepo layout.
 
-### v13.1 search and notifications
+### v13.1 search and notifications included
 
 - Search stations by name, playlist, preset, description, and included/excluded shows.
 - Filter station list by All / Enabled / Disabled.
@@ -50,7 +54,7 @@ This project uses milestone tags for major Plex Curator releases.
 - Friendlier formatted history timestamps.
 - Native macOS notifications after successful station refresh and automation actions.
 
-### v13.1 automation controls
+### v13.1 automation controls included
 
 - Launchd manager JSON status output for GUI/API clients.
 - Local API endpoints for automation job list/status and authenticated install, uninstall, and run-now actions.
@@ -58,7 +62,7 @@ This project uses milestone tags for major Plex Curator releases.
 - Self-protection prevents the API service from uninstalling its own LaunchAgent through the GUI.
 - Automation API safety tests.
 
-### v13.1 station editor
+### v13.1 station editor included
 
 - Authenticated `PUT /api/v1/stations/{id}` station update endpoint.
 - Native SwiftUI station editor for identity, programming, audience, progress, and show overrides.

@@ -30,7 +30,7 @@ STATIONS_FILE = CONFIG_DIR / "stations.json"
 EXPORT_DIR = CONFIG_DIR / "exports"
 BACKUP_DIR = CONFIG_DIR / "backups"
 LOG_DIR = HOME / "Library" / "Logs" / "PlexCurator"
-APP_VERSION = "11.0"
+APP_VERSION = "13.2.0"
 
 DEFAULT_MOVIE_PRESETS = {
     "kids-scary": {
