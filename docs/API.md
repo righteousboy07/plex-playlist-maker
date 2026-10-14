@@ -24,7 +24,9 @@ GET  /api/v1/stations/{id}
 POST /api/v1/stations/{id}/preview
 GET  /api/v1/stations/{id}/diff
 GET  /api/v1/playlists
+GET  /api/v1/playlist?name=...
 GET  /api/v1/playlists/{name}
+GET  /api/v1/artwork/{rating_key}
 GET  /api/v1/history
 GET  /api/v1/build-history
 GET  /api/v1/backups
@@ -70,3 +72,26 @@ Example body:
 ```
 
 Send `null` for `year_min` or `year_max` to clear that limit.
+
+
+## Playlist browser and artwork
+
+Playlist metadata:
+
+```text
+GET /api/v1/playlists
+```
+
+Playlist detail uses a query parameter so titles containing punctuation or slashes are safe:
+
+```text
+GET /api/v1/playlist?name=Retro%20Kids%20Channel
+```
+
+Artwork is proxied through the localhost API:
+
+```text
+GET /api/v1/artwork/{rating_key}?width=240&height=360
+```
+
+The backend resolves the media item in Plex, requests/transcodes the thumbnail server-side, and returns the image bytes. The Plex token is never sent to the Swift client.
