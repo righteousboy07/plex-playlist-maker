@@ -25,9 +25,9 @@ macos/     SwiftUI macOS client
 
 ## Current milestones
 
-- Backend v12: localhost REST API and launchd API service
-- macOS v13: initial native SwiftUI client
-- Next: v13.1 station editing and automation controls
+- Backend: localhost REST API, station editing, automation controls, reliability tooling
+- macOS v13.1: station editor, automation controls, search/filtering, notifications
+- Next: v13.2 artwork, playlist browser, movie curation, wishlist and schedules/calendar
 
 ## Backend quick start
 
