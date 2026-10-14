@@ -134,6 +134,78 @@ struct WishlistResponse: Codable {
     let entries: [WishlistEntry]
 }
 
+struct ScheduleBlockDefinition: Codable, Identifiable, Hashable {
+    var id: Int { index }
+    let index: Int
+    let name: String
+    let type: String?
+    let preset: String?
+    let minutes: Int
+    let seasonal: String?
+}
+
+struct ScheduleSummary: Codable, Identifiable, Hashable {
+    let id: String
+    let description: String
+    let playlist: String
+    let totalMinutes: Int
+    let blocks: [ScheduleBlockDefinition]
+}
+
+struct SchedulesResponse: Codable {
+    let schedules: [ScheduleSummary]
+}
+
+struct ScheduleOptionsRequest: Encodable {
+    let playlist: String?
+    let avoidRecent: Int
+    let minShowGap: Int
+    let seasonal: String
+    let specialEvery: Int
+    let unwatched: Bool
+    let ignoreWatchProgress: Bool
+}
+
+struct ScheduleBuildRequest: Encodable {
+    let playlist: String?
+    let avoidRecent: Int
+    let minShowGap: Int
+    let seasonal: String
+    let specialEvery: Int
+    let unwatched: Bool
+    let ignoreWatchProgress: Bool
+    let replace: Bool
+}
+
+struct ScheduleBlockPreview: Codable, Identifiable {
+    var id: Int { index }
+    let index: Int
+    let name: String
+    let type: String?
+    let preset: String?
+    let minutes: Int
+    let seasonalMode: String?
+    let itemCount: Int
+    let items: [MediaItem]
+}
+
+struct SchedulePreviewResponse: Codable {
+    let schedule: ScheduleSummary
+    let playlist: String
+    let itemCount: Int
+    let blocks: [ScheduleBlockPreview]
+    let items: [MediaItem]
+    let readOnly: Bool
+}
+
+struct ScheduleBuildResponse: Codable {
+    let ok: Bool
+    let schedule: ScheduleSummary
+    let playlist: String
+    let itemCount: Int
+    let blocks: [ScheduleBlockPreview]
+}
+
 struct MediaItem: Codable, Identifiable {
     var id: String { ratingKey.isEmpty ? "\(position ?? 0)-\(title ?? "")" : ratingKey }
     let ratingKey: String
@@ -480,6 +552,36 @@ final class APIClient {
         return components?.url
     }
 
+    func schedules() async throws -> [ScheduleSummary] {
+        let response: SchedulesResponse = try await request("/api/v1/schedules")
+        return response.schedules
+    }
+
+    func schedulePreview(
+        id: String,
+        request value: ScheduleOptionsRequest
+    ) async throws -> SchedulePreviewResponse {
+        let body = try encoder.encode(value)
+        return try await request(
+            "/api/v1/schedules/\(id)/preview",
+            method: "POST",
+            body: body
+        )
+    }
+
+    func buildSchedule(
+        id: String,
+        request value: ScheduleBuildRequest
+    ) async throws -> ScheduleBuildResponse {
+        let body = try encoder.encode(value)
+        return try await request(
+            "/api/v1/schedules/\(id)/build",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+    }
+
     func moviePreview(_ filter: MovieFilterRequest) async throws -> MoviePreviewResponse {
         let body = try encoder.encode(filter)
         return try await request(
@@ -579,6 +681,7 @@ final class AppModel: ObservableObject {
     @Published var log: LogResponse?
     @Published var automationJobs: [AutomationJob] = []
     @Published var playlists: [PlaylistSummary] = []
+    @Published var schedules: [ScheduleSummary] = []
     @Published var error: String?
     @Published var message: String?
     @Published var loading = false
@@ -649,6 +752,15 @@ final class AppModel: ObservableObject {
         } catch {
             self.error = error.localizedDescription
             return nil
+        }
+    }
+
+    func loadSchedules() async {
+        do {
+            schedules = try await api.schedules()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 
@@ -727,6 +839,7 @@ struct RootView: View {
                 Section("Plex Curator") {
                     NavigationLink(destination: DashboardView()) { Label("Dashboard", systemImage: "gauge") }
                     NavigationLink(destination: StationsView()) { Label("Stations", systemImage: "tv") }
+                    NavigationLink(destination: SchedulesView()) { Label("Schedules", systemImage: "calendar") }
                     NavigationLink(destination: PlaylistsView()) { Label("Playlists", systemImage: "rectangle.stack") }
                     NavigationLink(destination: MovieCuratorView()) { Label("Movie Curator", systemImage: "film.stack") }
                     NavigationLink(destination: KidsScaryWishlistView()) { Label("Kids Scary Wishlist", systemImage: "checklist") }
@@ -1210,6 +1323,398 @@ struct StationEditorView: View {
                 dismiss()
             }
         }
+    }
+}
+
+struct SchedulesView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var searchText = ""
+
+    private var filteredSchedules: [ScheduleSummary] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return model.schedules }
+
+        return model.schedules.filter { schedule in
+            [
+                schedule.id,
+                schedule.description,
+                schedule.playlist,
+                schedule.blocks.map { $0.name }.joined(separator: " "),
+                schedule.blocks.compactMap { $0.preset }.joined(separator: " ")
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            .contains(query)
+        }
+    }
+
+    var body: some View {
+        List(filteredSchedules) { schedule in
+            NavigationLink(destination: ScheduleDetailView(schedule: schedule)) {
+                HStack(spacing: 14) {
+                    Image(systemName: "calendar")
+                        .font(.title2)
+                        .frame(width: 28)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(schedule.id.replacingOccurrences(of: "-", with: " ").capitalized)
+                                .font(.headline)
+                            if matchingAutomation(schedule)?.loaded == true {
+                                StatusBadge(text: "Automated", good: true)
+                            }
+                        }
+                        Text(schedule.description)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                        Text(schedule.blocks.map { $0.name }.joined(separator: "  •  "))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(duration(schedule.totalMinutes))
+                        Text("\(schedule.blocks.count) blocks")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.vertical, 5)
+            }
+        }
+        .navigationTitle("Schedules")
+        .searchable(text: $searchText, prompt: "Search schedules or blocks")
+        .toolbar {
+            Button("Reload") {
+                Task {
+                    await model.loadSchedules()
+                    await model.loadAutomation()
+                }
+            }
+        }
+        .task {
+            async let schedules: Void = model.loadSchedules()
+            async let automation: Void = model.loadAutomation()
+            _ = await (schedules, automation)
+        }
+    }
+
+    private func matchingAutomation(_ schedule: ScheduleSummary) -> AutomationJob? {
+        model.automationJobs.first { $0.name == schedule.id }
+    }
+
+    private func duration(_ minutes: Int) -> String {
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        if hours == 0 { return "\(remainder)m" }
+        if remainder == 0 { return "\(hours)h" }
+        return "\(hours)h \(remainder)m"
+    }
+}
+
+struct ScheduleDetailView: View {
+    @EnvironmentObject var model: AppModel
+    let schedule: ScheduleSummary
+
+    @State private var playlistName: String
+    @State private var replaceExisting = true
+    @State private var avoidRecent = 150
+    @State private var minShowGap = 2
+    @State private var seasonal = "auto"
+    @State private var specialEvery = 8
+    @State private var unwatched = false
+    @State private var followWatchProgress = true
+    @State private var preview: SchedulePreviewResponse?
+    @State private var isLoading = false
+    @State private var confirmBuild = false
+
+    init(schedule: ScheduleSummary) {
+        self.schedule = schedule
+        _playlistName = State(initialValue: schedule.playlist)
+    }
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 190, maximum: 240), spacing: 18)
+    ]
+
+    var body: some View {
+        HSplitView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(schedule.id.replacingOccurrences(of: "-", with: " ").capitalized)
+                            .font(.title.bold())
+                        Text(schedule.description)
+                            .foregroundColor(.secondary)
+
+                        HStack(spacing: 12) {
+                            Label(duration(schedule.totalMinutes), systemImage: "clock")
+                            Label("\(schedule.blocks.count) blocks", systemImage: "square.stack.3d.up")
+                            if automationJob?.loaded == true {
+                                StatusBadge(text: "Automation loaded", good: true)
+                            } else if automationJob != nil {
+                                StatusBadge(text: "Automation not loaded", good: false)
+                            }
+                        }
+                        .font(.caption)
+                    }
+
+                    GroupBox("Programming Blocks") {
+                        VStack(spacing: 0) {
+                            ForEach(Array(schedule.blocks.enumerated()), id: \.element.id) { offset, block in
+                                ScheduleTimelineRow(
+                                    block: block,
+                                    startMinute: startMinute(for: offset)
+                                )
+                                if offset < schedule.blocks.count - 1 {
+                                    Divider().padding(.leading, 60)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    GroupBox("Build Options") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            TextField("Plex playlist", text: $playlistName)
+                            Toggle("Replace existing playlist", isOn: $replaceExisting)
+                            Toggle("Prefer unwatched episodes", isOn: $unwatched)
+                            Toggle("Follow Plex watch progress", isOn: $followWatchProgress)
+
+                            Stepper(
+                                "Avoid recent episodes: \(avoidRecent)",
+                                value: $avoidRecent,
+                                in: 0...10000,
+                                step: 10
+                            )
+                            Stepper(
+                                "Minimum show gap: \(minShowGap)",
+                                value: $minShowGap,
+                                in: 0...20
+                            )
+                            Stepper(
+                                "Seasonal special frequency: \(specialEvery)",
+                                value: $specialEvery,
+                                in: 1...50
+                            )
+
+                            Picker("Seasonal mode", selection: $seasonal) {
+                                Text("Automatic").tag("auto")
+                                Text("None").tag("none")
+                                Text("Halloween").tag("halloween")
+                                Text("Christmas").tag("christmas")
+                            }
+
+                            HStack {
+                                Button("Preview Lineup") {
+                                    Task { await loadPreview() }
+                                }
+                                Button(replaceExisting ? "Build / Replace Now" : "Build Now") {
+                                    confirmBuild = true
+                                }
+                            }
+
+                            Text("Clock-time automation is managed in the Automation screen. Preview is read-only; Build generates a fresh lineup using these settings.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(20)
+            }
+            .frame(minWidth: 380, idealWidth: 440)
+
+            Group {
+                if isLoading {
+                    ProgressView("Programming lineup…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let preview {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack {
+                                Text("Preview")
+                                    .font(.title2.bold())
+                                Spacer()
+                                Text("\(preview.itemCount) items")
+                                    .foregroundColor(.secondary)
+                            }
+
+                            ForEach(preview.blocks) { block in
+                                GroupBox {
+                                    LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+                                        ForEach(block.items) { item in
+                                            PlaylistMediaCard(item: item)
+                                        }
+                                    }
+                                } label: {
+                                    HStack {
+                                        Text(block.name)
+                                        Spacer()
+                                        Text("\(block.minutes) min • \(block.itemCount) items")
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(20)
+                    }
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "calendar.badge.clock")
+                            .font(.system(size: 42))
+                            .foregroundColor(.secondary)
+                        Text("Preview the programmed lineup before building it.")
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .frame(minWidth: 520)
+        }
+        .navigationTitle(schedule.playlist)
+        .alert(isPresented: $confirmBuild) {
+            Alert(
+                title: Text(replaceExisting ? "Build and replace playlist?" : "Build playlist?"),
+                message: Text("A fresh \(duration(schedule.totalMinutes)) lineup will be programmed into \(playlistName)."),
+                primaryButton: .default(Text("Build Now")) {
+                    Task { await buildNow() }
+                },
+                secondaryButton: .cancel()
+            )
+        }
+    }
+
+    private var automationJob: AutomationJob? {
+        model.automationJobs.first { $0.name == schedule.id }
+    }
+
+    private func startMinute(for index: Int) -> Int {
+        schedule.blocks.prefix(index).reduce(0) { $0 + $1.minutes }
+    }
+
+    private func duration(_ minutes: Int) -> String {
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        if hours == 0 { return "\(remainder)m" }
+        if remainder == 0 { return "\(hours)h" }
+        return "\(hours)h \(remainder)m"
+    }
+
+    private func clockOffset(_ minute: Int) -> String {
+        let hours = minute / 60
+        let minutes = minute % 60
+        return String(format: "+%d:%02d", hours, minutes)
+    }
+
+    private func optionsRequest() -> ScheduleOptionsRequest {
+        ScheduleOptionsRequest(
+            playlist: playlistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? nil
+                : playlistName.trimmingCharacters(in: .whitespacesAndNewlines),
+            avoidRecent: avoidRecent,
+            minShowGap: minShowGap,
+            seasonal: seasonal,
+            specialEvery: specialEvery,
+            unwatched: unwatched,
+            ignoreWatchProgress: !followWatchProgress
+        )
+    }
+
+    private func loadPreview() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            preview = try await model.api.schedulePreview(
+                id: schedule.id,
+                request: optionsRequest()
+            )
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
+    private func buildNow() async {
+        let options = optionsRequest()
+        let request = ScheduleBuildRequest(
+            playlist: options.playlist,
+            avoidRecent: options.avoidRecent,
+            minShowGap: options.minShowGap,
+            seasonal: options.seasonal,
+            specialEvery: options.specialEvery,
+            unwatched: options.unwatched,
+            ignoreWatchProgress: options.ignoreWatchProgress,
+            replace: replaceExisting
+        )
+
+        isLoading = true
+        defer { isLoading = false }
+
+        do {
+            let response = try await model.api.buildSchedule(
+                id: schedule.id,
+                request: request
+            )
+            model.message = "Built \(response.playlist) with \(response.itemCount) items."
+            NotificationManager.shared.send(
+                title: "Plex Curator Schedule",
+                body: "Built \(response.playlist) with \(response.itemCount) items."
+            )
+            await model.loadPlaylists()
+            preview = nil
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+}
+
+struct ScheduleTimelineRow: View {
+    let block: ScheduleBlockDefinition
+    let startMinute: Int
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(offset)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(.secondary)
+                .frame(width: 52, alignment: .trailing)
+
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.accentColor.opacity(0.16))
+                .frame(width: 8, height: max(36, CGFloat(block.minutes) * 0.55))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(block.name)
+                    .font(.headline)
+                HStack(spacing: 8) {
+                    Text(block.type?.capitalized ?? "Block")
+                    if let preset = block.preset {
+                        Text(preset)
+                    }
+                    Text("\(block.minutes) min")
+                    if let seasonal = block.seasonal {
+                        Text(seasonal.capitalized)
+                    }
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var offset: String {
+        let hours = startMinute / 60
+        let minutes = startMinute % 60
+        return String(format: "+%d:%02d", hours, minutes)
     }
 }
 
