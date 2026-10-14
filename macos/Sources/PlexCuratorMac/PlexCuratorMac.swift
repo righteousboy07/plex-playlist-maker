@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import UserNotifications
 
 // MARK: - API Models
 
@@ -116,6 +117,22 @@ struct HistoryItem: Codable, Identifiable {
     let episodeNumber: Int
     let episodeTitle: String
     let channelName: String
+
+    var displayDate: String {
+        let isoFractional = ISO8601DateFormatter()
+        isoFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoBasic = ISO8601DateFormatter()
+        isoBasic.formatOptions = [.withInternetDateTime]
+
+        guard let date = isoFractional.date(from: selectedAt) ?? isoBasic.date(from: selectedAt) else {
+            return selectedAt.replacingOccurrences(of: "T", with: " ")
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
 }
 
 struct HistoryResponse: Codable { let history: [HistoryItem] }
@@ -371,6 +388,43 @@ final class APIClient {
     }
 }
 
+final class NotificationManager {
+    static let shared = NotificationManager()
+
+    private init() {}
+
+    func send(title: String, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .authorized, .provisional:
+                self.schedule(center: center, title: title, body: body)
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    if granted {
+                        self.schedule(center: center, title: title, body: body)
+                    }
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    private func schedule(center: UNUserNotificationCenter, title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        center.add(request)
+    }
+}
+
 // MARK: - App Model
 
 @MainActor
@@ -431,6 +485,10 @@ final class AppModel: ObservableObject {
         do {
             let r = try await api.refresh(station.id, dryRun: false)
             message = "Refreshed \(r.playlist ?? station.name) with \(r.itemCount ?? 0) items."
+            NotificationManager.shared.send(
+                title: "Plex Curator",
+                body: "Refreshed \(r.playlist ?? station.name) with \(r.itemCount ?? 0) items."
+            )
             preview = nil
             diff = nil
             await refreshDashboard()
@@ -480,6 +538,10 @@ final class AppModel: ObservableObject {
                 automationJobs.append(updated)
             }
             message = "\(job.name): \(action) completed."
+            NotificationManager.shared.send(
+                title: "Plex Curator Automation",
+                body: "\(job.name): \(action) completed."
+            )
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -619,8 +681,36 @@ struct DashboardView: View {
 
 struct StationsView: View {
     @EnvironmentObject var model: AppModel
+    @State private var searchText = ""
+    @State private var statusFilter = 0
+
+    private var filteredStations: [Station] {
+        model.stations.filter { station in
+            let matchesStatus: Bool
+            switch statusFilter {
+            case 1: matchesStatus = station.enabled
+            case 2: matchesStatus = !station.enabled
+            default: matchesStatus = true
+            }
+
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !query.isEmpty else { return matchesStatus }
+
+            let haystack = [
+                station.name,
+                station.description ?? "",
+                station.playlist,
+                station.preset,
+                station.includeShows.joined(separator: " "),
+                station.excludeShows.joined(separator: " ")
+            ].joined(separator: " ").lowercased()
+
+            return matchesStatus && haystack.contains(query)
+        }
+    }
+
     var body: some View {
-        List(model.stations) { station in
+        List(filteredStations) { station in
             NavigationLink(destination: StationDetailView(station: station)) {
                 HStack {
                     Image(systemName: station.enabled ? "play.tv.fill" : "pause.tv")
@@ -633,7 +723,18 @@ struct StationsView: View {
                     Text("\(station.total) items").foregroundColor(.secondary)
                 }.padding(.vertical, 3)
             }
-        }.navigationTitle("Stations")
+        }
+        .navigationTitle("Stations")
+        .searchable(text: $searchText, prompt: "Search stations or shows")
+        .toolbar {
+            Picker("Status", selection: $statusFilter) {
+                Text("All").tag(0)
+                Text("Enabled").tag(1)
+                Text("Disabled").tag(2)
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            .frame(width: 220)
+        }
     }
 }
 
@@ -960,14 +1061,43 @@ struct StationEditorView: View {
 
 struct HistoryView: View {
     @EnvironmentObject var model: AppModel
+    @State private var searchText = ""
+
+    private var filteredHistory: [HistoryItem] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return model.history }
+        return model.history.filter { item in
+            [
+                item.showTitle,
+                item.episodeTitle,
+                item.channelName,
+                "S\(String(format: "%02d", item.seasonNumber))E\(String(format: "%02d", item.episodeNumber))"
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            .contains(query)
+        }
+    }
+
     var body: some View {
-        List(model.history) { item in
-            VStack(alignment: .leading) {
-                Text("\(item.showTitle) S\(String(format: "%02d", item.seasonNumber))E\(String(format: "%02d", item.episodeNumber)) — \(item.episodeTitle)")
-                Text(item.channelName).font(.caption).foregroundColor(.secondary)
-            }.padding(.vertical, 3)
+        List(filteredHistory) { item in
+            HStack {
+                VStack(alignment: .leading) {
+                    Text("\(item.showTitle) S\(String(format: "%02d", item.seasonNumber))E\(String(format: "%02d", item.episodeNumber)) — \(item.episodeTitle)")
+                    Text(item.channelName).font(.caption).foregroundColor(.secondary)
+                }
+                Spacer()
+                Text(item.displayDate)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 3)
         }
         .navigationTitle("History")
+        .searchable(text: $searchText, prompt: "Search show, episode, or station")
+        .toolbar {
+            Button("Reload") { Task { await model.loadHistory() } }
+        }
         .task { await model.loadHistory() }
     }
 }
