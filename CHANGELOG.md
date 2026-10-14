@@ -4,6 +4,14 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+### v13.1 automation controls
+
+- Launchd manager JSON status output for GUI/API clients.
+- Local API endpoints for automation job list/status and authenticated install, uninstall, and run-now actions.
+- Native SwiftUI Automation screen with LaunchAgent state and controls.
+- Self-protection prevents the API service from uninstalling its own LaunchAgent through the GUI.
+- Automation API safety tests.
+
 ### v13.1 station editor
 
 - Authenticated `PUT /api/v1/stations/{id}` station update endpoint.

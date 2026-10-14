@@ -52,6 +52,10 @@ def test_api_routes_are_registered():
     assert "/api/v1/stations" in paths
     assert "/api/v1/stations/{station_id}" in paths
     assert "/api/v1/stations/{station_id}/refresh" in paths
+    assert "/api/v1/automation" in paths
+    assert "/api/v1/automation/{job_name}/install" in paths
+    assert "/api/v1/automation/{job_name}/uninstall" in paths
+    assert "/api/v1/automation/{job_name}/run-now" in paths
 
 
 def test_station_update_config_persists_normalized_profile(tmp_path, monkeypatch):
@@ -118,3 +122,43 @@ def test_station_update_rejects_invalid_year_range(tmp_path, monkeypatch):
         assert getattr(exc, "status_code", None) == 422
     else:
         raise AssertionError("Expected invalid year range to be rejected")
+
+
+def test_api_server_automation_cannot_uninstall_itself():
+    try:
+        api.automation_uninstall("api-server", True)
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 409
+    else:
+        raise AssertionError("Expected self-uninstall to be blocked")
+
+
+def test_automation_install_uses_launchd_manager(monkeypatch):
+    monkeypatch.setattr(
+        api,
+        "launchd_jobs_payload",
+        lambda: {
+            "jobs": [
+                {
+                    "name": "stations-nightly",
+                    "label": "com.ry.plexcurator.stationsnightly",
+                    "description": "Nightly",
+                }
+            ]
+        },
+    )
+
+    calls = []
+
+    def fake_run(*args):
+        calls.append(args)
+        if args[0] == "status-json":
+            return """{"name":"stations-nightly","loaded":true,"plist_exists":true}"""
+        return ""
+
+    monkeypatch.setattr(api, "run_launchd_manager", fake_run)
+    response = api.automation_install("stations-nightly", True)
+
+    assert response["ok"] is True
+    assert response["job"]["loaded"] is True
+    assert ("install", "stations-nightly") in calls
