@@ -51,17 +51,46 @@ struct Station: Codable, Identifiable, Hashable {
 
 struct StationsResponse: Codable { let stations: [Station] }
 
+struct PlaylistSummary: Codable, Identifiable, Hashable {
+    var id: String { ratingKey.isEmpty ? title : ratingKey }
+    let title: String
+    let itemCount: Int?
+    let ratingKey: String
+    let playlistType: String?
+    let smart: Bool
+    let updatedAt: String?
+}
+
+struct PlaylistsResponse: Codable {
+    let playlists: [PlaylistSummary]
+}
+
+struct PlaylistDetailResponse: Codable {
+    let title: String
+    let ratingKey: String
+    let playlistType: String?
+    let smart: Bool
+    let itemCount: Int
+    let items: [MediaItem]
+}
+
 struct MediaItem: Codable, Identifiable {
     var id: String { ratingKey.isEmpty ? "\(position ?? 0)-\(title ?? "")" : ratingKey }
     let ratingKey: String
     let type: String?
     let title: String?
     let year: Int?
+    let contentRating: String?
+    let viewCount: Int?
     let watched: Bool
     let position: Int?
     let showTitle: String?
     let seasonNumber: Int?
     let episodeNumber: Int?
+    let summary: String?
+    let durationMinutes: Int?
+    let thumbAvailable: Bool?
+    let artworkUrl: String?
 
     var displayTitle: String {
         if type == "episode" {
@@ -362,6 +391,35 @@ final class APIClient {
         return response.station
     }
 
+    func playlists() async throws -> [PlaylistSummary] {
+        let response: PlaylistsResponse = try await request("/api/v1/playlists")
+        return response.playlists
+    }
+
+    func playlistDetail(name: String) async throws -> PlaylistDetailResponse {
+        var components = URLComponents()
+        components.path = "/api/v1/playlist"
+        components.queryItems = [URLQueryItem(name: "name", value: name)]
+        return try await request(components.string ?? "/api/v1/playlist")
+    }
+
+    func artworkURL(ratingKey: String, width: Int = 240, height: Int = 360) -> URL? {
+        guard !ratingKey.isEmpty else { return nil }
+        var components = URLComponents(
+            url: baseURL
+                .appendingPathComponent("api")
+                .appendingPathComponent("v1")
+                .appendingPathComponent("artwork")
+                .appendingPathComponent(ratingKey),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "width", value: String(width)),
+            URLQueryItem(name: "height", value: String(height))
+        ]
+        return components?.url
+    }
+
     func history() async throws -> [HistoryItem] {
         let r: HistoryResponse = try await request("/api/v1/history?limit=150")
         return r.history
@@ -437,6 +495,7 @@ final class AppModel: ObservableObject {
     @Published var diff: DiffResponse?
     @Published var log: LogResponse?
     @Published var automationJobs: [AutomationJob] = []
+    @Published var playlists: [PlaylistSummary] = []
     @Published var error: String?
     @Published var message: String?
     @Published var loading = false
@@ -510,6 +569,15 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func loadPlaylists() async {
+        do {
+            playlists = try await api.playlists()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     func loadHistory() async {
         do { history = try await api.history(); error = nil }
         catch { self.error = error.localizedDescription }
@@ -576,6 +644,7 @@ struct RootView: View {
                 Section("Plex Curator") {
                     NavigationLink(destination: DashboardView()) { Label("Dashboard", systemImage: "gauge") }
                     NavigationLink(destination: StationsView()) { Label("Stations", systemImage: "tv") }
+                    NavigationLink(destination: PlaylistsView()) { Label("Playlists", systemImage: "rectangle.stack") }
                     NavigationLink(destination: HistoryView()) { Label("History", systemImage: "clock.arrow.circlepath") }
                     NavigationLink(destination: HealthView()) { Label("Health", systemImage: "heart.text.square") }
                     NavigationLink(destination: AutomationView()) { Label("Automation", systemImage: "clock.badge.checkmark") }
@@ -1056,6 +1125,222 @@ struct StationEditorView: View {
                 dismiss()
             }
         }
+    }
+}
+
+struct PlaylistsView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var searchText = ""
+
+    private var filteredPlaylists: [PlaylistSummary] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return model.playlists }
+        return model.playlists.filter {
+            $0.title.lowercased().contains(query)
+            || ($0.playlistType ?? "").lowercased().contains(query)
+        }
+    }
+
+    var body: some View {
+        List(filteredPlaylists) { playlist in
+            NavigationLink(destination: PlaylistDetailView(playlist: playlist)) {
+                HStack(spacing: 12) {
+                    Image(systemName: playlist.smart ? "sparkles.rectangle.stack" : "rectangle.stack")
+                        .font(.title2)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(playlist.title).font(.headline)
+                        HStack(spacing: 8) {
+                            Text("\(playlist.itemCount ?? 0) items")
+                            if let type = playlist.playlistType {
+                                Text(type.capitalized)
+                            }
+                            if playlist.smart {
+                                Text("Smart")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        .navigationTitle("Playlists")
+        .searchable(text: $searchText, prompt: "Search playlists")
+        .toolbar {
+            Button("Reload") { Task { await model.loadPlaylists() } }
+        }
+        .task {
+            if model.playlists.isEmpty {
+                await model.loadPlaylists()
+            }
+        }
+    }
+}
+
+struct PlaylistDetailView: View {
+    @EnvironmentObject var model: AppModel
+    let playlist: PlaylistSummary
+
+    @State private var detail: PlaylistDetailResponse?
+    @State private var searchText = ""
+    @State private var isLoading = false
+
+    private var filteredItems: [MediaItem] {
+        guard let items = detail?.items else { return [] }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return items }
+        return items.filter { item in
+            [
+                item.title ?? "",
+                item.showTitle ?? "",
+                item.summary ?? "",
+                item.contentRating ?? "",
+                item.year.map(String.init) ?? ""
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            .contains(query)
+        }
+    }
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 190, maximum: 240), spacing: 18)
+    ]
+
+    var body: some View {
+        Group {
+            if isLoading && detail == nil {
+                ProgressView("Loading playlist…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let detail {
+                ScrollView {
+                    LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
+                        ForEach(filteredItems) { item in
+                            PlaylistMediaCard(item: item)
+                        }
+                    }
+                    .padding(20)
+                }
+                .searchable(text: $searchText, prompt: "Search this playlist")
+                .overlay(alignment: .topTrailing) {
+                    Text("\(detail.itemCount) items")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(12)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    Text("Playlist could not be loaded.")
+                    Button("Retry") { Task { await load() } }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .navigationTitle(playlist.title)
+        .toolbar {
+            Button("Reload") { Task { await load() } }
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            detail = try await model.api.playlistDetail(name: playlist.title)
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+}
+
+struct PlaylistMediaCard: View {
+    @EnvironmentObject var model: AppModel
+    let item: MediaItem
+
+    private var artworkHeight: CGFloat {
+        item.type == "episode" ? 120 : 260
+    }
+
+    private var artworkWidth: Int {
+        item.type == "episode" ? 360 : 240
+    }
+
+    private var requestedHeight: Int {
+        item.type == "episode" ? 203 : 360
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(Color.secondary.opacity(0.12))
+
+                if item.thumbAvailable == true,
+                   let url = model.api.artworkURL(
+                    ratingKey: item.ratingKey,
+                    width: artworkWidth,
+                    height: requestedHeight
+                   ) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .empty:
+                            ProgressView()
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        case .failure:
+                            Image(systemName: item.type == "episode" ? "tv" : "film")
+                                .font(.largeTitle)
+                                .foregroundColor(.secondary)
+                        @unknown default:
+                            EmptyView()
+                        }
+                    }
+                } else {
+                    Image(systemName: item.type == "episode" ? "tv" : "film")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: artworkHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+
+            Text(item.displayTitle)
+                .font(.headline)
+                .lineLimit(2)
+
+            HStack(spacing: 6) {
+                if let rating = item.contentRating, !rating.isEmpty {
+                    Text(rating)
+                }
+                if let minutes = item.durationMinutes {
+                    Text("\(minutes) min")
+                }
+                if item.watched {
+                    Image(systemName: "checkmark.circle.fill")
+                        .help("Watched")
+                }
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+
+            if let summary = item.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 

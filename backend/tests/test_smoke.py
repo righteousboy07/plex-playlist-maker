@@ -56,6 +56,8 @@ def test_api_routes_are_registered():
     assert "/api/v1/automation/{job_name}/install" in paths
     assert "/api/v1/automation/{job_name}/uninstall" in paths
     assert "/api/v1/automation/{job_name}/run-now" in paths
+    assert "/api/v1/artwork/{rating_key}" in paths
+    assert "/api/v1/playlist" in paths
 
 
 def test_station_update_config_persists_normalized_profile(tmp_path, monkeypatch):
@@ -176,3 +178,34 @@ def test_launchd_wishlist_uses_packaged_example():
     args = module.JOBS["kids-scary-wishlist"]["args"]
     assert "examples" in args[1]
     assert args[1].endswith("kids-scary-missing-wishlist.txt")
+
+
+def test_artwork_rejects_non_numeric_rating_key():
+    try:
+        api.artwork("not-a-number", 240, 360)
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 422
+    else:
+        raise AssertionError("Expected invalid artwork rating key to be rejected")
+
+
+def test_serialize_item_exposes_artwork_metadata():
+    item = SimpleNamespace(
+        ratingKey="123",
+        type="movie",
+        title="Example",
+        year=1999,
+        contentRating="PG",
+        viewCount=0,
+        duration=7200000,
+        summary="Example summary",
+        thumb="/library/metadata/123/thumb/1",
+    )
+
+    payload = api.serialize_item(item, 1)
+
+    assert payload["rating_key"] == "123"
+    assert payload["thumb_available"] is True
+    assert payload["artwork_url"] == "/api/v1/artwork/123"
+    assert payload["duration_minutes"] == 120
+    assert payload["summary"] == "Example summary"
