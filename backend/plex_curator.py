@@ -1442,7 +1442,7 @@ def load_stations():
 def save_stations(stations):
     ensure_config()
     temp = STATIONS_FILE.with_suffix(".json.tmp")
-    temp.write_text(json.dumps(stations, indent=2, ensure_ascii=False) + "\\n", encoding="utf-8")
+    temp.write_text(json.dumps(stations, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     temp.replace(STATIONS_FILE)
 
 def validate_station_id(value):

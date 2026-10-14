@@ -4,6 +4,16 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+### v13.1 station editor
+
+- Authenticated `PUT /api/v1/stations/{id}` station update endpoint.
+- Native SwiftUI station editor for identity, programming, audience, progress, and show overrides.
+- Station enable/disable control from the macOS client.
+- Explicit clearing of optional year limits.
+- Backend tests for normalized station profile writes and invalid year ranges.
+
+### Repository foundation
+
 - Monorepo structure for backend + macOS client.
 - CI smoke tests for Python backend and SwiftUI build.
 - Consolidated project documentation and security guidance.

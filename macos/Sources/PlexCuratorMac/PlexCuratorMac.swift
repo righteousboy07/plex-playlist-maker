@@ -131,6 +131,63 @@ struct APIErrorResponse: Codable { let detail: String }
 struct PreviewRequest: Codable { let total: Int? }
 struct RefreshRequest: Codable { let total: Int?; let dryRun: Bool; let force: Bool }
 
+struct StationUpdateRequest: Encodable {
+    let name: String
+    let description: String
+    let enabled: Bool
+    let playlist: String
+    let preset: String
+    let yearMin: Int?
+    let yearMax: Int?
+    let kidsOnly: Bool
+    let adult: Bool
+    let perShow: Int
+    let total: Int
+    let avoidRecent: Int
+    let minShowGap: Int
+    let seasonal: String
+    let specialEvery: Int
+    let unwatched: Bool
+    let syncWatchProgress: Bool
+    let includeShows: [String]
+    let excludeShows: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case name, description, enabled, playlist, preset
+        case yearMin, yearMax, kidsOnly, adult, perShow, total
+        case avoidRecent, minShowGap, seasonal, specialEvery
+        case unwatched, syncWatchProgress, includeShows, excludeShows
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        try c.encode(description, forKey: .description)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encode(playlist, forKey: .playlist)
+        try c.encode(preset, forKey: .preset)
+        if let yearMin { try c.encode(yearMin, forKey: .yearMin) } else { try c.encodeNil(forKey: .yearMin) }
+        if let yearMax { try c.encode(yearMax, forKey: .yearMax) } else { try c.encodeNil(forKey: .yearMax) }
+        try c.encode(kidsOnly, forKey: .kidsOnly)
+        try c.encode(adult, forKey: .adult)
+        try c.encode(perShow, forKey: .perShow)
+        try c.encode(total, forKey: .total)
+        try c.encode(avoidRecent, forKey: .avoidRecent)
+        try c.encode(minShowGap, forKey: .minShowGap)
+        try c.encode(seasonal, forKey: .seasonal)
+        try c.encode(specialEvery, forKey: .specialEvery)
+        try c.encode(unwatched, forKey: .unwatched)
+        try c.encode(syncWatchProgress, forKey: .syncWatchProgress)
+        try c.encode(includeShows, forKey: .includeShows)
+        try c.encode(excludeShows, forKey: .excludeShows)
+    }
+}
+
+struct StationUpdateResponse: Codable {
+    let ok: Bool
+    let station: Station
+}
+
 struct RefreshResponse: Codable {
     let ok: Bool
     let dryRun: Bool
@@ -254,6 +311,17 @@ final class APIClient {
         )
     }
 
+    func updateStation(_ id: String, request update: StationUpdateRequest) async throws -> Station {
+        let body = try encoder.encode(update)
+        let response: StationUpdateResponse = try await request(
+            "/api/v1/stations/\(id)",
+            method: "PUT",
+            body: body,
+            authenticated: true
+        )
+        return response.station
+    }
+
     func history() async throws -> [HistoryItem] {
         let r: HistoryResponse = try await request("/api/v1/history?limit=150")
         return r.history
@@ -328,6 +396,21 @@ final class AppModel: ObservableObject {
             diff = nil
             await refreshDashboard()
         } catch { self.error = error.localizedDescription }
+    }
+
+    func updateStation(_ station: Station, request: StationUpdateRequest) async -> Station? {
+        do {
+            let updated = try await api.updateStation(station.id, request: request)
+            if let index = stations.firstIndex(where: { $0.id == updated.id }) {
+                stations[index] = updated
+            }
+            message = "Saved \(updated.name)."
+            error = nil
+            return updated
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
     }
 
     func loadHistory() async {
@@ -492,18 +575,27 @@ struct StationsView: View {
 
 struct StationDetailView: View {
     @EnvironmentObject var model: AppModel
-    let station: Station
+    @State private var station: Station
     @State private var tab = 0
     @State private var confirmRefresh = false
+    @State private var showEditor = false
+
+    init(station: Station) {
+        _station = State(initialValue: station)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(station.name).font(.title.bold())
+                    HStack {
+                        Text(station.name).font(.title.bold())
+                        StatusBadge(text: station.enabled ? "Enabled" : "Disabled", good: station.enabled)
+                    }
                     Text(station.playlist).foregroundColor(.secondary)
                 }
                 Spacer()
+                Button("Edit") { showEditor = true }
                 Button("Preview") { tab = 1; Task { await model.loadPreview(station) } }
                 Button("Diff") { tab = 2; Task { await model.loadDiff(station) } }
                 Button("Dry Run") { Task { await model.dryRun(station) } }
@@ -521,6 +613,15 @@ struct StationDetailView: View {
             else { diffView }
         }
         .navigationTitle(station.name)
+        .sheet(isPresented: $showEditor) {
+            StationEditorView(station: station) { updated in
+                station = updated
+                model.preview = nil
+                model.diff = nil
+            }
+            .environmentObject(model)
+            .frame(minWidth: 620, minHeight: 690)
+        }
         .alert(isPresented: $confirmRefresh) {
             Alert(
                 title: Text("Refresh \(station.name)?"),
@@ -594,6 +695,202 @@ struct StationDetailView: View {
 
     private func metric(_ name: String, _ value: Int) -> some View {
         VStack { Text("\(value)").font(.title2.bold()); Text(name).font(.caption).foregroundColor(.secondary) }
+    }
+}
+
+struct StationEditorView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    let original: Station
+    let onSaved: (Station) -> Void
+
+    @State private var name: String
+    @State private var description: String
+    @State private var enabled: Bool
+    @State private var playlist: String
+    @State private var preset: String
+    @State private var yearMin: String
+    @State private var yearMax: String
+    @State private var kidsOnly: Bool
+    @State private var adult: Bool
+    @State private var perShow: Int
+    @State private var total: Int
+    @State private var avoidRecent: Int
+    @State private var minShowGap: Int
+    @State private var seasonal: String
+    @State private var specialEvery: Int
+    @State private var unwatched: Bool
+    @State private var syncWatchProgress: Bool
+    @State private var includeShows: String
+    @State private var excludeShows: String
+    @State private var validationMessage: String?
+
+    init(station: Station, onSaved: @escaping (Station) -> Void) {
+        original = station
+        self.onSaved = onSaved
+        _name = State(initialValue: station.name)
+        _description = State(initialValue: station.description ?? "")
+        _enabled = State(initialValue: station.enabled)
+        _playlist = State(initialValue: station.playlist)
+        _preset = State(initialValue: station.preset)
+        _yearMin = State(initialValue: station.yearMin.map(String.init) ?? "")
+        _yearMax = State(initialValue: station.yearMax.map(String.init) ?? "")
+        _kidsOnly = State(initialValue: station.kidsOnly)
+        _adult = State(initialValue: station.adult)
+        _perShow = State(initialValue: station.perShow)
+        _total = State(initialValue: station.total)
+        _avoidRecent = State(initialValue: station.avoidRecent)
+        _minShowGap = State(initialValue: station.minShowGap)
+        _seasonal = State(initialValue: station.seasonal)
+        _specialEvery = State(initialValue: station.specialEvery)
+        _unwatched = State(initialValue: station.unwatched)
+        _syncWatchProgress = State(initialValue: station.syncWatchProgress)
+        _includeShows = State(initialValue: station.includeShows.joined(separator: "\n"))
+        _excludeShows = State(initialValue: station.excludeShows.joined(separator: "\n"))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Edit Station").font(.title2.bold())
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Save") { save() }
+                    .keyboardShortcut(.defaultAction)
+            }.padding()
+
+            Divider()
+
+            Form {
+                Section("Identity") {
+                    TextField("Name", text: $name)
+                    TextField("Description", text: $description)
+                    TextField("Plex playlist", text: $playlist)
+                    Toggle("Enabled", isOn: $enabled)
+                }
+
+                Section("Programming") {
+                    Picker("Preset", selection: $preset) {
+                        Text("All Cartoons").tag("all-cartoons")
+                        Text("80s Cartoons").tag("80s-cartoons")
+                        Text("90s Cartoons").tag("90s-cartoons")
+                        Text("Saturday Morning").tag("saturday-morning")
+                    }
+                    Picker("Seasonal", selection: $seasonal) {
+                        Text("Automatic").tag("auto")
+                        Text("None").tag("none")
+                        Text("Halloween").tag("halloween")
+                        Text("Christmas").tag("christmas")
+                    }
+
+                    HStack {
+                        TextField("Year minimum", text: $yearMin)
+                        TextField("Year maximum", text: $yearMax)
+                    }
+
+                    Stepper("Episodes per show: \(perShow)", value: $perShow, in: 1...100)
+                    Stepper("Station length: \(total)", value: $total, in: 1...1000)
+                    Stepper("Avoid recent: \(avoidRecent)", value: $avoidRecent, in: 0...100000)
+                    Stepper("Minimum show gap: \(minShowGap)", value: $minShowGap, in: 0...100)
+                    Stepper("Special every: \(specialEvery)", value: $specialEvery, in: 1...1000)
+                }
+
+                Section("Audience / Progress") {
+                    Toggle("Kids-only filtering", isOn: $kidsOnly)
+                    Toggle("Allow adult animation", isOn: $adult)
+                    Toggle("Prefer unwatched episodes", isOn: $unwatched)
+                    Toggle("Follow Plex watch progress", isOn: $syncWatchProgress)
+                }
+
+                Section("Show Overrides") {
+                    Text("One show title per line.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextEditor(text: $includeShows).frame(minHeight: 80)
+                    Text("Included shows")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextEditor(text: $excludeShows).frame(minHeight: 80)
+                    Text("Excluded shows")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let validationMessage {
+                    Section {
+                        Text(validationMessage).foregroundColor(.red)
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+
+    private func parsedYear(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : Int(trimmed)
+    }
+
+    private func lines(_ value: String) -> [String] {
+        value.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func save() {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            validationMessage = "Name is required."
+            return
+        }
+        guard !playlist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            validationMessage = "Playlist name is required."
+            return
+        }
+
+        let minYear = parsedYear(yearMin)
+        let maxYear = parsedYear(yearMax)
+        if !yearMin.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && minYear == nil {
+            validationMessage = "Minimum year must be a number."
+            return
+        }
+        if !yearMax.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && maxYear == nil {
+            validationMessage = "Maximum year must be a number."
+            return
+        }
+        if let minYear, let maxYear, minYear > maxYear {
+            validationMessage = "Minimum year cannot be greater than maximum year."
+            return
+        }
+
+        let request = StationUpdateRequest(
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            description: description,
+            enabled: enabled,
+            playlist: playlist.trimmingCharacters(in: .whitespacesAndNewlines),
+            preset: preset,
+            yearMin: minYear,
+            yearMax: maxYear,
+            kidsOnly: kidsOnly,
+            adult: adult,
+            perShow: perShow,
+            total: total,
+            avoidRecent: avoidRecent,
+            minShowGap: minShowGap,
+            seasonal: seasonal,
+            specialEvery: specialEvery,
+            unwatched: unwatched,
+            syncWatchProgress: syncWatchProgress,
+            includeShows: lines(includeShows),
+            excludeShows: lines(excludeShows)
+        )
+
+        Task {
+            if let updated = await model.updateStation(original, request: request) {
+                onSaved(updated)
+                dismiss()
+            }
+        }
     }
 }
 

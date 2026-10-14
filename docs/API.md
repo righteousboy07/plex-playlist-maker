@@ -40,7 +40,33 @@ X-Plex-Curator-Key
 ```
 
 ```text
+PUT  /api/v1/stations/{id}
 POST /api/v1/stations/{id}/refresh
 POST /api/v1/stations/refresh-all
 POST /api/v1/backups
 ```
+
+
+## Update station profile
+
+```text
+PUT /api/v1/stations/{id}
+```
+
+This authenticated endpoint accepts partial station updates and persists a normalized profile back to `stations.json`. It is used by the v13.1 macOS station editor.
+
+Example body:
+
+```json
+{
+  "name": "Retro Kids",
+  "enabled": true,
+  "total": 72,
+  "seasonal": "auto",
+  "year_min": 1980,
+  "year_max": 1999,
+  "include_shows": ["DuckTales", "Darkwing Duck"]
+}
+```
+
+Send `null` for `year_min` or `year_max` to clear that limit.
