@@ -4,6 +4,18 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+### Deployment and releases
+
+- Safe GitHub-to-Mac backend installer with timestamped live-code backup.
+- Persistent config/state remains outside the deployed source tree.
+- Post-deploy Doctor verification and automatic API LaunchAgent reload.
+- Native macOS app install/update script with rollback copy.
+- Dry-run deployment mode.
+- One-command clean-clone updater.
+- Tagged release workflow for backend archives and compiled macOS app artifacts.
+- Fixed API wrapper to re-exec inside the project virtualenv.
+- Fixed kids-scary wishlist LaunchAgent path for the monorepo layout.
+
 ### v13.1 search and notifications
 
 - Search stations by name, playlist, preset, description, and included/excluded shows.
