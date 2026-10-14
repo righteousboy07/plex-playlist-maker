@@ -17,9 +17,11 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.2"
+API_VERSION = "1.3"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
+KIDS_SCARY_WISHLIST = core.APP_DIR / "examples" / "kids-scary-missing-wishlist.txt"
+TITLE_ALIASES_FILE = core.APP_DIR / "examples" / "title-aliases.json"
 
 app = FastAPI(
     title="Plex Curator Local API",
@@ -41,6 +43,24 @@ class RefreshAllRequest(BaseModel):
 
 class BackupRequest(BaseModel):
     reason: str = Field(default="api", min_length=1, max_length=80)
+
+class MovieFilterRequest(BaseModel):
+    library: str = Field(default="Movies", min_length=1, max_length=120)
+    genre: Optional[str] = Field(default=None, max_length=80)
+    year_min: Optional[int] = Field(default=None, ge=1880, le=2200)
+    year_max: Optional[int] = Field(default=None, ge=1880, le=2200)
+    max_runtime: Optional[int] = Field(default=None, ge=1, le=1000)
+    content_ratings: list[str] = Field(default_factory=list)
+    min_audience: Optional[float] = Field(default=None, ge=0, le=10)
+    min_critic: Optional[float] = Field(default=None, ge=0, le=10)
+    watched: bool = False
+    unwatched: bool = False
+    random: bool = False
+    limit: Optional[int] = Field(default=50, ge=1, le=500)
+
+class MoviePlaylistRequest(MovieFilterRequest):
+    playlist: str = Field(min_length=1, max_length=120)
+    replace: bool = True
 
 class StationUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
@@ -148,6 +168,51 @@ def update_station_config(station_id: str, changes: dict):
     stations[station_id] = normalized
     core.save_stations(stations)
     return station_summary(station_id, normalized)
+
+def movie_request_options(request: MovieFilterRequest):
+    if request.watched and request.unwatched:
+        raise HTTPException(status_code=422, detail="watched and unwatched cannot both be true.")
+    if request.year_min is not None and request.year_max is not None and request.year_min > request.year_max:
+        raise HTTPException(status_code=422, detail="year_min cannot be greater than year_max.")
+    return {
+        "genre": request.genre,
+        "year_min": request.year_min,
+        "year_max": request.year_max,
+        "max_runtime": request.max_runtime,
+        "content_ratings": request.content_ratings,
+        "min_audience": request.min_audience,
+        "min_critic": request.min_critic,
+        "watched": request.watched,
+        "unwatched": request.unwatched,
+        "random": request.random,
+        "limit": request.limit,
+    }
+
+def select_movies(plex, request: MovieFilterRequest):
+    try:
+        section = core.get_section(plex, request.library)
+    except SystemExit as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return core.movie_filter(section.all(), movie_request_options(request))
+
+def load_title_aliases():
+    if not TITLE_ALIASES_FILE.exists():
+        return {}
+    try:
+        data = json.loads(TITLE_ALIASES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+def resolve_title_with_aliases(section, title, year=None):
+    item = core.resolve_title(section, title, year)
+    if item:
+        return item
+    for alias in load_title_aliases().get(title, []):
+        item = core.resolve_title(section, alias, year)
+        if item:
+            return item
+    return None
 
 def build_station_payload(station_id: str, total: Optional[int] = None):
     cfg = station_or_404(station_id)
@@ -513,6 +578,82 @@ def automation_run_now(
         raise HTTPException(status_code=404, detail=f'Unknown automation job "{job_name}".')
     run_launchd_manager("run-now", job_name)
     return {"ok": True, "job": json.loads(run_launchd_manager("status-json", job_name))}
+
+@app.post("/api/v1/movies/preview")
+def movies_preview(request: MovieFilterRequest):
+    plex = core.connect()
+    items = select_movies(plex, request)
+    return {
+        "count": len(items),
+        "items": [serialize_item(item, i) for i, item in enumerate(items, 1)],
+        "read_only": True,
+    }
+
+@app.post("/api/v1/movies/playlist")
+def movies_create_playlist(
+    request: MoviePlaylistRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    items = select_movies(plex, request)
+    if not items:
+        raise HTTPException(status_code=409, detail="No movies matched the requested filters.")
+
+    try:
+        if request.replace:
+            playlist = core.replace_playlist_with_rollback(plex, request.playlist, items)
+        else:
+            playlist = core.create_playlist(plex, request.playlist, items, replace=False)
+    except SystemExit as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "playlist": playlist.title,
+        "item_count": len(items),
+    }
+
+@app.get("/api/v1/wishlist/kids-scary")
+def kids_scary_wishlist():
+    plex = core.connect()
+    try:
+        section = core.get_section(plex, "Movies")
+    except SystemExit as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    entries = []
+    found_count = 0
+    missing_count = 0
+
+    for title, year in core.parse_wishlist(KIDS_SCARY_WISHLIST):
+        item = resolve_title_with_aliases(section, title, year)
+        if item:
+            found_count += 1
+            entries.append({
+                "requested_title": title,
+                "requested_year": year,
+                "found": True,
+                "matched_title": getattr(item, "title", None),
+                "item": serialize_item(item),
+            })
+        else:
+            missing_count += 1
+            entries.append({
+                "requested_title": title,
+                "requested_year": year,
+                "found": False,
+                "matched_title": None,
+                "item": None,
+            })
+
+    return {
+        "found_count": found_count,
+        "missing_count": missing_count,
+        "total_count": len(entries),
+        "entries": entries,
+    }
 
 @app.get("/api/v1/playlists")
 def playlists():
