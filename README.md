@@ -76,6 +76,40 @@ Build a standalone app:
 ./scripts/build-app.sh
 ```
 
+## Install or update from GitHub
+
+The live backend installs to:
+
+```text
+/Applications/PlexCurator
+```
+
+while runtime credentials and state remain in:
+
+```text
+~/.config/plex-curator/
+```
+
+Preview the install:
+
+```bash
+bash scripts/install-all.sh --dry-run
+```
+
+Install/update backend and macOS client:
+
+```bash
+bash scripts/install-all.sh
+```
+
+For later updates from a clean clone:
+
+```bash
+bash scripts/update-from-git.sh
+```
+
+The deployment process backs up the current live application before replacing code and runs Doctor after backend deployment. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 ## Development
 
 ```bash
