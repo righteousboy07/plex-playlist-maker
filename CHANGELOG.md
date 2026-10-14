@@ -4,6 +4,14 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+### v13.1 search and notifications
+
+- Search stations by name, playlist, preset, description, and included/excluded shows.
+- Filter station list by All / Enabled / Disabled.
+- Search history by show, episode, station, or episode code.
+- Friendlier formatted history timestamps.
+- Native macOS notifications after successful station refresh and automation actions.
+
 ### v13.1 automation controls
 
 - Launchd manager JSON status output for GUI/API clients.
