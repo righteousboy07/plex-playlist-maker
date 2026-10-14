@@ -72,7 +72,7 @@ if [[ -d "$DEST" ]]; then
   /usr/bin/ditto "$DEST" "$BACKUP_DIR/Plex Curator.app"
 fi
 
-"$MACOS_ROOT/scripts/build-app.sh"
+bash "$MACOS_ROOT/scripts/build-app.sh"
 
 SOURCE_APP="$MACOS_ROOT/dist/Plex Curator.app"
 [[ -d "$SOURCE_APP" ]] || {
