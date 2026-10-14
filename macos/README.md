@@ -165,9 +165,16 @@ The current client now includes:
 
 Station creation/deletion still remains CLI-first while the GUI write surface continues to mature.
 
+## v13.2 additions
+
+- searchable Plex playlist browser with artwork
+- Movie Curator filter/preview/create workflow
+- Kids Scary Wishlist with present/missing status
+- localhost artwork proxy; Swift never receives the Plex token
+
 ## Next improvements
 
-### v13.2
+### v13.2 remaining
 - Plex artwork/posters
 - playlist browser
 - movie-curation screen

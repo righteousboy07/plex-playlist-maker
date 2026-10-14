@@ -58,6 +58,9 @@ def test_api_routes_are_registered():
     assert "/api/v1/automation/{job_name}/run-now" in paths
     assert "/api/v1/artwork/{rating_key}" in paths
     assert "/api/v1/playlist" in paths
+    assert "/api/v1/movies/preview" in paths
+    assert "/api/v1/movies/playlist" in paths
+    assert "/api/v1/wishlist/kids-scary" in paths
 
 
 def test_station_update_config_persists_normalized_profile(tmp_path, monkeypatch):
@@ -209,3 +212,48 @@ def test_serialize_item_exposes_artwork_metadata():
     assert payload["artwork_url"] == "/api/v1/artwork/123"
     assert payload["duration_minutes"] == 120
     assert payload["summary"] == "Example summary"
+
+
+def test_movie_filters_reject_conflicting_watch_state():
+    request = api.MovieFilterRequest(watched=True, unwatched=True)
+    try:
+        api.movie_request_options(request)
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 422
+    else:
+        raise AssertionError("Expected conflicting watch filters to be rejected")
+
+
+def test_movie_filters_reject_invalid_year_range():
+    request = api.MovieFilterRequest(year_min=2000, year_max=1990)
+    try:
+        api.movie_request_options(request)
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 422
+    else:
+        raise AssertionError("Expected invalid year range to be rejected")
+
+
+def test_resolve_title_with_aliases(monkeypatch):
+    calls = []
+
+    def fake_resolve(section, title, year=None):
+        calls.append((title, year))
+        if title == "Ghostbusters Remastered":
+            return SimpleNamespace(title=title, year=1984)
+        return None
+
+    monkeypatch.setattr(core, "resolve_title", fake_resolve)
+    monkeypatch.setattr(
+        api,
+        "load_title_aliases",
+        lambda: {"Ghostbusters": ["Ghostbusters Remastered"]},
+    )
+
+    item = api.resolve_title_with_aliases(object(), "Ghostbusters", 1984)
+
+    assert item.title == "Ghostbusters Remastered"
+    assert calls == [
+        ("Ghostbusters", 1984),
+        ("Ghostbusters Remastered", 1984),
+    ]

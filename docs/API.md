@@ -95,3 +95,60 @@ GET /api/v1/artwork/{rating_key}?width=240&height=360
 ```
 
 The backend resolves the media item in Plex, requests/transcodes the thumbnail server-side, and returns the image bytes. The Plex token is never sent to the Swift client.
+
+
+## Movie curator
+
+Read-only filter preview:
+
+```text
+POST /api/v1/movies/preview
+```
+
+Example:
+
+```json
+{
+  "library": "Movies",
+  "genre": "Animation",
+  "year_min": 1980,
+  "year_max": 1999,
+  "max_runtime": 120,
+  "content_ratings": ["G", "PG"],
+  "min_audience": 7.0,
+  "unwatched": true,
+  "random": false,
+  "limit": 50
+}
+```
+
+Authenticated playlist creation/replacement:
+
+```text
+POST /api/v1/movies/playlist
+```
+
+The body uses the same filters plus:
+
+```json
+{
+  "playlist": "Family Movie Night",
+  "replace": true
+}
+```
+
+Replacement uses the backend's rollback-safe playlist replacement path.
+
+## Kids Scary Wishlist
+
+```text
+GET /api/v1/wishlist/kids-scary
+```
+
+Returns requested title/year, whether the title is currently in Plex, the actual matched Plex title, and media metadata/artwork information when found.
+
+Known renamed titles can be resolved through:
+
+```text
+backend/examples/title-aliases.json
+```

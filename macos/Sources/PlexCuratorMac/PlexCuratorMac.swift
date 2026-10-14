@@ -74,6 +74,66 @@ struct PlaylistDetailResponse: Codable {
     let items: [MediaItem]
 }
 
+struct MovieFilterRequest: Encodable {
+    let library: String
+    let genre: String?
+    let yearMin: Int?
+    let yearMax: Int?
+    let maxRuntime: Int?
+    let contentRatings: [String]
+    let minAudience: Double?
+    let minCritic: Double?
+    let watched: Bool
+    let unwatched: Bool
+    let random: Bool
+    let limit: Int?
+}
+
+struct MoviePlaylistRequest: Encodable {
+    let library: String
+    let genre: String?
+    let yearMin: Int?
+    let yearMax: Int?
+    let maxRuntime: Int?
+    let contentRatings: [String]
+    let minAudience: Double?
+    let minCritic: Double?
+    let watched: Bool
+    let unwatched: Bool
+    let random: Bool
+    let limit: Int?
+    let playlist: String
+    let replace: Bool
+}
+
+struct MoviePreviewResponse: Codable {
+    let count: Int
+    let items: [MediaItem]
+    let readOnly: Bool
+}
+
+struct MoviePlaylistResponse: Codable {
+    let ok: Bool
+    let playlist: String
+    let itemCount: Int
+}
+
+struct WishlistEntry: Codable, Identifiable {
+    var id: String { "\(requestedTitle)-\(requestedYear ?? 0)" }
+    let requestedTitle: String
+    let requestedYear: Int?
+    let found: Bool
+    let matchedTitle: String?
+    let item: MediaItem?
+}
+
+struct WishlistResponse: Codable {
+    let foundCount: Int
+    let missingCount: Int
+    let totalCount: Int
+    let entries: [WishlistEntry]
+}
+
 struct MediaItem: Codable, Identifiable {
     var id: String { ratingKey.isEmpty ? "\(position ?? 0)-\(title ?? "")" : ratingKey }
     let ratingKey: String
@@ -420,6 +480,29 @@ final class APIClient {
         return components?.url
     }
 
+    func moviePreview(_ filter: MovieFilterRequest) async throws -> MoviePreviewResponse {
+        let body = try encoder.encode(filter)
+        return try await request(
+            "/api/v1/movies/preview",
+            method: "POST",
+            body: body
+        )
+    }
+
+    func createMoviePlaylist(_ requestValue: MoviePlaylistRequest) async throws -> MoviePlaylistResponse {
+        let body = try encoder.encode(requestValue)
+        return try await request(
+            "/api/v1/movies/playlist",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+    }
+
+    func kidsScaryWishlist() async throws -> WishlistResponse {
+        try await request("/api/v1/wishlist/kids-scary")
+    }
+
     func history() async throws -> [HistoryItem] {
         let r: HistoryResponse = try await request("/api/v1/history?limit=150")
         return r.history
@@ -645,6 +728,8 @@ struct RootView: View {
                     NavigationLink(destination: DashboardView()) { Label("Dashboard", systemImage: "gauge") }
                     NavigationLink(destination: StationsView()) { Label("Stations", systemImage: "tv") }
                     NavigationLink(destination: PlaylistsView()) { Label("Playlists", systemImage: "rectangle.stack") }
+                    NavigationLink(destination: MovieCuratorView()) { Label("Movie Curator", systemImage: "film.stack") }
+                    NavigationLink(destination: KidsScaryWishlistView()) { Label("Kids Scary Wishlist", systemImage: "checklist") }
                     NavigationLink(destination: HistoryView()) { Label("History", systemImage: "clock.arrow.circlepath") }
                     NavigationLink(destination: HealthView()) { Label("Health", systemImage: "heart.text.square") }
                     NavigationLink(destination: AutomationView()) { Label("Automation", systemImage: "clock.badge.checkmark") }
@@ -1341,6 +1426,414 @@ struct PlaylistMediaCard: View {
         .padding(10)
         .background(Color.secondary.opacity(0.06))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct MovieCuratorView: View {
+    @EnvironmentObject var model: AppModel
+
+    @State private var genre = ""
+    @State private var yearMin = ""
+    @State private var yearMax = ""
+    @State private var maxRuntime = ""
+    @State private var contentRatings = ""
+    @State private var minAudience = ""
+    @State private var minCritic = ""
+    @State private var watchMode = 0
+    @State private var randomize = false
+    @State private var limit = 50
+    @State private var playlistName = "Curated Movies"
+    @State private var replaceExisting = true
+    @State private var previewItems: [MediaItem] = []
+    @State private var isLoading = false
+    @State private var validationMessage: String?
+    @State private var confirmCreate = false
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 190, maximum: 240), spacing: 18)
+    ]
+
+    var body: some View {
+        HSplitView {
+            Form {
+                Section("Filters") {
+                    TextField("Genre", text: $genre)
+                    HStack {
+                        TextField("Year minimum", text: $yearMin)
+                        TextField("Year maximum", text: $yearMax)
+                    }
+                    TextField("Maximum runtime (minutes)", text: $maxRuntime)
+                    TextField("Content ratings (G, PG, PG-13)", text: $contentRatings)
+                    TextField("Minimum audience rating (0–10)", text: $minAudience)
+                    TextField("Minimum critic rating (0–10)", text: $minCritic)
+
+                    Picker("Watch state", selection: $watchMode) {
+                        Text("Any").tag(0)
+                        Text("Unwatched").tag(1)
+                        Text("Watched").tag(2)
+                    }
+
+                    Toggle("Randomize results", isOn: $randomize)
+                    Stepper("Limit: \(limit)", value: $limit, in: 1...500)
+                }
+
+                Section("Playlist") {
+                    TextField("Playlist name", text: $playlistName)
+                    Toggle("Replace existing playlist", isOn: $replaceExisting)
+                }
+
+                if let validationMessage {
+                    Section {
+                        Text(validationMessage)
+                            .foregroundColor(.red)
+                    }
+                }
+
+                Section {
+                    HStack {
+                        Button("Preview") { Task { await preview() } }
+                        Button(replaceExisting ? "Create / Replace" : "Create") {
+                            if validate() {
+                                confirmCreate = true
+                            }
+                        }
+                        .disabled(previewItems.isEmpty)
+                    }
+                }
+            }
+            .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
+
+            Group {
+                if isLoading {
+                    ProgressView("Filtering movies…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if previewItems.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "film.stack")
+                            .font(.system(size: 42))
+                            .foregroundColor(.secondary)
+                        Text("Choose filters and preview your movie lineup.")
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
+                            ForEach(previewItems) { item in
+                                PlaylistMediaCard(item: item)
+                            }
+                        }
+                        .padding(20)
+                    }
+                }
+            }
+            .frame(minWidth: 500)
+        }
+        .navigationTitle("Movie Curator")
+        .alert(isPresented: $confirmCreate) {
+            Alert(
+                title: Text(replaceExisting ? "Create or replace playlist?" : "Create playlist?"),
+                message: Text("\(playlistName) will contain \(previewItems.count) movies."),
+                primaryButton: .default(Text("Continue")) {
+                    Task { await createPlaylist() }
+                },
+                secondaryButton: .cancel()
+            )
+        }
+    }
+
+    private func parseInt(_ value: String, label: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let parsed = Int(trimmed) else {
+            validationMessage = "\(label) must be a whole number."
+            return nil
+        }
+        return parsed
+    }
+
+    private func parseDouble(_ value: String, label: String) -> Double? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard let parsed = Double(trimmed) else {
+            validationMessage = "\(label) must be a number."
+            return nil
+        }
+        return parsed
+    }
+
+    private func validate() -> Bool {
+        validationMessage = nil
+        guard !playlistName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            validationMessage = "Playlist name is required."
+            return false
+        }
+
+        let minYear = parseInt(yearMin, label: "Minimum year")
+        if validationMessage != nil { return false }
+        let maxYear = parseInt(yearMax, label: "Maximum year")
+        if validationMessage != nil { return false }
+        _ = parseInt(maxRuntime, label: "Maximum runtime")
+        if validationMessage != nil { return false }
+        let audience = parseDouble(minAudience, label: "Audience rating")
+        if validationMessage != nil { return false }
+        let critic = parseDouble(minCritic, label: "Critic rating")
+        if validationMessage != nil { return false }
+
+        if let minYear, let maxYear, minYear > maxYear {
+            validationMessage = "Minimum year cannot be greater than maximum year."
+            return false
+        }
+        if let audience, !(0...10).contains(audience) {
+            validationMessage = "Audience rating must be between 0 and 10."
+            return false
+        }
+        if let critic, !(0...10).contains(critic) {
+            validationMessage = "Critic rating must be between 0 and 10."
+            return false
+        }
+        return true
+    }
+
+    private func ratings() -> [String] {
+        contentRatings
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func filterRequest() -> MovieFilterRequest? {
+        validationMessage = nil
+        let minYear = parseInt(yearMin, label: "Minimum year")
+        if validationMessage != nil { return nil }
+        let maxYear = parseInt(yearMax, label: "Maximum year")
+        if validationMessage != nil { return nil }
+        let runtime = parseInt(maxRuntime, label: "Maximum runtime")
+        if validationMessage != nil { return nil }
+        let audience = parseDouble(minAudience, label: "Audience rating")
+        if validationMessage != nil { return nil }
+        let critic = parseDouble(minCritic, label: "Critic rating")
+        if validationMessage != nil { return nil }
+
+        if let minYear, let maxYear, minYear > maxYear {
+            validationMessage = "Minimum year cannot be greater than maximum year."
+            return nil
+        }
+
+        return MovieFilterRequest(
+            library: "Movies",
+            genre: genre.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : genre,
+            yearMin: minYear,
+            yearMax: maxYear,
+            maxRuntime: runtime,
+            contentRatings: ratings(),
+            minAudience: audience,
+            minCritic: critic,
+            watched: watchMode == 2,
+            unwatched: watchMode == 1,
+            random: randomize,
+            limit: limit
+        )
+    }
+
+    private func preview() async {
+        guard let request = filterRequest() else { return }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let response = try await model.api.moviePreview(request)
+            previewItems = response.items
+            model.message = "Movie preview found \(response.count) matches."
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
+    private func createPlaylist() async {
+        guard validate(), let filter = filterRequest() else { return }
+
+        let request = MoviePlaylistRequest(
+            library: filter.library,
+            genre: filter.genre,
+            yearMin: filter.yearMin,
+            yearMax: filter.yearMax,
+            maxRuntime: filter.maxRuntime,
+            contentRatings: filter.contentRatings,
+            minAudience: filter.minAudience,
+            minCritic: filter.minCritic,
+            watched: filter.watched,
+            unwatched: filter.unwatched,
+            random: filter.random,
+            limit: filter.limit,
+            playlist: playlistName.trimmingCharacters(in: .whitespacesAndNewlines),
+            replace: replaceExisting
+        )
+
+        do {
+            let response = try await model.api.createMoviePlaylist(request)
+            model.message = "Created \(response.playlist) with \(response.itemCount) movies."
+            NotificationManager.shared.send(
+                title: "Plex Curator",
+                body: "Created \(response.playlist) with \(response.itemCount) movies."
+            )
+            await model.loadPlaylists()
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+}
+
+struct KidsScaryWishlistView: View {
+    @EnvironmentObject var model: AppModel
+
+    @State private var response: WishlistResponse?
+    @State private var searchText = ""
+    @State private var filter = 0
+    @State private var isLoading = false
+
+    private var filteredEntries: [WishlistEntry] {
+        guard let entries = response?.entries else { return [] }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        return entries.filter { entry in
+            let statusMatches: Bool
+            switch filter {
+            case 1: statusMatches = !entry.found
+            case 2: statusMatches = entry.found
+            default: statusMatches = true
+            }
+
+            guard statusMatches else { return false }
+            guard !query.isEmpty else { return true }
+
+            return [
+                entry.requestedTitle,
+                entry.matchedTitle ?? "",
+                entry.requestedYear.map(String.init) ?? ""
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            .contains(query)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let response {
+                HStack(spacing: 18) {
+                    metric("FOUND", response.foundCount)
+                    metric("MISSING", response.missingCount)
+                    metric("TOTAL", response.totalCount)
+                    Spacer()
+                    Button("Reload") { Task { await load() } }
+                }
+                .padding()
+                Divider()
+            }
+
+            if isLoading && response == nil {
+                ProgressView("Checking Plex library…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(filteredEntries) { entry in
+                    WishlistRow(entry: entry)
+                }
+            }
+        }
+        .navigationTitle("Kids Scary Wishlist")
+        .searchable(text: $searchText, prompt: "Search wishlist")
+        .toolbar {
+            Picker("Status", selection: $filter) {
+                Text("All").tag(0)
+                Text("Missing").tag(1)
+                Text("Found").tag(2)
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            .frame(width: 230)
+        }
+        .task { await load() }
+    }
+
+    private func metric(_ label: String, _ value: Int) -> some View {
+        VStack {
+            Text("\(value)").font(.title2.bold())
+            Text(label).font(.caption).foregroundColor(.secondary)
+        }
+    }
+
+    private func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            response = try await model.api.kidsScaryWishlist()
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+}
+
+struct WishlistRow: View {
+    @EnvironmentObject var model: AppModel
+    let entry: WishlistEntry
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let item = entry.item,
+               item.thumbAvailable == true,
+               let url = model.api.artworkURL(ratingKey: item.ratingKey, width: 90, height: 135) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image.resizable().scaledToFill()
+                    case .empty:
+                        ProgressView()
+                    default:
+                        Image(systemName: "film")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(width: 60, height: 90)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.secondary.opacity(0.1))
+                    Image(systemName: "film")
+                        .foregroundColor(.secondary)
+                }
+                .frame(width: 60, height: 90)
+            }
+
+            Image(systemName: entry.found ? "checkmark.circle.fill" : "xmark.circle")
+                .foregroundColor(entry.found ? .green : .orange)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.requestedTitle)
+                    .font(.headline)
+
+                HStack {
+                    if let year = entry.requestedYear {
+                        Text(String(year))
+                    }
+                    if let matched = entry.matchedTitle,
+                       matched.caseInsensitiveCompare(entry.requestedTitle) != .orderedSame {
+                        Text("Matched: \(matched)")
+                    }
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Text(entry.found ? "In Plex" : "Missing")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 4)
     }
 }
 
