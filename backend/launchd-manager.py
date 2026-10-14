@@ -122,15 +122,54 @@ def uninstall(name):
         path.unlink()
     print(f"Removed {name}")
 
-def status(name):
+def job_snapshot(name):
     job = JOBS[name]
+    path = plist_path(job["label"])
     res = run(["launchctl", "print", f"gui/{os.getuid()}/{job['label']}"])
-    print(f"{name}: {'loaded' if res.returncode == 0 else 'not loaded'}")
-    print(f"plist exists: {plist_path(job['label']).exists()}")
-    if res.returncode == 0:
+    loaded = res.returncode == 0
+    state = None
+    last_exit_code = None
+    runs = None
+    if loaded:
         for line in res.stdout.splitlines():
-            if "state =" in line or "last exit code =" in line or "runs =" in line:
-                print(line.strip())
+            stripped = line.strip()
+            if stripped.startswith("state ="):
+                state = stripped.split("=", 1)[1].strip()
+            elif stripped.startswith("last exit code ="):
+                value = stripped.split("=", 1)[1].strip()
+                try:
+                    last_exit_code = int(value)
+                except ValueError:
+                    last_exit_code = value
+            elif stripped.startswith("runs ="):
+                value = stripped.split("=", 1)[1].strip()
+                try:
+                    runs = int(value)
+                except ValueError:
+                    runs = value
+    return {
+        "name": name,
+        "label": job["label"],
+        "description": job["description"],
+        "loaded": loaded,
+        "plist_exists": path.exists(),
+        "state": state,
+        "last_exit_code": last_exit_code,
+        "runs": runs,
+        "keep_alive": bool(job.get("keep_alive", False)),
+        "protected": name == "api-server",
+    }
+
+def status(name):
+    snap = job_snapshot(name)
+    print(f"{name}: {'loaded' if snap['loaded'] else 'not loaded'}")
+    print(f"plist exists: {snap['plist_exists']}")
+    if snap["state"] is not None:
+        print(f"state = {snap['state']}")
+    if snap["last_exit_code"] is not None:
+        print(f"last exit code = {snap['last_exit_code']}")
+    if snap["runs"] is not None:
+        print(f"runs = {snap['runs']}")
 
 def run_now(name):
     job = JOBS[name]
@@ -146,11 +185,21 @@ def list_jobs():
     for name, job in JOBS.items():
         print(f"{name:24} {job['description']}")
 
+def list_jobs_json():
+    import json
+    print(json.dumps({"jobs": [job_snapshot(name) for name in JOBS]}, indent=2))
+
+def status_json(name):
+    import json
+    print(json.dumps(job_snapshot(name), indent=2))
+
 def main():
     ap = argparse.ArgumentParser(prog="launchd-manager.py")
     sp = ap.add_subparsers(dest="cmd", required=True)
 
     p = sp.add_parser("list"); p.set_defaults(fn=lambda a: list_jobs())
+    p = sp.add_parser("list-json"); p.set_defaults(fn=lambda a: list_jobs_json())
+    p = sp.add_parser("status-json"); p.add_argument("name", choices=JOBS); p.set_defaults(fn=lambda a: status_json(a.name))
     p = sp.add_parser("install"); p.add_argument("name", choices=JOBS); p.set_defaults(fn=lambda a: install(a.name))
     p = sp.add_parser("install-all"); p.set_defaults(fn=lambda a: [install(n) for n in JOBS])
     p = sp.add_parser("uninstall"); p.add_argument("name", choices=JOBS); p.set_defaults(fn=lambda a: uninstall(a.name))
