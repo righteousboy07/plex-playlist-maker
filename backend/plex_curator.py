@@ -1183,19 +1183,21 @@ def inject_specials(items, specials, every, min_show_gap):
             out.append(candidate)
     return out
 
-def collect_interstitial_items(plex, playlist_names, recent_keys=None, exclude_keys=None):
-    playlist_names = playlist_names or []
+def collect_interstitial_pool_states(plex, pool_defs, recent_keys=None, exclude_keys=None):
     recent_keys = set(recent_keys or ())
     exclude_keys = set(exclude_keys or ())
-    pool = []
     seen = set()
     missing = []
+    states = []
 
-    for playlist_name in playlist_names:
+    for pool_def in pool_defs or []:
+        playlist_name = pool_def["playlist"]
         playlist = find_playlist(plex, playlist_name)
         if not playlist:
             missing.append(playlist_name)
             continue
+
+        pool_items = []
         for item in playlist.items():
             item_type = (getattr(item, "type", "") or "").casefold()
             if item_type in {"track", "album", "artist"}:
@@ -1204,24 +1206,54 @@ def collect_interstitial_items(plex, playlist_names, recent_keys=None, exclude_k
             if not key or key in recent_keys or key in exclude_keys or key in seen:
                 continue
             seen.add(key)
-            pool.append(item)
+            pool_items.append(item)
+
+        random.shuffle(pool_items)
+        states.append({
+            "playlist": playlist_name,
+            "type": pool_def.get("type", "general"),
+            "weight": int(pool_def.get("weight", 1)),
+            "items": deque(pool_items),
+        })
 
     if missing:
         raise SystemExit(
             "Interstitial Plex playlist(s) not found: " + ", ".join(sorted(missing))
         )
 
-    random.shuffle(pool)
-    return pool
+    return states
 
-def inject_interstitials(items, interstitials, every, count=1):
-    if not interstitials or every <= 0 or count <= 0:
+def collect_interstitial_items(plex, playlist_names, recent_keys=None, exclude_keys=None):
+    pool_defs = [
+        {"playlist": name, "type": "general", "weight": 1}
+        for name in (playlist_names or [])
+    ]
+    states = collect_interstitial_pool_states(
+        plex, pool_defs, recent_keys=recent_keys, exclude_keys=exclude_keys
+    )
+    out = []
+    for state in states:
+        out.extend(state["items"])
+    random.shuffle(out)
+    return out
+
+def choose_weighted_interstitial(pool_states):
+    active = [state for state in pool_states if state["items"]]
+    if not active:
+        return None
+    chosen = random.choices(
+        active,
+        weights=[state["weight"] for state in active],
+        k=1,
+    )[0]
+    return chosen["items"].popleft()
+
+def inject_weighted_interstitials(items, pool_states, every, count=1):
+    if not pool_states or every <= 0 or count <= 0:
         return list(items)
 
     out = []
-    pool = deque(interstitials)
     since_break = 0
-
     for item in items:
         out.append(item)
         since_break += 1
@@ -1229,17 +1261,26 @@ def inject_interstitials(items, interstitials, every, count=1):
             continue
 
         for _ in range(count):
-            if not pool:
+            candidate = choose_weighted_interstitial(pool_states)
+            if candidate is None:
                 break
-            out.append(pool.popleft())
+            out.append(candidate)
         since_break = 0
-
     return out
+
+def inject_interstitials(items, interstitials, every, count=1):
+    state = [{
+        "playlist": "legacy",
+        "type": "general",
+        "weight": 1,
+        "items": deque(interstitials or []),
+    }]
+    return inject_weighted_interstitials(items, state, every, count)
 
 def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, avoid_recent,
                   sync_watch_progress, min_show_gap, seasonal, special_every, adult=False,
                   profile_overrides=None, interstitial_playlists=None,
-                  interstitial_every=0, interstitial_count=1):
+                  interstitial_pools=None, interstitial_every=0, interstitial_count=1):
     if preset_name not in CHANNEL_PRESETS:
         raise SystemExit(f"Unknown channel preset: {preset_name}")
     cfg = dict(CHANNEL_PRESETS[preset_name])
@@ -1270,21 +1311,25 @@ def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, a
     specials = collect_seasonal_specials(shows, mode, recent | base_keys)
     items = inject_specials(base_items, specials, special_every, min_show_gap)
 
-    if interstitial_playlists and interstitial_every > 0:
+    effective_pools = interstitial_pools or [
+        {"playlist": name, "type": "general", "weight": 1}
+        for name in (interstitial_playlists or [])
+    ]
+    if effective_pools and interstitial_every > 0:
         program_keys = {
             str(getattr(item, "ratingKey", ""))
             for item in items
             if getattr(item, "ratingKey", None)
         }
-        interstitials = collect_interstitial_items(
+        pool_states = collect_interstitial_pool_states(
             plex,
-            interstitial_playlists,
+            effective_pools,
             recent_keys=recent,
             exclude_keys=program_keys,
         )
-        items = inject_interstitials(
+        items = inject_weighted_interstitials(
             items,
-            interstitials,
+            pool_states,
             interstitial_every,
             interstitial_count,
         )
@@ -1581,6 +1626,7 @@ STATION_UPDATE_FIELDS = {
     "interstitial_every": int,
     "interstitial_count": int,
     "interstitial_playlists": list,
+    "interstitial_pools": list,
 }
 
 def load_stations():
@@ -1605,7 +1651,57 @@ def validate_station_id(value):
         raise SystemExit("Station ID may contain only lowercase letters, numbers, '-' and '_'.")
     return value
 
+INTERSTITIAL_TYPES = {"general", "bumper", "station-id", "commercial", "promo"}
+
+def normalize_interstitial_pools(station_id, cfg):
+    raw_pools = cfg.get("interstitial_pools")
+    if raw_pools:
+        pools = []
+        for raw in raw_pools:
+            if not isinstance(raw, dict):
+                raise SystemExit(f'Station "{station_id}" has an invalid interstitial pool.')
+            playlist = str(raw.get("playlist", "")).strip()
+            pool_type = str(raw.get("type", "general")).strip().casefold() or "general"
+            try:
+                weight = int(raw.get("weight", 1))
+            except (TypeError, ValueError):
+                raise SystemExit(f'Station "{station_id}" has an invalid interstitial weight.')
+            if not playlist:
+                raise SystemExit(f'Station "{station_id}" has an interstitial pool without a playlist.')
+            if pool_type not in INTERSTITIAL_TYPES:
+                raise SystemExit(
+                    f'Station "{station_id}" has invalid interstitial type "{pool_type}".'
+                )
+            if weight < 1 or weight > 1000:
+                raise SystemExit(
+                    f'Station "{station_id}" requires interstitial weights from 1 through 1000.'
+                )
+            pools.append({"playlist": playlist, "type": pool_type, "weight": weight})
+        return pools
+
+    return [
+        {"playlist": str(name).strip(), "type": "general", "weight": 1}
+        for name in (cfg.get("interstitial_playlists", []) or [])
+        if str(name).strip()
+    ]
+
+def parse_interstitial_pool_spec(spec):
+    parts = [part.strip() for part in str(spec).split("|")]
+    playlist = parts[0] if parts else ""
+    pool_type = parts[1].casefold() if len(parts) > 1 and parts[1] else "general"
+    try:
+        weight = int(parts[2]) if len(parts) > 2 and parts[2] else 1
+    except ValueError:
+        raise SystemExit(
+            f'Invalid interstitial pool "{spec}". Expected PLAYLIST|TYPE|WEIGHT.'
+        )
+    return normalize_interstitial_pools(
+        "cli",
+        {"interstitial_pools": [{"playlist": playlist, "type": pool_type, "weight": weight}]},
+    )[0]
+
 def normalize_station(station_id, cfg):
+    interstitial_pools = normalize_interstitial_pools(station_id, cfg)
     out = {
         "name": cfg.get("name") or station_id.replace("-", " ").title(),
         "description": cfg.get("description", ""),
@@ -1622,11 +1718,8 @@ def normalize_station(station_id, cfg):
         "min_show_gap": int(cfg.get("min_show_gap", 2)),
         "seasonal": cfg.get("seasonal", "auto"),
         "special_every": int(cfg.get("special_every", 8)),
-        "interstitial_playlists": [
-            str(name).strip()
-            for name in (cfg.get("interstitial_playlists", []) or [])
-            if str(name).strip()
-        ],
+        "interstitial_playlists": [pool["playlist"] for pool in interstitial_pools],
+        "interstitial_pools": interstitial_pools,
         "interstitial_every": int(cfg.get("interstitial_every", 0) or 0),
         "interstitial_count": int(cfg.get("interstitial_count", 1) or 1),
         "unwatched": bool(cfg.get("unwatched", False)),
@@ -1686,6 +1779,7 @@ def station_build_items(plex, station_id, cfg, total_override=None):
         adult=cfg["adult"],
         profile_overrides=cfg,
         interstitial_playlists=cfg["interstitial_playlists"],
+        interstitial_pools=cfg["interstitial_pools"],
         interstitial_every=cfg["interstitial_every"],
         interstitial_count=cfg["interstitial_count"],
     )
@@ -1801,6 +1895,10 @@ def cmd_station_create(args):
         "seasonal": args.seasonal,
         "special_every": args.special_every,
         "interstitial_playlists": args.interstitial_playlist or [],
+        "interstitial_pools": (
+            [parse_interstitial_pool_spec(spec) for spec in (args.interstitial_pool or [])]
+            if args.interstitial_pool else []
+        ),
         "interstitial_every": args.interstitial_every,
         "interstitial_count": args.interstitial_count,
         "unwatched": args.unwatched,
@@ -1864,8 +1962,20 @@ def cmd_station_update(args):
         cfg["genres_any"] = args.genre
     if args.clear_interstitials:
         cfg["interstitial_playlists"] = []
+        cfg["interstitial_pools"] = []
+    elif args.interstitial_pool is not None:
+        cfg["interstitial_pools"] = [
+            parse_interstitial_pool_spec(spec) for spec in args.interstitial_pool
+        ]
+        cfg["interstitial_playlists"] = [
+            pool["playlist"] for pool in cfg["interstitial_pools"]
+        ]
     elif args.interstitial_playlist is not None:
         cfg["interstitial_playlists"] = args.interstitial_playlist
+        cfg["interstitial_pools"] = [
+            {"playlist": name, "type": "general", "weight": 1}
+            for name in args.interstitial_playlist
+        ]
 
     cfg = normalize_station(args.station_id, cfg)
     stations[args.station_id] = cfg
@@ -2373,7 +2483,8 @@ def build_parser():
     p.add_argument("--min-show-gap", type=int, default=2)
     p.add_argument("--seasonal", choices=["auto", "none", "halloween", "christmas"], default="auto")
     p.add_argument("--special-every", type=int, default=8)
-    p.add_argument("--interstitial-playlist", action="append", help="Plex video playlist used as an interstitial pool; repeat for multiple pools.")
+    p.add_argument("--interstitial-playlist", action="append", help="Legacy Plex video playlist pool; repeat for multiple pools.")
+    p.add_argument("--interstitial-pool", action="append", help="Weighted pool as PLAYLIST|TYPE|WEIGHT. Types: general, bumper, station-id, commercial, promo.")
     p.add_argument("--interstitial-every", type=int, default=0, help="Insert an interstitial break after this many program items; 0 disables.")
     p.add_argument("--interstitial-count", type=int, default=1, help="Number of clips inserted at each break.")
     p.add_argument("--unwatched", action="store_true")
@@ -2466,7 +2577,8 @@ def build_parser():
     p.add_argument("--min-show-gap", type=int)
     p.add_argument("--seasonal", choices=["auto","none","halloween","christmas"])
     p.add_argument("--special-every", type=int)
-    p.add_argument("--interstitial-playlist", action="append", help="Replace the station interstitial playlist list; repeat for multiple pools.")
+    p.add_argument("--interstitial-playlist", action="append", help="Replace with legacy general pools; repeat for multiple pools.")
+    p.add_argument("--interstitial-pool", action="append", help="Replace weighted pools using PLAYLIST|TYPE|WEIGHT; repeat for multiple pools.")
     p.add_argument("--clear-interstitials", action="store_true")
     p.add_argument("--interstitial-every", type=int)
     p.add_argument("--interstitial-count", type=int)
