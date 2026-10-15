@@ -548,3 +548,96 @@ def test_weighted_pool_api_model_accepts_type_and_weight():
 def test_parse_interstitial_pool_spec():
     pool = core.parse_interstitial_pool_spec("Station IDs|station-id|20")
     assert pool == {"playlist": "Station IDs", "type": "station-id", "weight": 20}
+
+
+def test_clean_media_title_removes_common_release_noise():
+    assert core.clean_media_title("nickelodeon_bumper_1998_1080p_x264.mp4") == "Nickelodeon Bumper 1998"
+
+
+def test_infer_interstitial_type_from_filename_and_folder():
+    assert core.infer_interstitial_type("/tmp/ads/Cereal Commercial 1994.mp4") == "commercial"
+    assert core.infer_interstitial_type("/tmp/Bumpers/Cartoon Network Up Next.mov") == "bumper"
+    assert core.infer_interstitial_type("/tmp/Station IDs/Nickelodeon Ident.mp4") == "station-id"
+
+
+def test_plan_media_organization_uses_metadata_title(tmp_path, monkeypatch):
+    clip = tmp_path / "video_0047.mp4"
+    clip.write_bytes(b"fake")
+
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {
+            "title": "Nickelodeon Slime Bumper 1997",
+            "comment": None,
+            "description": None,
+            "source": "ffprobe",
+        },
+    )
+
+    plan = core.plan_media_organization(tmp_path)
+    item = plan["items"][0]
+
+    assert item["confidence"] == "high"
+    assert item["type"] == "bumper"
+    assert item["proposed_name"] == "Nickelodeon Slime Bumper 1997.mp4"
+    assert item["folder"] == "Bumpers"
+
+
+def test_plan_media_organization_flags_generic_names_for_review(tmp_path, monkeypatch):
+    clip = tmp_path / "video_0047.mp4"
+    clip.write_bytes(b"fake")
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+
+    plan = core.plan_media_organization(tmp_path)
+    assert plan["review_count"] == 1
+    assert plan["items"][0]["confidence"] == "low"
+
+
+def test_apply_media_organization_skips_low_confidence_by_default(tmp_path, monkeypatch):
+    clip = tmp_path / "video_0047.mp4"
+    clip.write_bytes(b"fake")
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+    monkeypatch.setattr(core, "EXPORT_DIR", tmp_path / "exports")
+    monkeypatch.setattr(core, "CONFIG_DIR", tmp_path / "config")
+
+    plan = core.plan_media_organization(tmp_path)
+    result = core.apply_media_organization(plan)
+
+    assert clip.exists()
+    assert result["applied_count"] == 0
+    assert result["skipped_count"] == 1
+
+
+def test_apply_media_organization_moves_medium_confidence_file(tmp_path, monkeypatch):
+    clip = tmp_path / "Cartoon Network Bumper 1999.mp4"
+    clip.write_bytes(b"fake")
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+    monkeypatch.setattr(core, "EXPORT_DIR", tmp_path / "exports")
+    monkeypatch.setattr(core, "CONFIG_DIR", tmp_path / "config")
+
+    plan = core.plan_media_organization(tmp_path)
+    result = core.apply_media_organization(plan)
+
+    target = tmp_path / "Bumpers" / "Cartoon Network Bumper 1999.mp4"
+    assert target.exists()
+    assert not clip.exists()
+    assert result["applied_count"] == 1
+
+
+def test_media_organizer_api_routes_registered():
+    paths = {route.path for route in api.app.routes}
+    assert "/api/v1/media-organizer/scan" in paths
+    assert "/api/v1/media-organizer/apply" in paths
