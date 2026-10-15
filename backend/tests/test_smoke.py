@@ -486,3 +486,65 @@ def test_station_update_request_accepts_interstitial_settings():
     assert request.interstitial_every == 3
     assert request.interstitial_count == 2
     assert request.interstitial_playlists == ["Retro Kids Bumpers", "Vintage Commercials"]
+
+
+def test_legacy_interstitial_playlists_migrate_to_general_pools():
+    cfg = core.normalize_station("legacy", {
+        "preset": "all-cartoons",
+        "interstitial_playlists": ["Bumpers", "Commercials"],
+    })
+
+    assert cfg["interstitial_pools"] == [
+        {"playlist": "Bumpers", "type": "general", "weight": 1},
+        {"playlist": "Commercials", "type": "general", "weight": 1},
+    ]
+
+
+def test_weighted_interstitial_pool_normalization():
+    cfg = core.normalize_station("weighted", {
+        "preset": "all-cartoons",
+        "interstitial_pools": [
+            {"playlist": "Station IDs", "type": "station-id", "weight": 20},
+            {"playlist": "Bumpers", "type": "bumper", "weight": 35},
+            {"playlist": "Commercials", "type": "commercial", "weight": 45},
+        ],
+    })
+
+    assert cfg["interstitial_playlists"] == ["Station IDs", "Bumpers", "Commercials"]
+    assert [pool["weight"] for pool in cfg["interstitial_pools"]] == [20, 35, 45]
+
+
+def test_choose_weighted_interstitial_uses_pool_weights(monkeypatch):
+    id_clip = SimpleNamespace(ratingKey="id-1")
+    commercial = SimpleNamespace(ratingKey="ad-1")
+    states = [
+        {"playlist": "IDs", "type": "station-id", "weight": 20, "items": core.deque([id_clip])},
+        {"playlist": "Ads", "type": "commercial", "weight": 80, "items": core.deque([commercial])},
+    ]
+
+    def choose_last(population, weights, k):
+        assert weights == [20, 80]
+        return [population[-1]]
+
+    monkeypatch.setattr(core.random, "choices", choose_last)
+    assert core.choose_weighted_interstitial(states) is commercial
+
+
+def test_weighted_pool_api_model_accepts_type_and_weight():
+    request = api.StationUpdateRequest(
+        interstitial_pools=[
+            api.InterstitialPoolRequest(
+                playlist="Vintage Commercials",
+                type="commercial",
+                weight=45,
+            )
+        ]
+    )
+
+    assert request.interstitial_pools[0].type == "commercial"
+    assert request.interstitial_pools[0].weight == 45
+
+
+def test_parse_interstitial_pool_spec():
+    pool = core.parse_interstitial_pool_spec("Station IDs|station-id|20")
+    assert pool == {"playlist": "Station IDs", "type": "station-id", "weight": 20}
