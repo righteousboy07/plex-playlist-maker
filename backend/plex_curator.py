@@ -425,6 +425,9 @@ def tags_join(values):
 def is_watched(item):
     return (getattr(item, "viewCount", 0) or 0) > 0
 
+def has_partial_progress(item):
+    return not is_watched(item) and (getattr(item, "viewOffset", 0) or 0) > 0
+
 def runtime_minutes(item):
     d = getattr(item, "duration", None)
     return d / 60000 if d else None
@@ -668,6 +671,11 @@ def export_record(item, library):
         "added_at": safe_date(getattr(item, "addedAt", None)),
         "last_viewed_at": safe_date(getattr(item, "lastViewedAt", None)),
         "view_count": getattr(item, "viewCount", None) or 0,
+        "view_offset_ms": getattr(item, "viewOffset", None) or 0,
+        "progress_percent": (
+            round(((getattr(item, "viewOffset", 0) or 0) / duration) * 100, 1)
+            if duration else None
+        ),
         "watched": is_watched(item),
         "genres": tags_join(getattr(item, "genres", [])),
         "collections": tags_join(getattr(item, "collections", [])),
@@ -1020,20 +1028,24 @@ def ordered_episodes(show, unwatched=False):
     return eps
 
 def plex_watch_next_index(episodes):
-    watched = []
+    playback = []
     for idx, ep in enumerate(episodes):
+        last = parse_dt(getattr(ep, "lastViewedAt", None))
         if is_watched(ep):
-            last = parse_dt(getattr(ep, "lastViewedAt", None))
-            watched.append((idx, last))
-    if not watched:
+            playback.append(((idx + 1) % len(episodes), idx, last, "complete"))
+        elif has_partial_progress(ep):
+            playback.append((idx, idx, last, "partial"))
+
+    if not playback:
         return None, None
-    with_dates = [(idx, dt) for idx, dt in watched if dt is not None]
+
+    with_dates = [row for row in playback if row[2] is not None]
     if with_dates:
-        idx, latest = max(with_dates, key=lambda x: x[1])
+        next_idx, _source_idx, latest, _state = max(with_dates, key=lambda row: row[2])
     else:
-        idx = max(i for i, _ in watched)
+        next_idx, _source_idx, _latest, _state = max(playback, key=lambda row: row[1])
         latest = None
-    return (idx + 1) % len(episodes), latest
+    return next_idx, latest
 
 def choose_start_index(channel_name, show, episodes, sync_watch_progress=True):
     cursor_idx, cursor_updated = get_cursor(channel_name, show)

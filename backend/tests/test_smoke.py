@@ -385,3 +385,46 @@ def test_interleave_tracks_next_index_per_consumed_episode():
 
     assert items == [ep1]
     assert cursor_steps == {"ep-1": (show, 2)}
+
+
+def test_partial_watch_progress_resumes_same_episode():
+    older = core.datetime(2026, 10, 14, 10, 0, tzinfo=core.timezone.utc)
+    newer = core.datetime(2026, 10, 14, 11, 0, tzinfo=core.timezone.utc)
+
+    episodes = [
+        SimpleNamespace(viewCount=1, viewOffset=0, lastViewedAt=older),
+        SimpleNamespace(viewCount=0, viewOffset=300000, lastViewedAt=newer),
+        SimpleNamespace(viewCount=0, viewOffset=0, lastViewedAt=None),
+    ]
+
+    idx, updated = core.plex_watch_next_index(episodes)
+
+    assert idx == 1
+    assert updated == newer
+
+
+def test_completed_watch_advances_to_next_episode():
+    viewed = core.datetime(2026, 10, 14, 11, 0, tzinfo=core.timezone.utc)
+    episodes = [
+        SimpleNamespace(viewCount=0, viewOffset=0, lastViewedAt=None),
+        SimpleNamespace(viewCount=1, viewOffset=0, lastViewedAt=viewed),
+        SimpleNamespace(viewCount=0, viewOffset=0, lastViewedAt=None),
+    ]
+
+    idx, updated = core.plex_watch_next_index(episodes)
+
+    assert idx == 2
+    assert updated == viewed
+
+
+def test_partial_progress_without_timestamp_is_still_used():
+    episodes = [
+        SimpleNamespace(viewCount=0, viewOffset=0, lastViewedAt=None),
+        SimpleNamespace(viewCount=0, viewOffset=120000, lastViewedAt=None),
+        SimpleNamespace(viewCount=0, viewOffset=0, lastViewedAt=None),
+    ]
+
+    idx, updated = core.plex_watch_next_index(episodes)
+
+    assert idx == 1
+    assert updated is None

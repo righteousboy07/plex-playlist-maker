@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Plex watch synchronization now resumes partially watched episodes using `viewOffset` instead of treating only completed episodes as progress.
 - Scoped episode cursors by channel/station so independent playlists no longer move each other's show position.
 - Cursor advancement now reflects only episodes that remain in the final playlist after interleaving, seasonal inserts, and truncation.
 
