@@ -1799,11 +1799,17 @@ struct MediaOrganizerView: View {
                     .foregroundColor(.secondary)
                 }
             } else {
-                ContentUnavailableView(
-                    "Choose a Media Folder",
-                    systemImage: "folder",
-                    description: Text("Curator will inspect supported videos and propose organized Station IDs, Bumpers, Commercials, Promos, and General folders.")
-                )
+                VStack(spacing: 12) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 42))
+                        .foregroundColor(.secondary)
+                    Text("Choose a Media Folder")
+                        .font(.title2.bold())
+                    Text("Curator will inspect supported videos and propose organized Station IDs, Bumpers, Commercials, Promos, and General folders.")
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 520)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
