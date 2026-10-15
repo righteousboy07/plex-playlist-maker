@@ -1893,6 +1893,46 @@ def json_file_check(path, expected_type=dict):
         return ("FAIL", f"expected {expected_type.__name__}, got {type(data).__name__}")
     return ("PASS", f"{len(data)} entries")
 
+
+def repair_trailing_json_junk(path, expected_type=dict):
+    """Repair a valid JSON document followed only by known harmless trailing junk.
+
+    This intentionally refuses to discard a second JSON object or arbitrary content.
+    It is primarily a migration repair for older Plex Curator builds that could append
+    a literal backslash-n after stations.json.
+    """
+    if not path.exists():
+        return (False, "file does not exist")
+
+    raw = path.read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    else:
+        if isinstance(data, expected_type):
+            return (False, "already valid")
+        return (False, f"expected {expected_type.__name__}, got {type(data).__name__}")
+
+    stripped = raw.lstrip()
+    decoder = json.JSONDecoder()
+    try:
+        data, end = decoder.raw_decode(stripped)
+    except json.JSONDecodeError as exc:
+        return (False, f"could not recover first JSON document: {exc}")
+
+    if not isinstance(data, expected_type):
+        return (False, f"expected {expected_type.__name__}, got {type(data).__name__}")
+
+    trailing = stripped[end:].strip()
+    if trailing not in {"\\n", "\\r\\n"}:
+        return (False, f"refusing to discard unexpected trailing data: {trailing[:80]!r}")
+
+    backup = path.with_name(path.name + ".pre-repair")
+    shutil.copy2(path, backup)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return (True, f"removed legacy trailing data; backup: {backup}")
+
 def sqlite_integrity_check(path):
     if not path.exists():
         return ("WARN", "state database does not exist yet")
@@ -1988,6 +2028,12 @@ def cmd_doctor(args):
             report("PASS", "Safe repair", "default config/state files initialized")
         except Exception as exc:
             report("FAIL", "Safe repair", str(exc))
+
+        repaired, detail = repair_trailing_json_junk(STATIONS_FILE)
+        if repaired:
+            report("PASS", "Stations JSON repair", detail)
+        elif detail not in {"already valid", "file does not exist"}:
+            report("WARN", "Stations JSON repair", detail)
 
     for path, label in [
         (PRESETS_FILE, "Movie presets JSON"),
