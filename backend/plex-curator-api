@@ -11,10 +11,13 @@ APP_DIR = Path(__file__).resolve().parent
 VENV_PYTHON = APP_DIR / ".venv" / "bin" / "python"
 
 if VENV_PYTHON.exists():
-    current = Path(sys.executable).resolve()
-    target = VENV_PYTHON.resolve()
-    if current != target:
-        os.execv(str(target), [str(target), str(Path(__file__).resolve()), *sys.argv[1:]])
+    venv_dir = (APP_DIR / ".venv").resolve()
+    current_prefix = Path(sys.prefix).resolve()
+    if current_prefix != venv_dir:
+        os.execv(
+            str(VENV_PYTHON),
+            [str(VENV_PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]],
+        )
 import urllib.error
 import urllib.request
 
