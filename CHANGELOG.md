@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Added a local interstitial media organizer that scans video folders, cleans names from embedded metadata or filenames, classifies clips, previews changes, and safely moves/renames approved-confidence files.
 - macOS Station Editor now supports interstitial pool types and relative weights, including live approximate mix percentages.
 - Interstitial sources can now be typed and weighted, allowing station IDs, bumpers, commercials, promos, and general clips to appear in configurable proportions.
 - macOS Station Editor can now select Plex video playlists as interstitial pools and configure break frequency and clips per break.
