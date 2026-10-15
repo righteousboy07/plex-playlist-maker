@@ -428,3 +428,61 @@ def test_partial_progress_without_timestamp_is_still_used():
 
     assert idx == 1
     assert updated is None
+
+
+def test_station_interstitial_defaults_and_normalization():
+    cfg = core.normalize_station("demo", {
+        "preset": "all-cartoons",
+        "interstitial_playlists": [" Retro Kids Bumpers ", "", "Vintage Commercials"],
+        "interstitial_every": 3,
+        "interstitial_count": 2,
+    })
+
+    assert cfg["interstitial_playlists"] == ["Retro Kids Bumpers", "Vintage Commercials"]
+    assert cfg["interstitial_every"] == 3
+    assert cfg["interstitial_count"] == 2
+
+
+def test_inject_interstitials_keeps_program_order():
+    programs = [
+        SimpleNamespace(ratingKey=f"ep-{i}", title=f"Episode {i}")
+        for i in range(1, 6)
+    ]
+    clips = [
+        SimpleNamespace(ratingKey="ad-1", title="Ad 1"),
+        SimpleNamespace(ratingKey="ad-2", title="Ad 2"),
+    ]
+
+    result = core.inject_interstitials(programs, clips, every=2, count=1)
+
+    assert [item.ratingKey for item in result] == [
+        "ep-1", "ep-2", "ad-1", "ep-3", "ep-4", "ad-2", "ep-5"
+    ]
+
+
+def test_collect_interstitial_items_filters_recent_and_duplicates():
+    ad1 = SimpleNamespace(ratingKey="ad-1", title="Ad 1", type="movie")
+    ad2 = SimpleNamespace(ratingKey="ad-2", title="Ad 2", type="movie")
+    playlist_a = SimpleNamespace(title="Ads", items=lambda: [ad1, ad2])
+    playlist_b = SimpleNamespace(title="Bumpers", items=lambda: [ad2])
+    plex = SimpleNamespace(playlists=lambda: [playlist_a, playlist_b])
+
+    result = core.collect_interstitial_items(
+        plex,
+        ["Ads", "Bumpers"],
+        recent_keys={"ad-1"},
+    )
+
+    assert [item.ratingKey for item in result] == ["ad-2"]
+
+
+def test_station_update_request_accepts_interstitial_settings():
+    request = api.StationUpdateRequest(
+        interstitial_playlists=["Retro Kids Bumpers", "Vintage Commercials"],
+        interstitial_every=3,
+        interstitial_count=2,
+    )
+
+    assert request.interstitial_every == 3
+    assert request.interstitial_count == 2
+    assert request.interstitial_playlists == ["Retro Kids Bumpers", "Vintage Commercials"]

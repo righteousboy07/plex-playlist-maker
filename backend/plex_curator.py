@@ -1183,9 +1183,63 @@ def inject_specials(items, specials, every, min_show_gap):
             out.append(candidate)
     return out
 
+def collect_interstitial_items(plex, playlist_names, recent_keys=None, exclude_keys=None):
+    playlist_names = playlist_names or []
+    recent_keys = set(recent_keys or ())
+    exclude_keys = set(exclude_keys or ())
+    pool = []
+    seen = set()
+    missing = []
+
+    for playlist_name in playlist_names:
+        playlist = find_playlist(plex, playlist_name)
+        if not playlist:
+            missing.append(playlist_name)
+            continue
+        for item in playlist.items():
+            item_type = (getattr(item, "type", "") or "").casefold()
+            if item_type in {"track", "album", "artist"}:
+                continue
+            key = str(getattr(item, "ratingKey", "") or "")
+            if not key or key in recent_keys or key in exclude_keys or key in seen:
+                continue
+            seen.add(key)
+            pool.append(item)
+
+    if missing:
+        raise SystemExit(
+            "Interstitial Plex playlist(s) not found: " + ", ".join(sorted(missing))
+        )
+
+    random.shuffle(pool)
+    return pool
+
+def inject_interstitials(items, interstitials, every, count=1):
+    if not interstitials or every <= 0 or count <= 0:
+        return list(items)
+
+    out = []
+    pool = deque(interstitials)
+    since_break = 0
+
+    for item in items:
+        out.append(item)
+        since_break += 1
+        if since_break < every:
+            continue
+
+        for _ in range(count):
+            if not pool:
+                break
+            out.append(pool.popleft())
+        since_break = 0
+
+    return out
+
 def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, avoid_recent,
                   sync_watch_progress, min_show_gap, seasonal, special_every, adult=False,
-                  profile_overrides=None):
+                  profile_overrides=None, interstitial_playlists=None,
+                  interstitial_every=0, interstitial_count=1):
     if preset_name not in CHANNEL_PRESETS:
         raise SystemExit(f"Unknown channel preset: {preset_name}")
     cfg = dict(CHANNEL_PRESETS[preset_name])
@@ -1214,7 +1268,28 @@ def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, a
     mode = seasonal_mode(seasonal)
     base_keys = {str(getattr(ep, "ratingKey", "")) for ep in base_items}
     specials = collect_seasonal_specials(shows, mode, recent | base_keys)
-    items = inject_specials(base_items, specials, special_every, min_show_gap)[:total]
+    items = inject_specials(base_items, specials, special_every, min_show_gap)
+
+    if interstitial_playlists and interstitial_every > 0:
+        program_keys = {
+            str(getattr(item, "ratingKey", ""))
+            for item in items
+            if getattr(item, "ratingKey", None)
+        }
+        interstitials = collect_interstitial_items(
+            plex,
+            interstitial_playlists,
+            recent_keys=recent,
+            exclude_keys=program_keys,
+        )
+        items = inject_interstitials(
+            items,
+            interstitials,
+            interstitial_every,
+            interstitial_count,
+        )
+
+    items = items[:total]
     cursor_updates = cursor_updates_for_items(channel_name, items, cursor_steps)
     return items, shows, mode, cursor_updates
 
@@ -1434,7 +1509,10 @@ def cmd_history(args):
     rows = cur.fetchall()
     con.close()
     for ts, show, s, e, title, channel in rows:
-        print(f"{ts} [{channel}] {show} S{s:02}E{e:02} — {title}")
+        if show:
+            print(f"{ts} [{channel}] {show} S{s:02}E{e:02} — {title}")
+        else:
+            print(f"{ts} [{channel}] {title}")
 
 def cmd_build_history(args):
     ensure_config()
@@ -1500,6 +1578,9 @@ STATION_UPDATE_FIELDS = {
     "min_show_gap": int,
     "seasonal": str,
     "special_every": int,
+    "interstitial_every": int,
+    "interstitial_count": int,
+    "interstitial_playlists": list,
 }
 
 def load_stations():
@@ -1541,6 +1622,13 @@ def normalize_station(station_id, cfg):
         "min_show_gap": int(cfg.get("min_show_gap", 2)),
         "seasonal": cfg.get("seasonal", "auto"),
         "special_every": int(cfg.get("special_every", 8)),
+        "interstitial_playlists": [
+            str(name).strip()
+            for name in (cfg.get("interstitial_playlists", []) or [])
+            if str(name).strip()
+        ],
+        "interstitial_every": int(cfg.get("interstitial_every", 0) or 0),
+        "interstitial_count": int(cfg.get("interstitial_count", 1) or 1),
         "unwatched": bool(cfg.get("unwatched", False)),
         "sync_watch_progress": bool(cfg.get("sync_watch_progress", True)),
         "include_shows": list(cfg.get("include_shows", [])),
@@ -1555,6 +1643,10 @@ def normalize_station(station_id, cfg):
         raise SystemExit(f'Station "{station_id}" has year_min greater than year_max.')
     if out["per_show"] < 1 or out["total"] < 1:
         raise SystemExit(f'Station "{station_id}" requires positive per_show and total values.')
+    if out["interstitial_every"] < 0:
+        raise SystemExit(f'Station "{station_id}" requires interstitial_every >= 0.')
+    if out["interstitial_count"] < 1:
+        raise SystemExit(f'Station "{station_id}" requires interstitial_count >= 1.')
     return out
 
 def cmd_station_list(_args):
@@ -1593,6 +1685,9 @@ def station_build_items(plex, station_id, cfg, total_override=None):
         special_every=cfg["special_every"],
         adult=cfg["adult"],
         profile_overrides=cfg,
+        interstitial_playlists=cfg["interstitial_playlists"],
+        interstitial_every=cfg["interstitial_every"],
+        interstitial_count=cfg["interstitial_count"],
     )
 
 def print_station_lineup(station_id, cfg, items, shows, mode):
@@ -1602,11 +1697,15 @@ def print_station_lineup(station_id, cfg, items, shows, mode):
     print(f'Shows:    {len(shows)}')
     print(f'Seasonal: {mode}')
     print()
-    for i, ep in enumerate(items, 1):
-        print(
-            f"{i:>3}. {getattr(ep,'grandparentTitle','')} — "
-            f"S{getattr(ep,'parentIndex',0):02}E{getattr(ep,'index',0):02} — {ep.title}"
-        )
+    for i, item in enumerate(items, 1):
+        if getattr(item, "type", "") == "episode":
+            print(
+                f"{i:>3}. {getattr(item,'grandparentTitle','')} — "
+                f"S{getattr(item,'parentIndex',0):02}E{getattr(item,'index',0):02} — {item.title}"
+            )
+        else:
+            media_type = getattr(item, "type", None) or "video"
+            print(f"{i:>3}. {item.title} [{media_type}]")
 
 def cmd_station_preview(args):
     stations = load_stations()
@@ -1701,6 +1800,9 @@ def cmd_station_create(args):
         "min_show_gap": args.min_show_gap,
         "seasonal": args.seasonal,
         "special_every": args.special_every,
+        "interstitial_playlists": args.interstitial_playlist or [],
+        "interstitial_every": args.interstitial_every,
+        "interstitial_count": args.interstitial_count,
         "unwatched": args.unwatched,
         "sync_watch_progress": not args.ignore_watch_progress,
         "include_shows": args.include_show or [],
@@ -1732,6 +1834,8 @@ def cmd_station_update(args):
         "min_show_gap": args.min_show_gap,
         "seasonal": args.seasonal,
         "special_every": args.special_every,
+        "interstitial_every": args.interstitial_every,
+        "interstitial_count": args.interstitial_count,
     }
     for key, val in updates.items():
         if val is not None:
@@ -1758,6 +1862,10 @@ def cmd_station_update(args):
         cfg["exclude_shows"] = args.exclude_show
     if args.genre is not None:
         cfg["genres_any"] = args.genre
+    if args.clear_interstitials:
+        cfg["interstitial_playlists"] = []
+    elif args.interstitial_playlist is not None:
+        cfg["interstitial_playlists"] = args.interstitial_playlist
 
     cfg = normalize_station(args.station_id, cfg)
     stations[args.station_id] = cfg
@@ -2265,6 +2373,9 @@ def build_parser():
     p.add_argument("--min-show-gap", type=int, default=2)
     p.add_argument("--seasonal", choices=["auto", "none", "halloween", "christmas"], default="auto")
     p.add_argument("--special-every", type=int, default=8)
+    p.add_argument("--interstitial-playlist", action="append", help="Plex video playlist used as an interstitial pool; repeat for multiple pools.")
+    p.add_argument("--interstitial-every", type=int, default=0, help="Insert an interstitial break after this many program items; 0 disables.")
+    p.add_argument("--interstitial-count", type=int, default=1, help="Number of clips inserted at each break.")
     p.add_argument("--unwatched", action="store_true")
     p.add_argument("--ignore-watch-progress", action="store_true")
     p.add_argument("--create", action="store_true"); p.add_argument("--replace", action="store_true"); p.add_argument("--dry-run", action="store_true")
@@ -2355,6 +2466,10 @@ def build_parser():
     p.add_argument("--min-show-gap", type=int)
     p.add_argument("--seasonal", choices=["auto","none","halloween","christmas"])
     p.add_argument("--special-every", type=int)
+    p.add_argument("--interstitial-playlist", action="append", help="Replace the station interstitial playlist list; repeat for multiple pools.")
+    p.add_argument("--clear-interstitials", action="store_true")
+    p.add_argument("--interstitial-every", type=int)
+    p.add_argument("--interstitial-count", type=int)
     p.add_argument("--unwatched", action="store_true", default=None)
     p.add_argument("--allow-watched", action="store_true", default=None)
     p.add_argument("--ignore-watch-progress", action="store_true", default=None)
