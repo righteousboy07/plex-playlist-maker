@@ -93,22 +93,20 @@ if [[ -d "$TARGET" ]]; then
   fi
 fi
 
-ADMIN=()
+NEED_SUDO=0
 PARENT="$(dirname "$TARGET")"
 if [[ -e "$TARGET" ]]; then
-  [[ -w "$TARGET" ]] || ADMIN=(sudo)
+  [[ -w "$TARGET" ]] || NEED_SUDO=1
 else
-  [[ -w "$PARENT" ]] || ADMIN=(sudo)
+  [[ -w "$PARENT" ]] || NEED_SUDO=1
 fi
 
-if [[ "${#ADMIN[@]}" -gt 0 ]]; then
+if [[ "$NEED_SUDO" -eq 1 ]]; then
   echo "Administrator permission is required to update $TARGET"
-fi
-
-"${ADMIN[@]}" mkdir -p "$TARGET"
-
-if [[ "${#ADMIN[@]}" -gt 0 ]]; then
-  "${ADMIN[@]}" chown -R "$(id -un):$(id -gn)" "$TARGET"
+  sudo mkdir -p "$TARGET"
+  sudo chown -R "$(id -un):$(id -gn)" "$TARGET"
+else
+  mkdir -p "$TARGET"
 fi
 
 echo
