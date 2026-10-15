@@ -325,3 +325,11 @@ def test_repair_trailing_json_junk_refuses_second_document(tmp_path):
     assert repaired is False
     assert "refusing to discard unexpected trailing data" in detail
     assert stations_file.read_text(encoding="utf-8") == '{"a":1}{"b":2}'
+
+
+def test_api_wrapper_uses_sys_prefix_for_venv_detection():
+    from pathlib import Path
+
+    wrapper = (Path(__file__).resolve().parents[1] / "plex-curator-api").read_text(encoding="utf-8")
+    assert "current_prefix = Path(sys.prefix).resolve()" in wrapper
+    assert "current = Path(sys.executable).resolve()" not in wrapper
