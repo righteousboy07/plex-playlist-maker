@@ -84,12 +84,20 @@ jobs:
           sha256sum *.tar.gz *.zip > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Publish GitHub Release
+      - name: Publish or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            release/* \
-            --verify-tag \
-            --generate-notes \
-            --title "Plex Curator $GITHUB_REF_NAME"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              release/* \
+              --verify-tag \
+              --generate-notes \
+              --title "Plex Curator $GITHUB_REF_NAME"
+          fi
+
+          gh release edit "$GITHUB_REF_NAME" \
+            --prerelease=false \
+            --latest
