@@ -59,3 +59,29 @@ The station update API accepts the same settings:
   "interstitial_count": 1
 }
 ```
+
+
+## Typed and weighted pools
+
+For more realistic programming, each interstitial source can have a type and weight. Supported types are:
+
+- `station-id`
+- `bumper`
+- `commercial`
+- `promo`
+- `general`
+
+Weights are relative rather than percentages, so `20 / 35 / 45` behaves like 20%, 35%, and 45% when those are the only active pools.
+
+CLI example:
+
+```bash
+./plex-curator station-update retro-kids \
+  --interstitial-pool "Station IDs|station-id|20" \
+  --interstitial-pool "Retro Kids Bumpers|bumper|35" \
+  --interstitial-pool "Vintage Commercials|commercial|45" \
+  --interstitial-every 3 \
+  --interstitial-count 1
+```
+
+Existing `interstitial_playlists` configurations remain supported and are treated as `general` pools with weight `1`.
