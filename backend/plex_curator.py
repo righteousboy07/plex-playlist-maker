@@ -1985,8 +1985,20 @@ def cmd_doctor(args):
     except Exception as exc:
         report("FAIL", "python-dotenv", str(exc))
 
+    for module_name, label in [
+        ("requests", "requests"),
+        ("fastapi", "FastAPI"),
+        ("uvicorn", "Uvicorn"),
+    ]:
+        try:
+            module = __import__(module_name)
+            report("PASS", label, getattr(module, "__version__", "installed"))
+        except Exception as exc:
+            report("FAIL", label, str(exc))
+
     for path, label in [
         (APP_DIR / "plex-curator", "CLI wrapper"),
+        (APP_DIR / "plex-curator-api", "API wrapper"),
         (APP_DIR / "plex_curator.py", "Core program"),
         (APP_DIR / "launchd-manager.py", "launchd manager"),
     ]:
