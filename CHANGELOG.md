@@ -6,6 +6,13 @@ This project uses milestone tags for major Plex Curator releases.
 
 No unreleased changes yet.
 
+## v13.2.1 — 2026-10-15
+
+- Fixed macOS Bash 3.2 installer failure caused by empty-array expansion under `set -u`.
+- Reworked optional sudo handling to avoid the same Bash 3.2 failure path.
+- Added macOS system-Bash regression coverage for installer argument handling.
+- Removed duplicate tagged-release workflow and made release publishing idempotent.
+
 ## v13.2.0 — 2026-10-14
 
 ### Schedules
