@@ -6,6 +6,12 @@ This project uses milestone tags for major Plex Curator releases.
 
 No unreleased changes yet.
 
+## v13.2.2 — 2026-10-15
+
+- Fixed macOS API wrapper virtualenv detection so `plex-curator-api` reliably re-execs into the application `.venv`.
+- Added Doctor checks for `requests`, FastAPI, Uvicorn, and the API wrapper.
+- Improved detection of incomplete API runtime environments before launchd startup.
+
 ## v13.2.1 — 2026-10-15
 
 - Fixed macOS Bash 3.2 installer failure caused by empty-array expansion under `set -u`.
