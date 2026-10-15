@@ -74,6 +74,11 @@ class ScheduleOptionsRequest(BaseModel):
 class ScheduleBuildRequest(ScheduleOptionsRequest):
     replace: bool = True
 
+class InterstitialPoolRequest(BaseModel):
+    playlist: str = Field(min_length=1, max_length=120)
+    type: str = Field(default="general")
+    weight: int = Field(default=1, ge=1, le=1000)
+
 class StationUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
     description: Optional[str] = Field(default=None, max_length=500)
@@ -91,6 +96,7 @@ class StationUpdateRequest(BaseModel):
     seasonal: Optional[str] = None
     special_every: Optional[int] = Field(default=None, ge=1, le=1000)
     interstitial_playlists: Optional[list[str]] = None
+    interstitial_pools: Optional[list[InterstitialPoolRequest]] = None
     interstitial_every: Optional[int] = Field(default=None, ge=0, le=1000)
     interstitial_count: Optional[int] = Field(default=None, ge=1, le=20)
     unwatched: Optional[bool] = None
@@ -167,6 +173,16 @@ def update_station_config(station_id: str, changes: dict):
 
     current = core.normalize_station(station_id, stations[station_id])
     merged = {**current, **changes}
+    if "interstitial_playlists" in changes and "interstitial_pools" not in changes:
+        merged["interstitial_pools"] = [
+            {"playlist": name, "type": "general", "weight": 1}
+            for name in (changes.get("interstitial_playlists") or [])
+        ]
+    if "interstitial_pools" in changes:
+        merged["interstitial_pools"] = [
+            pool.model_dump() if hasattr(pool, "model_dump") else pool
+            for pool in (changes.get("interstitial_pools") or [])
+        ]
 
     if merged.get("preset") not in core.CHANNEL_PRESETS:
         raise HTTPException(status_code=422, detail=f'Unknown station preset "{merged.get("preset")}".')
