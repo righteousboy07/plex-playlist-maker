@@ -302,3 +302,26 @@ def test_schedule_options_match_cli_defaults():
     assert options["special_every"] == 8
     assert options["unwatched"] is False
     assert options["sync_watch_progress"] is True
+
+
+def test_repair_trailing_json_junk_removes_legacy_literal_newline(tmp_path):
+    stations_file = tmp_path / "stations.json"
+    stations_file.write_text('{"retro-kids":{"enabled":true}}\\n', encoding="utf-8")
+
+    repaired, detail = core.repair_trailing_json_junk(stations_file)
+
+    assert repaired is True
+    assert "removed legacy trailing data" in detail
+    assert core.json_file_check(stations_file)[0] == "PASS"
+    assert (tmp_path / "stations.json.pre-repair").exists()
+
+
+def test_repair_trailing_json_junk_refuses_second_document(tmp_path):
+    stations_file = tmp_path / "stations.json"
+    stations_file.write_text('{"a":1}{"b":2}', encoding="utf-8")
+
+    repaired, detail = core.repair_trailing_json_junk(stations_file)
+
+    assert repaired is False
+    assert "refusing to discard unexpected trailing data" in detail
+    assert stations_file.read_text(encoding="utf-8") == '{"a":1}{"b":2}'
