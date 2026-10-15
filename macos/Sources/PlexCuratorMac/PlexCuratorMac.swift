@@ -26,6 +26,13 @@ struct StatusResponse: Codable {
     let enabledStationCount: Int
 }
 
+struct InterstitialPool: Codable, Hashable, Identifiable {
+    var id: String { playlist }
+    let playlist: String
+    let type: String
+    let weight: Int
+}
+
 struct Station: Codable, Identifiable, Hashable {
     let id: String
     let name: String
@@ -44,6 +51,7 @@ struct Station: Codable, Identifiable, Hashable {
     let seasonal: String
     let specialEvery: Int
     let interstitialPlaylists: [String]
+    let interstitialPools: [InterstitialPool]
     let interstitialEvery: Int
     let interstitialCount: Int
     let unwatched: Bool
@@ -352,6 +360,7 @@ struct StationUpdateRequest: Encodable {
     let seasonal: String
     let specialEvery: Int
     let interstitialPlaylists: [String]
+    let interstitialPools: [InterstitialPool]
     let interstitialEvery: Int
     let interstitialCount: Int
     let unwatched: Bool
@@ -363,7 +372,7 @@ struct StationUpdateRequest: Encodable {
         case name, description, enabled, playlist, preset
         case yearMin, yearMax, kidsOnly, adult, perShow, total
         case avoidRecent, minShowGap, seasonal, specialEvery
-        case interstitialPlaylists, interstitialEvery, interstitialCount
+        case interstitialPlaylists, interstitialPools, interstitialEvery, interstitialCount
         case unwatched, syncWatchProgress, includeShows, excludeShows
     }
 
@@ -385,6 +394,7 @@ struct StationUpdateRequest: Encodable {
         try c.encode(seasonal, forKey: .seasonal)
         try c.encode(specialEvery, forKey: .specialEvery)
         try c.encode(interstitialPlaylists, forKey: .interstitialPlaylists)
+        try c.encode(interstitialPools, forKey: .interstitialPools)
         try c.encode(interstitialEvery, forKey: .interstitialEvery)
         try c.encode(interstitialCount, forKey: .interstitialCount)
         try c.encode(unwatched, forKey: .unwatched)
@@ -1163,6 +1173,8 @@ struct StationEditorView: View {
     @State private var seasonal: String
     @State private var specialEvery: Int
     @State private var interstitialPlaylists: Set<String>
+    @State private var interstitialTypes: [String: String]
+    @State private var interstitialWeights: [String: Int]
     @State private var interstitialEvery: Int
     @State private var interstitialCount: Int
     @State private var unwatched: Bool
@@ -1189,7 +1201,22 @@ struct StationEditorView: View {
         _minShowGap = State(initialValue: station.minShowGap)
         _seasonal = State(initialValue: station.seasonal)
         _specialEvery = State(initialValue: station.specialEvery)
-        _interstitialPlaylists = State(initialValue: Set(station.interstitialPlaylists))
+        let savedPools = station.interstitialPools.isEmpty
+            ? station.interstitialPlaylists.map {
+                InterstitialPool(playlist: $0, type: "general", weight: 1)
+            }
+            : station.interstitialPools
+        _interstitialPlaylists = State(initialValue: Set(savedPools.map(\.playlist)))
+        _interstitialTypes = State(
+            initialValue: Dictionary(
+                uniqueKeysWithValues: savedPools.map { ($0.playlist, $0.type) }
+            )
+        )
+        _interstitialWeights = State(
+            initialValue: Dictionary(
+                uniqueKeysWithValues: savedPools.map { ($0.playlist, $0.weight) }
+            )
+        )
         _interstitialEvery = State(initialValue: station.interstitialEvery)
         _interstitialCount = State(initialValue: station.interstitialCount)
         _unwatched = State(initialValue: station.unwatched)
@@ -1209,6 +1236,54 @@ struct StationEditorView: View {
         return interstitialPlaylists
             .filter { !available.contains($0) }
             .sorted()
+    }
+
+    private let interstitialTypeOptions: [(String, String)] = [
+        ("general", "General"),
+        ("station-id", "Station ID"),
+        ("bumper", "Bumper"),
+        ("commercial", "Commercial"),
+        ("promo", "Promo")
+    ]
+
+    private var totalInterstitialWeight: Int {
+        interstitialPlaylists.reduce(0) {
+            $0 + max(1, interstitialWeights[$1] ?? 1)
+        }
+    }
+
+    private func interstitialTypeBinding(_ title: String) -> Binding<String> {
+        Binding(
+            get: { interstitialTypes[title] ?? "general" },
+            set: { interstitialTypes[title] = $0 }
+        )
+    }
+
+    private func interstitialWeightBinding(_ title: String) -> Binding<Int> {
+        Binding(
+            get: { max(1, interstitialWeights[title] ?? 1) },
+            set: { interstitialWeights[title] = max(1, $0) }
+        )
+    }
+
+    private func selectInterstitial(_ title: String, selected: Bool) {
+        if selected {
+            interstitialPlaylists.insert(title)
+            if interstitialTypes[title] == nil {
+                interstitialTypes[title] = "general"
+            }
+            if interstitialWeights[title] == nil {
+                interstitialWeights[title] = 1
+            }
+        } else {
+            interstitialPlaylists.remove(title)
+        }
+    }
+
+    private func mixPercent(_ title: String) -> Int {
+        guard totalInterstitialWeight > 0 else { return 0 }
+        let weight = max(1, interstitialWeights[title] ?? 1)
+        return Int((Double(weight) / Double(totalInterstitialWeight) * 100.0).rounded())
     }
 
     var body: some View {
@@ -1258,7 +1333,7 @@ struct StationEditorView: View {
                 }
 
                 Section("Interstitials") {
-                    Text("Choose Plex video playlists containing bumpers, station IDs, promos, or commercials.")
+                    Text("Choose Plex video playlists, then assign each pool a type and relative weight.")
                         .font(.caption)
                         .foregroundColor(.secondary)
 
@@ -1273,36 +1348,64 @@ struct StationEditorView: View {
                             .foregroundColor(.secondary)
                     } else {
                         ForEach(videoPlaylists) { plexPlaylist in
-                            Toggle(
-                                "\(plexPlaylist.title)\(plexPlaylist.itemCount.map { " (\($0))" } ?? "")",
-                                isOn: Binding(
-                                    get: { interstitialPlaylists.contains(plexPlaylist.title) },
-                                    set: { selected in
-                                        if selected {
-                                            interstitialPlaylists.insert(plexPlaylist.title)
-                                        } else {
-                                            interstitialPlaylists.remove(plexPlaylist.title)
-                                        }
-                                    }
+                            VStack(alignment: .leading, spacing: 8) {
+                                Toggle(
+                                    "\(plexPlaylist.title)\(plexPlaylist.itemCount.map { " (\($0))" } ?? "")",
+                                    isOn: Binding(
+                                        get: { interstitialPlaylists.contains(plexPlaylist.title) },
+                                        set: { selectInterstitial(plexPlaylist.title, selected: $0) }
+                                    )
                                 )
-                            )
+
+                                if interstitialPlaylists.contains(plexPlaylist.title) {
+                                    HStack {
+                                        Picker("Type", selection: interstitialTypeBinding(plexPlaylist.title)) {
+                                            ForEach(interstitialTypeOptions, id: \.0) { option in
+                                                Text(option.1).tag(option.0)
+                                            }
+                                        }
+                                        .frame(maxWidth: 220)
+
+                                        Stepper(
+                                            "Weight: \(interstitialWeights[plexPlaylist.title] ?? 1) (~\(mixPercent(plexPlaylist.title))%)",
+                                            value: interstitialWeightBinding(plexPlaylist.title),
+                                            in: 1...1000
+                                        )
+                                    }
+                                    .padding(.leading, 18)
+                                }
+                            }
                         }
 
                         ForEach(configuredButMissingPlaylists, id: \.self) { title in
-                            Toggle(
-                                "\(title) (not currently found in Plex)",
-                                isOn: Binding(
-                                    get: { interstitialPlaylists.contains(title) },
-                                    set: { selected in
-                                        if selected {
-                                            interstitialPlaylists.insert(title)
-                                        } else {
-                                            interstitialPlaylists.remove(title)
-                                        }
-                                    }
+                            VStack(alignment: .leading, spacing: 8) {
+                                Toggle(
+                                    "\(title) (not currently found in Plex)",
+                                    isOn: Binding(
+                                        get: { interstitialPlaylists.contains(title) },
+                                        set: { selectInterstitial(title, selected: $0) }
+                                    )
                                 )
-                            )
-                            .foregroundColor(.secondary)
+                                .foregroundColor(.secondary)
+
+                                if interstitialPlaylists.contains(title) {
+                                    HStack {
+                                        Picker("Type", selection: interstitialTypeBinding(title)) {
+                                            ForEach(interstitialTypeOptions, id: \.0) { option in
+                                                Text(option.1).tag(option.0)
+                                            }
+                                        }
+                                        .frame(maxWidth: 220)
+
+                                        Stepper(
+                                            "Weight: \(interstitialWeights[title] ?? 1) (~\(mixPercent(title))%)",
+                                            value: interstitialWeightBinding(title),
+                                            in: 1...1000
+                                        )
+                                    }
+                                    .padding(.leading, 18)
+                                }
+                            }
                         }
                     }
 
@@ -1325,7 +1428,11 @@ struct StationEditorView: View {
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else if interstitialEvery == 0 {
-                        Text("Interstitial pools are selected, but insertion is disabled until break frequency is above 0.")
+                        Text("Pools are configured, but insertion is disabled until break frequency is above 0.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("Weights are relative. For example 20 / 35 / 45 behaves like 20% / 35% / 45%.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -1420,6 +1527,13 @@ struct StationEditorView: View {
             seasonal: seasonal,
             specialEvery: specialEvery,
             interstitialPlaylists: interstitialPlaylists.sorted(),
+            interstitialPools: interstitialPlaylists.sorted().map {
+                InterstitialPool(
+                    playlist: $0,
+                    type: interstitialTypes[$0] ?? "general",
+                    weight: max(1, interstitialWeights[$0] ?? 1)
+                )
+            },
             interstitialEvery: interstitialEvery,
             interstitialCount: interstitialCount,
             unwatched: unwatched,
