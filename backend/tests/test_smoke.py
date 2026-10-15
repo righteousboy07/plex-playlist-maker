@@ -333,3 +333,55 @@ def test_api_wrapper_uses_sys_prefix_for_venv_detection():
     wrapper = (Path(__file__).resolve().parents[1] / "plex-curator-api").read_text(encoding="utf-8")
     assert "current_prefix = Path(sys.prefix).resolve()" in wrapper
     assert "current = Path(sys.executable).resolve()" not in wrapper
+
+
+def test_channel_scoped_cursors_are_independent(tmp_path, monkeypatch):
+    state_db = tmp_path / "state.sqlite3"
+    config_dir = tmp_path / "config"
+    monkeypatch.setattr(core, "STATE_DB", state_db)
+    monkeypatch.setattr(core, "CONFIG_DIR", config_dir)
+
+    core.init_db()
+    show = SimpleNamespace(ratingKey="show-1", title="Example Show")
+
+    core.set_cursor("station:80s", show, 4)
+    core.set_cursor("station:90s", show, 9)
+
+    assert core.get_cursor("station:80s", show)[0] == 4
+    assert core.get_cursor("station:90s", show)[0] == 9
+
+
+def test_cursor_updates_only_include_final_consumed_items():
+    show = SimpleNamespace(ratingKey="show-1", title="Example Show")
+    ep1 = SimpleNamespace(ratingKey="ep-1", title="One")
+    ep2 = SimpleNamespace(ratingKey="ep-2", title="Two")
+    special = SimpleNamespace(ratingKey="special-1", title="Special")
+
+    cursor_steps = {
+        "ep-1": (show, 3),
+        "ep-2": (show, 7),
+    }
+
+    updates = core.cursor_updates_for_items(
+        "station:retro-kids",
+        [ep1, special],
+        cursor_steps,
+    )
+
+    assert updates["show-1"][0] == "station:retro-kids"
+    assert updates["show-1"][2] == 3
+
+
+def test_interleave_tracks_next_index_per_consumed_episode():
+    show = SimpleNamespace(ratingKey="show-1", title="Example Show")
+    ep1 = SimpleNamespace(ratingKey="ep-1", title="One")
+    ep2 = SimpleNamespace(ratingKey="ep-2", title="Two")
+
+    items, cursor_steps = core.interleave_show_queues(
+        [(show, core.deque([(ep1, 2), (ep2, 5)]), "curator")],
+        total=1,
+        min_show_gap=0,
+    )
+
+    assert items == [ep1]
+    assert cursor_steps == {"ep-1": (show, 2)}

@@ -306,6 +306,43 @@ def init_db():
             item_count INTEGER
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS channel_show_cursor (
+            channel_name TEXT NOT NULL,
+            show_rating_key TEXT NOT NULL,
+            show_title TEXT,
+            next_episode_index INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT,
+            PRIMARY KEY(channel_name, show_rating_key)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_channel_show_cursor_channel
+        ON channel_show_cursor(channel_name)
+    """)
+    # Seed channel-scoped cursors from the legacy global cursor table once.
+    cur.execute("SELECT COUNT(*) FROM channel_show_cursor")
+    if cur.fetchone()[0] == 0:
+        cur.execute("""
+            SELECT DISTINCT channel_name
+            FROM (
+                SELECT channel_name FROM episode_play_history
+                UNION
+                SELECT channel_name FROM build_history
+            )
+            WHERE channel_name IS NOT NULL AND channel_name != ''
+        """)
+        legacy_channels = [row[0] for row in cur.fetchall()]
+        for channel_name in legacy_channels:
+            cur.execute("""
+                INSERT OR IGNORE INTO channel_show_cursor(
+                    channel_name, show_rating_key, show_title,
+                    next_episode_index, updated_at
+                )
+                SELECT ?, show_rating_key, show_title,
+                       next_episode_index, updated_at
+                FROM show_cursor
+            """, (channel_name,))
     # Migrate the simple v8 history once if it exists.
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='episode_history'")
     if cur.fetchone():
@@ -911,30 +948,37 @@ def get_recent_keys(channel_name, limit):
     con.close()
     return rows
 
-def get_cursor(show):
+def get_cursor(channel_name, show):
     key = str(getattr(show, "ratingKey", show.title))
     con = sqlite3.connect(STATE_DB)
     cur = con.cursor()
-    cur.execute("SELECT next_episode_index, updated_at FROM show_cursor WHERE show_rating_key=?", (key,))
+    cur.execute("""
+        SELECT next_episode_index, updated_at
+        FROM channel_show_cursor
+        WHERE channel_name=? AND show_rating_key=?
+    """, (channel_name, key))
     row = cur.fetchone()
     con.close()
     if not row:
         return 0, None
     return row[0], parse_dt(row[1])
 
-def set_cursor(show, idx):
+def set_cursor(channel_name, show, idx):
     key = str(getattr(show, "ratingKey", show.title))
     now = datetime.now(timezone.utc).isoformat()
     con = sqlite3.connect(STATE_DB)
     cur = con.cursor()
     cur.execute("""
-        INSERT INTO show_cursor(show_rating_key, show_title, next_episode_index, updated_at)
-        VALUES(?,?,?,?)
-        ON CONFLICT(show_rating_key) DO UPDATE SET
+        INSERT INTO channel_show_cursor(
+            channel_name, show_rating_key, show_title,
+            next_episode_index, updated_at
+        )
+        VALUES(?,?,?,?,?)
+        ON CONFLICT(channel_name, show_rating_key) DO UPDATE SET
             show_title=excluded.show_title,
             next_episode_index=excluded.next_episode_index,
             updated_at=excluded.updated_at
-    """, (key, show.title, idx, now))
+    """, (channel_name, key, show.title, idx, now))
     con.commit()
     con.close()
 
@@ -991,8 +1035,8 @@ def plex_watch_next_index(episodes):
         latest = None
     return (idx + 1) % len(episodes), latest
 
-def choose_start_index(show, episodes, sync_watch_progress=True):
-    cursor_idx, cursor_updated = get_cursor(show)
+def choose_start_index(channel_name, show, episodes, sync_watch_progress=True):
+    cursor_idx, cursor_updated = get_cursor(channel_name, show)
     if not sync_watch_progress or not episodes:
         return cursor_idx % max(len(episodes), 1), "curator"
     watch_idx, watch_updated = plex_watch_next_index(episodes)
@@ -1036,68 +1080,80 @@ def collect_seasonal_specials(shows, mode, recent_keys):
     random.shuffle(specials)
     return specials
 
-def choose_episode_queue(show, count, recent_keys, unwatched, sync_watch_progress):
+def choose_episode_queue(channel_name, show, count, recent_keys, unwatched, sync_watch_progress):
     eps = ordered_episodes(show, unwatched=unwatched)
     if not eps:
-        return [], 0, "none"
-    start, source = choose_start_index(show, eps, sync_watch_progress)
+        return [], "none"
+    start, source = choose_start_index(channel_name, show, eps, sync_watch_progress)
     chosen = []
+    chosen_keys = set()
     idx = start
     scanned = 0
     while len(chosen) < count and scanned < len(eps) * 2:
         ep = eps[idx % len(eps)]
         key = str(getattr(ep, "ratingKey", ""))
-        if key not in recent_keys and key not in {str(getattr(x, "ratingKey", "")) for x in chosen}:
-            chosen.append(ep)
         idx = (idx + 1) % len(eps)
+        if key not in recent_keys and key not in chosen_keys:
+            chosen.append((ep, idx))
+            chosen_keys.add(key)
         scanned += 1
     if len(chosen) < count:
         idx = start
         scanned = 0
-        existing = {str(getattr(x, "ratingKey", "")) for x in chosen}
         while len(chosen) < count and scanned < len(eps):
             ep = eps[idx % len(eps)]
             key = str(getattr(ep, "ratingKey", ""))
-            if key not in existing:
-                chosen.append(ep)
-                existing.add(key)
             idx = (idx + 1) % len(eps)
+            if key not in chosen_keys:
+                chosen.append((ep, idx))
+                chosen_keys.add(key)
             scanned += 1
-    return chosen, idx, source
+    return chosen, source
 
 def interleave_show_queues(queues, total, min_show_gap):
     result = []
-    cursor_updates = {}
+    cursor_steps = {}
     recent_shows = deque(maxlen=max(0, min_show_gap))
     queues = list(queues)
 
     while queues and len(result) < total:
         picked_index = None
-        for i, (show, q, next_idx, source) in enumerate(queues):
+        for i, (show, q, source) in enumerate(queues):
             if q and show.title not in recent_shows:
                 picked_index = i
                 break
         if picked_index is None:
-            for i, (_show, q, _idx, _source) in enumerate(queues):
+            for i, (_show, q, _source) in enumerate(queues):
                 if q:
                     picked_index = i
                     break
         if picked_index is None:
             break
 
-        show, q, next_idx, source = queues.pop(picked_index)
-        ep = q.popleft()
+        show, q, source = queues.pop(picked_index)
+        ep, next_idx = q.popleft()
         result.append(ep)
         recent_shows.append(show.title)
-        cursor_updates[str(getattr(show, "ratingKey", show.title))] = (show, next_idx)
+        cursor_steps[str(getattr(ep, "ratingKey", ""))] = (show, next_idx)
         if q:
-            queues.append((show, q, next_idx, source))
+            queues.append((show, q, source))
 
-    return result, cursor_updates
+    return result, cursor_steps
+
+def cursor_updates_for_items(channel_name, items, cursor_steps):
+    updates = {}
+    for ep in items:
+        step = cursor_steps.get(str(getattr(ep, "ratingKey", "")))
+        if not step:
+            continue
+        show, next_idx = step
+        show_key = str(getattr(show, "ratingKey", show.title))
+        updates[show_key] = (channel_name, show, next_idx)
+    return updates
 
 def apply_cursor_updates(cursor_updates):
-    for _key, (show, next_idx) in cursor_updates.items():
-        set_cursor(show, next_idx)
+    for _key, (channel_name, show, next_idx) in cursor_updates.items():
+        set_cursor(channel_name, show, next_idx)
 
 def inject_specials(items, specials, every, min_show_gap):
     if not specials or every <= 0:
@@ -1137,16 +1193,18 @@ def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, a
     recent = get_recent_keys(channel_name, avoid_recent)
     queues = []
     for show in shows:
-        chosen, next_idx, source = choose_episode_queue(
-            show, per_show, recent, unwatched, sync_watch_progress
+        chosen, source = choose_episode_queue(
+            channel_name, show, per_show, recent, unwatched, sync_watch_progress
         )
         if chosen:
-            queues.append((show, deque(chosen), next_idx, source))
-    items, cursor_updates = interleave_show_queues(queues, total, min_show_gap)
+            queues.append((show, deque(chosen), source))
+    base_items, cursor_steps = interleave_show_queues(queues, total, min_show_gap)
     mode = seasonal_mode(seasonal)
-    specials = collect_seasonal_specials(shows, mode, recent)
-    items = inject_specials(items, specials, special_every, min_show_gap)
-    return items[:total], shows, mode, cursor_updates
+    base_keys = {str(getattr(ep, "ratingKey", "")) for ep in base_items}
+    specials = collect_seasonal_specials(shows, mode, recent | base_keys)
+    items = inject_specials(base_items, specials, special_every, min_show_gap)[:total]
+    cursor_updates = cursor_updates_for_items(channel_name, items, cursor_steps)
+    return items, shows, mode, cursor_updates
 
 def cmd_channel(args):
     plex = connect()
@@ -1384,7 +1442,7 @@ def cmd_state_info(_args):
     con = sqlite3.connect(STATE_DB)
     cur = con.cursor()
     print(f"State DB: {STATE_DB}")
-    for table in ("episode_play_history", "show_cursor", "build_history"):
+    for table in ("episode_play_history", "show_cursor", "channel_show_cursor", "build_history"):
         cur.execute(f"SELECT COUNT(*) FROM {table}")
         print(f"{table:22} {cur.fetchone()[0]}")
     con.close()
@@ -1398,12 +1456,15 @@ def cmd_state_reset(args):
     con = sqlite3.connect(STATE_DB)
     cur = con.cursor()
     if args.channel:
-        cur.execute("DELETE FROM episode_play_history WHERE channel_name LIKE ?", (f"%{args.channel}%",))
-        cur.execute("DELETE FROM build_history WHERE channel_name LIKE ?", (f"%{args.channel}%",))
-        print(f"Cleared history for: {args.channel}")
+        pattern = f"%{args.channel}%"
+        cur.execute("DELETE FROM episode_play_history WHERE channel_name LIKE ?", (pattern,))
+        cur.execute("DELETE FROM channel_show_cursor WHERE channel_name LIKE ?", (pattern,))
+        cur.execute("DELETE FROM build_history WHERE channel_name LIKE ?", (pattern,))
+        print(f"Cleared history and cursor state for: {args.channel}")
     else:
         cur.execute("DELETE FROM episode_play_history")
         cur.execute("DELETE FROM show_cursor")
+        cur.execute("DELETE FROM channel_show_cursor")
         cur.execute("DELETE FROM build_history")
         print("Cleared all Plex Curator state.")
     con.commit()
