@@ -90,6 +90,9 @@ class StationUpdateRequest(BaseModel):
     min_show_gap: Optional[int] = Field(default=None, ge=0, le=100)
     seasonal: Optional[str] = None
     special_every: Optional[int] = Field(default=None, ge=1, le=1000)
+    interstitial_playlists: Optional[list[str]] = None
+    interstitial_every: Optional[int] = Field(default=None, ge=0, le=1000)
+    interstitial_count: Optional[int] = Field(default=None, ge=1, le=20)
     unwatched: Optional[bool] = None
     sync_watch_progress: Optional[bool] = None
     include_shows: Optional[list[str]] = None
