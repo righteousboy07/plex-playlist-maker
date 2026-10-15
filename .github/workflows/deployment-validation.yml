@@ -41,3 +41,42 @@ jobs:
 
       - name: Combined deployment dry run
         run: bash scripts/install-all.sh --dry-run --no-open
+
+  macos-bash32:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm system Bash
+        run: /bin/bash --version
+
+      - name: Shell syntax with system Bash
+        run: |
+          /bin/bash -n scripts/install-all.sh
+          /bin/bash -n scripts/install-backend.sh
+          /bin/bash -n scripts/install-macos-app.sh
+
+      - name: Exercise combined installer argument handling
+        run: |
+          TEST_ROOT="$RUNNER_TEMP/plex-installer-test"
+          mkdir -p "$TEST_ROOT/scripts"
+          cp scripts/install-all.sh "$TEST_ROOT/scripts/install-all.sh"
+
+          cat > "$TEST_ROOT/scripts/install-backend.sh" <<'EOF'
+          #!/bin/bash
+          set -eu
+          printf 'backend:%s\n' "$*"
+          EOF
+
+          cat > "$TEST_ROOT/scripts/install-macos-app.sh" <<'EOF'
+          #!/bin/bash
+          set -eu
+          printf 'macos:%s\n' "$*"
+          EOF
+
+          chmod +x "$TEST_ROOT/scripts/"*.sh
+
+          /bin/bash "$TEST_ROOT/scripts/install-all.sh"
+          /bin/bash "$TEST_ROOT/scripts/install-all.sh" --dry-run
+          /bin/bash "$TEST_ROOT/scripts/install-all.sh" --no-open
+          /bin/bash "$TEST_ROOT/scripts/install-all.sh" --dry-run --no-open
