@@ -6,6 +6,11 @@ This project uses milestone tags for major Plex Curator releases.
 
 No unreleased changes yet.
 
+## v13.2.3 — 2026-10-15
+
+- Re-published the API runtime hotfix from the correct release-prep commit so backend and macOS embedded versions match the release tag.
+- Includes the macOS API virtualenv handoff fix and expanded Doctor dependency checks.
+
 ## v13.2.2 — 2026-10-15
 
 - Fixed macOS API wrapper virtualenv detection so `plex-curator-api` reliably re-execs into the application `.venv`.
