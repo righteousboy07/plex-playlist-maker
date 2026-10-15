@@ -41,6 +41,14 @@ class RefreshAllRequest(BaseModel):
     dry_run: bool = False
     include_disabled: bool = False
 
+class MediaOrganizerRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+    destination: Optional[str] = Field(default=None, max_length=4096)
+    recursive: bool = True
+
+class MediaOrganizerApplyRequest(MediaOrganizerRequest):
+    include_low_confidence: bool = False
+
 class BackupRequest(BaseModel):
     reason: str = Field(default="api", min_length=1, max_length=80)
 
@@ -663,6 +671,36 @@ def station_refresh_all(
         "dry_run": request.dry_run,
         "results": results,
     }
+
+@app.post("/api/v1/media-organizer/scan")
+def media_organizer_scan(request: MediaOrganizerRequest):
+    try:
+        plan = core.plan_media_organization(
+            request.path,
+            destination=request.destination,
+            recursive=request.recursive,
+        )
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {**plan, "read_only": True}
+
+@app.post("/api/v1/media-organizer/apply")
+def media_organizer_apply(
+    request: MediaOrganizerApplyRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        plan = core.plan_media_organization(
+            request.path,
+            destination=request.destination,
+            recursive=request.recursive,
+        )
+        return core.apply_media_organization(
+            plan,
+            include_low_confidence=request.include_low_confidence,
+        )
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 @app.get("/api/v1/automation")
 def automation_jobs():
