@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import Foundation
 import UserNotifications
 
@@ -339,6 +340,47 @@ struct AutomationActionResponse: Codable {
     let job: AutomationJob
 }
 
+struct MediaOrganizerRequest: Encodable {
+    let path: String
+    let destination: String?
+    let recursive: Bool
+}
+
+struct MediaOrganizerApplyRequest: Encodable {
+    let path: String
+    let destination: String?
+    let recursive: Bool
+    let includeLowConfidence: Bool
+}
+
+struct MediaOrganizerItem: Codable, Identifiable, Hashable {
+    var id: String { source }
+    let source: String
+    let target: String
+    let originalName: String
+    let proposedName: String
+    let title: String
+    let type: String
+    let folder: String
+    let confidence: String
+    let titleSource: String
+    let metadataTitle: String?
+    let action: String
+}
+
+struct MediaOrganizerResponse: Codable {
+    let root: String
+    let destination: String
+    let recursive: Bool
+    let count: Int
+    let reviewCount: Int
+    let items: [MediaOrganizerItem]
+    let appliedCount: Int?
+    let skippedCount: Int?
+    let errorCount: Int?
+    let manifest: String?
+}
+
 struct APIErrorResponse: Codable { let detail: String }
 struct PreviewRequest: Codable { let total: Int? }
 struct RefreshRequest: Codable { let total: Int?; let dryRun: Bool; let force: Bool }
@@ -625,6 +667,47 @@ final class APIClient {
         try await request("/api/v1/wishlist/kids-scary")
     }
 
+    func scanMediaOrganizer(
+        path: String,
+        destination: String?,
+        recursive: Bool
+    ) async throws -> MediaOrganizerResponse {
+        let body = try encoder.encode(
+            MediaOrganizerRequest(
+                path: path,
+                destination: destination,
+                recursive: recursive
+            )
+        )
+        return try await request(
+            "/api/v1/media-organizer/scan",
+            method: "POST",
+            body: body
+        )
+    }
+
+    func applyMediaOrganizer(
+        path: String,
+        destination: String?,
+        recursive: Bool,
+        includeLowConfidence: Bool
+    ) async throws -> MediaOrganizerResponse {
+        let body = try encoder.encode(
+            MediaOrganizerApplyRequest(
+                path: path,
+                destination: destination,
+                recursive: recursive,
+                includeLowConfidence: includeLowConfidence
+            )
+        )
+        return try await request(
+            "/api/v1/media-organizer/apply",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+    }
+
     func history() async throws -> [HistoryItem] {
         let r: HistoryResponse = try await request("/api/v1/history?limit=150")
         return r.history
@@ -702,6 +785,7 @@ final class AppModel: ObservableObject {
     @Published var automationJobs: [AutomationJob] = []
     @Published var playlists: [PlaylistSummary] = []
     @Published var schedules: [ScheduleSummary] = []
+    @Published var mediaOrganizer: MediaOrganizerResponse?
     @Published var error: String?
     @Published var message: String?
     @Published var loading = false
@@ -793,6 +877,52 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func scanMediaOrganizer(
+        path: String,
+        destination: String?,
+        recursive: Bool
+    ) async {
+        loading = true
+        defer { loading = false }
+        do {
+            mediaOrganizer = try await api.scanMediaOrganizer(
+                path: path,
+                destination: destination,
+                recursive: recursive
+            )
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func applyMediaOrganizer(
+        path: String,
+        destination: String?,
+        recursive: Bool,
+        includeLowConfidence: Bool
+    ) async -> Bool {
+        loading = true
+        defer { loading = false }
+        do {
+            let result = try await api.applyMediaOrganizer(
+                path: path,
+                destination: destination,
+                recursive: recursive,
+                includeLowConfidence: includeLowConfidence
+            )
+            mediaOrganizer = result
+            let moved = result.appliedCount ?? 0
+            let skipped = result.skippedCount ?? 0
+            message = "Media Organizer moved \(moved) file\(moved == 1 ? "" : "s"); skipped \(skipped)."
+            error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
     func loadHistory() async {
         do { history = try await api.history(); error = nil }
         catch { self.error = error.localizedDescription }
@@ -861,6 +991,7 @@ struct RootView: View {
                     NavigationLink(destination: StationsView()) { Label("Stations", systemImage: "tv") }
                     NavigationLink(destination: SchedulesView()) { Label("Schedules", systemImage: "calendar") }
                     NavigationLink(destination: PlaylistsView()) { Label("Playlists", systemImage: "rectangle.stack") }
+                    NavigationLink(destination: MediaOrganizerView()) { Label("Media Organizer", systemImage: "folder.badge.gearshape") }
                     NavigationLink(destination: MovieCuratorView()) { Label("Movie Curator", systemImage: "film.stack") }
                     NavigationLink(destination: KidsScaryWishlistView()) { Label("Kids Scary Wishlist", systemImage: "checklist") }
                     NavigationLink(destination: HistoryView()) { Label("History", systemImage: "clock.arrow.circlepath") }
@@ -1548,6 +1679,261 @@ struct StationEditorView: View {
                 dismiss()
             }
         }
+    }
+}
+
+struct MediaOrganizerView: View {
+    @EnvironmentObject var model: AppModel
+
+    @State private var sourcePath = ""
+    @State private var destinationPath = ""
+    @State private var recursive = true
+    @State private var includeLowConfidence = false
+    @State private var confirmApply = false
+
+    private var plan: MediaOrganizerResponse? { model.mediaOrganizer }
+
+    private var actionableCount: Int {
+        plan?.items.filter {
+            $0.action != "unchanged" &&
+            (includeLowConfidence || $0.confidence != "low")
+        }.count ?? 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Media Organizer")
+                        .font(.largeTitle.bold())
+                    Text("Scan interstitial video folders, preview clean names and categories, then safely organize the files.")
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+
+            GroupBox("Folders") {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        TextField("Source folder", text: $sourcePath)
+                        Button("Browse…") { chooseFolder { sourcePath = $0 } }
+                    }
+
+                    HStack {
+                        TextField("Destination folder (optional)", text: $destinationPath)
+                        Button("Browse…") { chooseFolder { destinationPath = $0 } }
+                        Button("Use Source") { destinationPath = "" }
+                    }
+
+                    Toggle("Scan subfolders recursively", isOn: $recursive)
+
+                    HStack {
+                        Button {
+                            Task { await scan() }
+                        } label: {
+                            Label("Scan / Preview", systemImage: "magnifyingglass")
+                        }
+                        .disabled(sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.loading)
+
+                        if model.loading {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+
+                        Spacer()
+
+                        Text("Preview-only until Apply is confirmed.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(4)
+            }
+
+            if let plan {
+                HStack(spacing: 12) {
+                    organizerMetric("Videos", plan.count)
+                    organizerMetric("Needs Review", plan.reviewCount)
+                    organizerMetric("Will Change", actionableCount)
+                    Spacer()
+                    Text(plan.destination)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                GroupBox("Proposed Changes") {
+                    if plan.items.isEmpty {
+                        Text("No supported video files were found.")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 160)
+                    } else {
+                        List(plan.items) { item in
+                            MediaOrganizerRow(item: item)
+                        }
+                        .frame(minHeight: 320)
+                    }
+                }
+
+                HStack {
+                    Toggle("Include low-confidence filename guesses", isOn: $includeLowConfidence)
+                        .help("Low-confidence files look like generic names such as video_0047.mp4 and are skipped by default.")
+
+                    Spacer()
+
+                    Button(role: .destructive) {
+                        confirmApply = true
+                    } label: {
+                        Label("Apply \(actionableCount) Changes", systemImage: "folder.badge.plus")
+                    }
+                    .disabled(actionableCount == 0 || model.loading)
+                }
+
+                if plan.reviewCount > 0 && !includeLowConfidence {
+                    Label(
+                        "\(plan.reviewCount) low-confidence file\(plan.reviewCount == 1 ? "" : "s") will remain untouched for review.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+            } else {
+                ContentUnavailableView(
+                    "Choose a Media Folder",
+                    systemImage: "folder",
+                    description: Text("Curator will inspect supported videos and propose organized Station IDs, Bumpers, Commercials, Promos, and General folders.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding()
+        .navigationTitle("Media Organizer")
+        .alert("Apply file organization?", isPresented: $confirmApply) {
+            Button("Cancel", role: .cancel) {}
+            Button("Move & Rename", role: .destructive) {
+                Task {
+                    let ok = await model.applyMediaOrganizer(
+                        path: sourcePath,
+                        destination: normalizedDestination,
+                        recursive: recursive,
+                        includeLowConfidence: includeLowConfidence
+                    )
+                    if ok {
+                        await scan()
+                    }
+                }
+            }
+        } message: {
+            Text(
+                "Curator will move and rename \(actionableCount) file\(actionableCount == 1 ? "" : "s"). Existing files are never overwritten, and a JSON manifest is saved for the operation."
+            )
+        }
+    }
+
+    private var normalizedDestination: String? {
+        let trimmed = destinationPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func scan() async {
+        await model.scanMediaOrganizer(
+            path: sourcePath.trimmingCharacters(in: .whitespacesAndNewlines),
+            destination: normalizedDestination,
+            recursive: recursive
+        )
+    }
+
+    private func chooseFolder(_ completion: (String) -> Void) {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Media Folder"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            completion(url.path)
+        }
+    }
+
+    private func organizerMetric(_ label: String, _ value: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(.title2.bold())
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct MediaOrganizerRow: View {
+    let item: MediaOrganizerItem
+
+    private var confidenceSymbol: String {
+        switch item.confidence {
+        case "high": return "checkmark.seal.fill"
+        case "medium": return "checkmark.circle"
+        default: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var confidenceText: String {
+        item.confidence.capitalized
+    }
+
+    private var typeText: String {
+        switch item.type {
+        case "station-id": return "Station ID"
+        case "bumper": return "Bumper"
+        case "commercial": return "Commercial"
+        case "promo": return "Promo"
+        default: return "General"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: confidenceSymbol)
+                .frame(width: 22)
+                .foregroundColor(item.confidence == "low" ? .orange : .secondary)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(item.originalName)
+                    .font(.headline)
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    Text("→")
+                        .foregroundColor(.secondary)
+                    Text("\(item.folder)/\(item.proposedName)")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.callout)
+
+                HStack(spacing: 12) {
+                    Label(typeText, systemImage: "tag")
+                    Label(confidenceText, systemImage: "waveform.path.ecg")
+                    Text("Name from \(item.titleSource)")
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            if item.action == "unchanged" {
+                Text("Already organized")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.vertical, 5)
     }
 }
 
