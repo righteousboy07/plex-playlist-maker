@@ -6,7 +6,9 @@ import csv
 import json
 import os
 import random
+import re
 import shutil
+import subprocess
 import sqlite3
 import sys
 from collections import Counter
@@ -31,6 +33,23 @@ EXPORT_DIR = CONFIG_DIR / "exports"
 BACKUP_DIR = CONFIG_DIR / "backups"
 LOG_DIR = HOME / "Library" / "Logs" / "PlexCurator"
 APP_VERSION = "13.2.3"
+
+VIDEO_EXTENSIONS = {
+    ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".mpg", ".mpeg", ".ts"
+}
+INTERSTITIAL_TYPE_FOLDERS = {
+    "station-id": "Station IDs",
+    "bumper": "Bumpers",
+    "commercial": "Commercials",
+    "promo": "Promos",
+    "general": "General",
+}
+MEDIA_NOISE_TOKENS = {
+    "1080p", "720p", "480p", "2160p", "4k", "uhd", "hdr", "x264", "x265",
+    "h264", "h265", "hevc", "av1", "aac", "ac3", "webdl", "web-dl", "webrip",
+    "bluray", "blu-ray", "dvdrip", "remux", "proper", "repack", "yt", "youtube",
+}
+
 
 DEFAULT_MOVIE_PRESETS = {
     "kids-scary": {
@@ -477,6 +496,327 @@ def parse_title_spec(spec):
         return left.strip(), int(right.strip())
     except ValueError:
         return spec.strip(), None
+
+
+# ---------------------------------------------------------------------------
+# Local interstitial media organizer
+# ---------------------------------------------------------------------------
+
+def media_title_is_generic(value):
+    text = (value or "").strip().casefold()
+    if not text:
+        return True
+    generic_patterns = [
+        r"^(video|clip|movie|recording|screen[-_ ]?recording|download)[-_ ]?\d*$",
+        r"^[a-z]{0,4}\d{3,}$",
+        r"^\d{4,}$",
+    ]
+    return any(re.match(pattern, text) for pattern in generic_patterns)
+
+def clean_media_title(value):
+    text = Path(str(value or "")).stem
+    text = re.sub(r"[._]+", " ", text)
+    text = re.sub(r"\s*[-–—]\s*", " - ", text)
+    text = re.sub(r"[\[\(](?:[^\]\)]*(?:1080|720|480|2160|4k|x264|x265|h264|h265|hevc|web.?dl|webrip|bluray|dvdrip)[^\]\)]*)[\]\)]", " ", text, flags=re.I)
+
+    parts = []
+    for part in re.split(r"\s+", text.strip()):
+        token = re.sub(r"[^a-z0-9-]", "", part.casefold())
+        if token in MEDIA_NOISE_TOKENS:
+            continue
+        parts.append(part)
+
+    text = " ".join(parts)
+    text = re.sub(r"\s+", " ", text).strip(" -_.")
+    if not text:
+        return "Untitled Clip"
+
+    # Preserve all-caps abbreviations while making machine-like lowercase names readable.
+    if text == text.lower() or "_" in str(value) or "." in str(value):
+        words = []
+        for word in text.split():
+            words.append(word.upper() if len(word) <= 4 and word.isupper() else word.capitalize())
+        text = " ".join(words)
+    return text
+
+def sanitize_media_filename(title):
+    title = re.sub(r'[/:*?"<>|\\]+', " - ", str(title or ""))
+    title = re.sub(r"\s+", " ", title).strip(" .-")
+    return title or "Untitled Clip"
+
+def probe_video_metadata(path):
+    path = Path(path)
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe:
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe, "-v", "quiet", "-print_format", "json",
+                    "-show_entries", "format_tags=title,comment,description",
+                    str(path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                payload = json.loads(result.stdout)
+                tags_data = (payload.get("format") or {}).get("tags") or {}
+                return {
+                    "title": tags_data.get("title") or tags_data.get("TITLE"),
+                    "comment": tags_data.get("comment") or tags_data.get("COMMENT"),
+                    "description": tags_data.get("description") or tags_data.get("DESCRIPTION"),
+                    "source": "ffprobe",
+                }
+        except Exception:
+            pass
+
+    mdls = shutil.which("mdls")
+    if mdls:
+        try:
+            result = subprocess.run(
+                [mdls, "-raw", "-name", "kMDItemTitle", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            title = result.stdout.strip().strip('"') if result.returncode == 0 else ""
+            if title and title != "(null)" and title != path.name:
+                return {"title": title, "comment": None, "description": None, "source": "mdls"}
+        except Exception:
+            pass
+
+    return {"title": None, "comment": None, "description": None, "source": None}
+
+def infer_interstitial_type(path, metadata=None):
+    metadata = metadata or {}
+    haystack = " ".join([
+        str(Path(path).parent.name),
+        str(Path(path).stem),
+        str(metadata.get("title") or ""),
+        str(metadata.get("comment") or ""),
+        str(metadata.get("description") or ""),
+    ]).casefold()
+
+    rules = [
+        ("station-id", [
+            "station id", "station-id", "channel id", "network id", "ident",
+            "network ident", "station ident", "logo ident",
+        ]),
+        ("bumper", [
+            "bumper", "bump", "up next", "we'll be right back", "well be right back",
+            "be right back", "back to", "coming up",
+        ]),
+        ("commercial", [
+            "commercial", "advertisement", "advert", "tv ad", "tv spot", " ad ",
+            "sponsor", "sponsored",
+        ]),
+        ("promo", [
+            "promo", "promotion", "trailer", "teaser", "preview",
+        ]),
+    ]
+    for media_type, keywords in rules:
+        if any(keyword in f" {haystack} " for keyword in keywords):
+            return media_type
+    return "general"
+
+def infer_media_identity(path):
+    path = Path(path)
+    metadata = probe_video_metadata(path)
+    metadata_title = clean_media_title(metadata.get("title")) if metadata.get("title") else None
+    filename_title = clean_media_title(path.stem)
+
+    if metadata_title and not media_title_is_generic(metadata_title):
+        title = metadata_title
+        confidence = "high"
+        title_source = metadata.get("source") or "metadata"
+    elif not media_title_is_generic(filename_title):
+        title = filename_title
+        confidence = "medium"
+        title_source = "filename"
+    else:
+        title = filename_title
+        confidence = "low"
+        title_source = "filename"
+
+    media_type = infer_interstitial_type(path, metadata)
+    return {
+        "title": sanitize_media_filename(title),
+        "type": media_type,
+        "confidence": confidence,
+        "title_source": title_source,
+        "metadata_title": metadata.get("title"),
+    }
+
+def iter_video_files(root, recursive=True):
+    root = Path(root).expanduser()
+    iterator = root.rglob("*") if recursive else root.glob("*")
+    return sorted(
+        path for path in iterator
+        if path.is_file() and path.suffix.casefold() in VIDEO_EXTENSIONS
+    )
+
+def unique_media_target(target, reserved):
+    target = Path(target)
+    candidate = target
+    counter = 2
+    while str(candidate).casefold() in reserved or candidate.exists():
+        candidate = target.with_name(f"{target.stem} ({counter}){target.suffix}")
+        counter += 1
+    reserved.add(str(candidate).casefold())
+    return candidate
+
+def plan_media_organization(root, destination=None, recursive=True):
+    root = Path(root).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise SystemExit(f"Media organizer source folder not found: {root}")
+
+    destination_root = Path(destination).expanduser().resolve() if destination else root
+    plans = []
+    reserved = set()
+
+    for source in iter_video_files(root, recursive=recursive):
+        identity = infer_media_identity(source)
+        folder_name = INTERSTITIAL_TYPE_FOLDERS[identity["type"]]
+        target_dir = destination_root / folder_name
+        base_target = target_dir / f'{identity["title"]}{source.suffix.casefold()}'
+
+        if source.resolve() == base_target.resolve():
+            target = base_target
+            action = "unchanged"
+        else:
+            target = unique_media_target(base_target, reserved)
+            action = "move"
+
+        plans.append({
+            "source": str(source),
+            "target": str(target),
+            "original_name": source.name,
+            "proposed_name": target.name,
+            "title": identity["title"],
+            "type": identity["type"],
+            "folder": folder_name,
+            "confidence": identity["confidence"],
+            "title_source": identity["title_source"],
+            "metadata_title": identity["metadata_title"],
+            "action": action,
+        })
+
+    return {
+        "root": str(root),
+        "destination": str(destination_root),
+        "recursive": bool(recursive),
+        "count": len(plans),
+        "review_count": sum(1 for item in plans if item["confidence"] == "low"),
+        "items": plans,
+    }
+
+def write_media_organizer_manifest(plan, applied=False):
+    ensure_config()
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    suffix = "applied" if applied else "preview"
+    path = EXPORT_DIR / f"media-organizer-{stamp}-{suffix}.json"
+    payload = {
+        **plan,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "applied": bool(applied),
+    }
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+def apply_media_organization(plan, include_low_confidence=False):
+    applied = []
+    skipped = []
+    errors = []
+
+    for item in plan.get("items", []):
+        source = Path(item["source"])
+        target = Path(item["target"])
+
+        if item.get("action") == "unchanged":
+            skipped.append({**item, "reason": "already-organized"})
+            continue
+        if item.get("confidence") == "low" and not include_low_confidence:
+            skipped.append({**item, "reason": "low-confidence"})
+            continue
+        if not source.exists():
+            errors.append({**item, "error": "source-missing"})
+            continue
+        if target.exists():
+            errors.append({**item, "error": "target-exists"})
+            continue
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(source), str(target))
+            applied.append(item)
+        except Exception as exc:
+            errors.append({**item, "error": str(exc)})
+
+    result = {
+        **plan,
+        "applied_count": len(applied),
+        "skipped_count": len(skipped),
+        "error_count": len(errors),
+        "applied_items": applied,
+        "skipped_items": skipped,
+        "errors": errors,
+    }
+    manifest = write_media_organizer_manifest(result, applied=True)
+    result["manifest"] = str(manifest)
+    return result
+
+def print_media_organizer_plan(plan):
+    print(f'Source:      {plan["root"]}')
+    print(f'Destination: {plan["destination"]}')
+    print(f'Videos:      {plan["count"]}')
+    print(f'Needs review:{plan["review_count"]:>3}')
+    print()
+    for item in plan["items"]:
+        marker = "REVIEW" if item["confidence"] == "low" else item["confidence"].upper()
+        print(
+            f'[{marker:6}] {item["original_name"]} -> '
+            f'{item["folder"]}/{item["proposed_name"]}'
+        )
+
+def cmd_media_organize(args):
+    plan = plan_media_organization(
+        args.path,
+        destination=args.destination,
+        recursive=not args.no_recursive,
+    )
+    if args.json:
+        print(json.dumps(plan, indent=2, ensure_ascii=False))
+    else:
+        print_media_organizer_plan(plan)
+
+    preview_manifest = write_media_organizer_manifest(plan, applied=False)
+    if not args.json:
+        print()
+        print(f"Preview manifest: {preview_manifest}")
+
+    if not args.apply:
+        if not args.json:
+            print("DRY RUN: no files were moved or renamed.")
+        return
+
+    result = apply_media_organization(
+        plan,
+        include_low_confidence=args.include_low_confidence,
+    )
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print()
+        print(f'Applied: {result["applied_count"]}')
+        print(f'Skipped: {result["skipped_count"]}')
+        print(f'Errors:  {result["error_count"]}')
+        print(f'Manifest: {result["manifest"]}')
+    if result["error_count"]:
+        raise SystemExit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -2639,6 +2979,15 @@ def build_parser():
     p = sp.add_parser("backup-list", help="List recent Plex Curator backups.")
     p.add_argument("--limit", type=int, default=20)
     p.set_defaults(func=cmd_backup_list)
+
+    p = sp.add_parser("media-organize", help="Preview or organize local interstitial video files.")
+    p.add_argument("path", help="Folder containing video clips.")
+    p.add_argument("--destination", help="Destination root; defaults to organizing inside the source folder.")
+    p.add_argument("--no-recursive", action="store_true", help="Only scan the top-level folder.")
+    p.add_argument("--apply", action="store_true", help="Move and rename medium/high-confidence matches.")
+    p.add_argument("--include-low-confidence", action="store_true", help="Also apply low-confidence filename guesses.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_media_organize)
 
     p = sp.add_parser("logs", help="Read launchd logs.")
     p.add_argument("job", nargs="?")
