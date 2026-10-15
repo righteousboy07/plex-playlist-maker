@@ -18,8 +18,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Plex Curator</string>
 <key>CFBundleDisplayName</key><string>Plex Curator</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>13.2.2</string>
-<key>CFBundleVersion</key><string>13202</string>
+<key>CFBundleShortVersionString</key><string>13.2.3</string>
+<key>CFBundleVersion</key><string>13203</string>
 <key>LSMinimumSystemVersion</key><string>12.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key>
