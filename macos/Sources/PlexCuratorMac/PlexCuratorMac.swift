@@ -43,6 +43,9 @@ struct Station: Codable, Identifiable, Hashable {
     let minShowGap: Int
     let seasonal: String
     let specialEvery: Int
+    let interstitialPlaylists: [String]
+    let interstitialEvery: Int
+    let interstitialCount: Int
     let unwatched: Bool
     let syncWatchProgress: Bool
     let includeShows: [String]
@@ -348,6 +351,9 @@ struct StationUpdateRequest: Encodable {
     let minShowGap: Int
     let seasonal: String
     let specialEvery: Int
+    let interstitialPlaylists: [String]
+    let interstitialEvery: Int
+    let interstitialCount: Int
     let unwatched: Bool
     let syncWatchProgress: Bool
     let includeShows: [String]
@@ -357,6 +363,7 @@ struct StationUpdateRequest: Encodable {
         case name, description, enabled, playlist, preset
         case yearMin, yearMax, kidsOnly, adult, perShow, total
         case avoidRecent, minShowGap, seasonal, specialEvery
+        case interstitialPlaylists, interstitialEvery, interstitialCount
         case unwatched, syncWatchProgress, includeShows, excludeShows
     }
 
@@ -377,6 +384,9 @@ struct StationUpdateRequest: Encodable {
         try c.encode(minShowGap, forKey: .minShowGap)
         try c.encode(seasonal, forKey: .seasonal)
         try c.encode(specialEvery, forKey: .specialEvery)
+        try c.encode(interstitialPlaylists, forKey: .interstitialPlaylists)
+        try c.encode(interstitialEvery, forKey: .interstitialEvery)
+        try c.encode(interstitialCount, forKey: .interstitialCount)
         try c.encode(unwatched, forKey: .unwatched)
         try c.encode(syncWatchProgress, forKey: .syncWatchProgress)
         try c.encode(includeShows, forKey: .includeShows)
@@ -1152,6 +1162,9 @@ struct StationEditorView: View {
     @State private var minShowGap: Int
     @State private var seasonal: String
     @State private var specialEvery: Int
+    @State private var interstitialPlaylists: Set<String>
+    @State private var interstitialEvery: Int
+    @State private var interstitialCount: Int
     @State private var unwatched: Bool
     @State private var syncWatchProgress: Bool
     @State private var includeShows: String
@@ -1176,10 +1189,26 @@ struct StationEditorView: View {
         _minShowGap = State(initialValue: station.minShowGap)
         _seasonal = State(initialValue: station.seasonal)
         _specialEvery = State(initialValue: station.specialEvery)
+        _interstitialPlaylists = State(initialValue: Set(station.interstitialPlaylists))
+        _interstitialEvery = State(initialValue: station.interstitialEvery)
+        _interstitialCount = State(initialValue: station.interstitialCount)
         _unwatched = State(initialValue: station.unwatched)
         _syncWatchProgress = State(initialValue: station.syncWatchProgress)
         _includeShows = State(initialValue: station.includeShows.joined(separator: "\n"))
         _excludeShows = State(initialValue: station.excludeShows.joined(separator: "\n"))
+    }
+
+    private var videoPlaylists: [PlaylistSummary] {
+        model.playlists
+            .filter { ($0.playlistType ?? "video").lowercased() != "audio" }
+            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+    }
+
+    private var configuredButMissingPlaylists: [String] {
+        let available = Set(videoPlaylists.map(\.title))
+        return interstitialPlaylists
+            .filter { !available.contains($0) }
+            .sorted()
     }
 
     var body: some View {
@@ -1228,6 +1257,80 @@ struct StationEditorView: View {
                     Stepper("Special every: \(specialEvery)", value: $specialEvery, in: 1...1000)
                 }
 
+                Section("Interstitials") {
+                    Text("Choose Plex video playlists containing bumpers, station IDs, promos, or commercials.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    if model.playlists.isEmpty {
+                        HStack {
+                            ProgressView()
+                            Text("Loading Plex playlists…")
+                                .foregroundColor(.secondary)
+                        }
+                    } else if videoPlaylists.isEmpty && configuredButMissingPlaylists.isEmpty {
+                        Text("No Plex video playlists found.")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(videoPlaylists) { plexPlaylist in
+                            Toggle(
+                                "\(plexPlaylist.title)\(plexPlaylist.itemCount.map { " (\($0))" } ?? "")",
+                                isOn: Binding(
+                                    get: { interstitialPlaylists.contains(plexPlaylist.title) },
+                                    set: { selected in
+                                        if selected {
+                                            interstitialPlaylists.insert(plexPlaylist.title)
+                                        } else {
+                                            interstitialPlaylists.remove(plexPlaylist.title)
+                                        }
+                                    }
+                                )
+                            )
+                        }
+
+                        ForEach(configuredButMissingPlaylists, id: \.self) { title in
+                            Toggle(
+                                "\(title) (not currently found in Plex)",
+                                isOn: Binding(
+                                    get: { interstitialPlaylists.contains(title) },
+                                    set: { selected in
+                                        if selected {
+                                            interstitialPlaylists.insert(title)
+                                        } else {
+                                            interstitialPlaylists.remove(title)
+                                        }
+                                    }
+                                )
+                            )
+                            .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Stepper(
+                        interstitialEvery == 0
+                            ? "Break frequency: Off"
+                            : "Break every \(interstitialEvery) program items",
+                        value: $interstitialEvery,
+                        in: 0...1000
+                    )
+                    Stepper(
+                        "Clips per break: \(interstitialCount)",
+                        value: $interstitialCount,
+                        in: 1...20
+                    )
+                    .disabled(interstitialEvery == 0)
+
+                    if interstitialPlaylists.isEmpty {
+                        Text("Select at least one playlist to use interstitials.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else if interstitialEvery == 0 {
+                        Text("Interstitial pools are selected, but insertion is disabled until break frequency is above 0.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
                 Section("Audience / Progress") {
                     Toggle("Kids-only filtering", isOn: $kidsOnly)
                     Toggle("Allow adult animation", isOn: $adult)
@@ -1256,6 +1359,11 @@ struct StationEditorView: View {
                 }
             }
             .padding()
+        }
+        .task {
+            if model.playlists.isEmpty {
+                await model.loadPlaylists()
+            }
         }
     }
 
@@ -1311,6 +1419,9 @@ struct StationEditorView: View {
             minShowGap: minShowGap,
             seasonal: seasonal,
             specialEvery: specialEvery,
+            interstitialPlaylists: interstitialPlaylists.sorted(),
+            interstitialEvery: interstitialEvery,
+            interstitialCount: interstitialCount,
             unwatched: unwatched,
             syncWatchProgress: syncWatchProgress,
             includeShows: lines(includeShows),
