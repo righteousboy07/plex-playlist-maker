@@ -16,10 +16,18 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-backend_args=()
-mac_args=()
-[[ "$DRY_RUN" -eq 1 ]] && backend_args+=(--dry-run) && mac_args+=(--dry-run)
-[[ "$NO_OPEN" -eq 1 ]] && mac_args+=(--no-open)
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  bash "$ROOT/scripts/install-backend.sh" --dry-run
+else
+  bash "$ROOT/scripts/install-backend.sh"
+fi
 
-bash "$ROOT/scripts/install-backend.sh" "${backend_args[@]}"
-bash "$ROOT/scripts/install-macos-app.sh" "${mac_args[@]}"
+if [[ "$DRY_RUN" -eq 1 && "$NO_OPEN" -eq 1 ]]; then
+  bash "$ROOT/scripts/install-macos-app.sh" --dry-run --no-open
+elif [[ "$DRY_RUN" -eq 1 ]]; then
+  bash "$ROOT/scripts/install-macos-app.sh" --dry-run
+elif [[ "$NO_OPEN" -eq 1 ]]; then
+  bash "$ROOT/scripts/install-macos-app.sh" --no-open
+else
+  bash "$ROOT/scripts/install-macos-app.sh"
+fi
