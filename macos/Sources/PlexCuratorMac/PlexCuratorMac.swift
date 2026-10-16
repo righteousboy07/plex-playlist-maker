@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Foundation
 import UserNotifications
+import Vision
 
 // MARK: - API Models
 
@@ -794,6 +795,181 @@ final class APIClient {
             authenticated: true
         )
         return response.job
+    }
+}
+
+struct MediaVisualSuggestion {
+    let title: String?
+    let type: String?
+    let recognizedText: [String]
+
+    var summary: String {
+        recognizedText.joined(separator: " • ")
+    }
+}
+
+enum MediaVisualAnalyzer {
+    private static let networkNames: [(needle: String, display: String)] = [
+        ("nickelodeon", "Nickelodeon"),
+        ("nick at nite", "Nick at Nite"),
+        ("cartoon network", "Cartoon Network"),
+        ("toon disney", "Toon Disney"),
+        ("disney channel", "Disney Channel"),
+        ("fox kids", "Fox Kids"),
+        ("kids wb", "Kids WB"),
+        ("kids' wb", "Kids WB"),
+        ("boomerang", "Boomerang"),
+        ("adult swim", "Adult Swim"),
+        ("comedy central", "Comedy Central"),
+        ("pbs kids", "PBS Kids"),
+        ("mtv", "MTV"),
+        ("vh1", "VH1")
+    ]
+
+    static func analyze(frameURLs: [URL]) async -> MediaVisualSuggestion {
+        guard !frameURLs.isEmpty else {
+            return MediaVisualSuggestion(title: nil, type: nil, recognizedText: [])
+        }
+
+        var allText: [String] = []
+        for url in frameURLs {
+            if let text = await recognizeText(in: url) {
+                allText.append(contentsOf: text)
+            }
+        }
+
+        var seen = Set<String>()
+        let unique = allText
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { value in
+                let key = value.lowercased()
+                guard !seen.contains(key) else { return false }
+                seen.insert(key)
+                return true
+            }
+
+        let joined = unique.joined(separator: " ").lowercased()
+        let detectedNetwork = networkNames.first { joined.contains($0.needle) }?.display
+        let detectedType = inferType(from: joined)
+        let phrase = bestPhrase(from: unique, joined: joined)
+        let year = extractYear(from: joined)
+
+        var titleParts: [String] = []
+        if let detectedNetwork {
+            titleParts.append(detectedNetwork)
+        }
+        if let phrase, !titleParts.contains(where: { $0.caseInsensitiveCompare(phrase) == .orderedSame }) {
+            titleParts.append(phrase)
+        }
+        if let year {
+            titleParts.append(year)
+        }
+
+        let title = titleParts.isEmpty ? nil : titleParts.joined(separator: " - ")
+        return MediaVisualSuggestion(
+            title: title,
+            type: detectedType,
+            recognizedText: Array(unique.prefix(12))
+        )
+    }
+
+    private static func recognizeText(in url: URL) async -> [String]? {
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode),
+                  let image = NSImage(data: data),
+                  let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            else {
+                return nil
+            }
+
+            return try await Task.detached(priority: .userInitiated) {
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = true
+                request.minimumTextHeight = 0.02
+
+                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                try handler.perform([request])
+
+                return (request.results ?? []).compactMap {
+                    $0.topCandidates(1).first?.string
+                }
+            }.value
+        } catch {
+            return nil
+        }
+    }
+
+    private static func inferType(from text: String) -> String? {
+        let bumperPhrases = [
+            "we'll be right back", "well be right back", "be right back",
+            "up next", "coming up", "back to"
+        ]
+        if bumperPhrases.contains(where: { text.contains($0) }) {
+            return "bumper"
+        }
+
+        let commercialPhrases = [
+            "call now", "order now", "limited time", "available now",
+            "available at", "save $", "only $", "special offer", "visit www",
+            "www.", "while supplies last"
+        ]
+        if commercialPhrases.contains(where: { text.contains($0) }) {
+            return "commercial"
+        }
+
+        let promoPhrases = [
+            "premieres", "premiere", "tonight", "this saturday", "this sunday",
+            "new episode", "all new", "coming this"
+        ]
+        if promoPhrases.contains(where: { text.contains($0) }) {
+            return "promo"
+        }
+
+        if networkNames.contains(where: { text.contains($0.needle) }) {
+            return "station-id"
+        }
+        return nil
+    }
+
+    private static func bestPhrase(from lines: [String], joined: String) -> String? {
+        let canonical: [(needle: String, title: String)] = [
+            ("we'll be right back", "We'll Be Right Back"),
+            ("well be right back", "We'll Be Right Back"),
+            ("up next", "Up Next"),
+            ("coming up", "Coming Up"),
+            ("back to", "Back To Programming"),
+            ("premieres", "Promo"),
+            ("premiere", "Promo"),
+            ("tonight", "Tonight Promo"),
+            ("new episode", "New Episode Promo")
+        ]
+        if let phrase = canonical.first(where: { joined.contains($0.needle) }) {
+            return phrase.title
+        }
+
+        let candidates = lines.filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.count >= 4 &&
+                trimmed.count <= 60 &&
+                trimmed.rangeOfCharacter(from: .letters) != nil
+        }
+        return candidates.first
+    }
+
+    private static func extractYear(from text: String) -> String? {
+        let pattern = #"\b(19\d{2}|20\d{2})\b"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              let swiftRange = Range(match.range(at: 1), in: text)
+        else {
+            return nil
+        }
+        return String(text[swiftRange])
     }
 }
 
@@ -2049,6 +2225,7 @@ struct MediaOrganizerRow: View {
     let onAnalyzed: (MediaOrganizerItem) -> Void
 
     @State private var analyzing = false
+    @State private var visualSuggestion: MediaVisualSuggestion?
 
     private var displayItem: MediaOrganizerItem {
         model.analyzedMediaItems[item.source] ?? item
@@ -2179,6 +2356,19 @@ struct MediaOrganizerRow: View {
                                 destination: destination
                             ) {
                                 onAnalyzed(analyzed)
+
+                                let urls = (analyzed.reviewFrames ?? []).compactMap {
+                                    model.api.mediaOrganizerFrameURL($0.frameId)
+                                }
+                                let suggestion = await MediaVisualAnalyzer.analyze(frameURLs: urls)
+                                visualSuggestion = suggestion
+
+                                if let title = suggestion.title, !title.isEmpty {
+                                    reviewedTitle = title
+                                }
+                                if let type = suggestion.type {
+                                    reviewedType = type
+                                }
                             }
                             analyzing = false
                         }
@@ -2194,6 +2384,25 @@ struct MediaOrganizerRow: View {
                     }
                     .disabled(analyzing)
                     .padding(.top, 4)
+                }
+
+                if let suggestion = visualSuggestion,
+                   !suggestion.recognizedText.isEmpty {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Label("Apple Vision text", systemImage: "text.viewfinder")
+                            .font(.caption.bold())
+                        Text(suggestion.summary)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .textSelection(.enabled)
+
+                        if suggestion.title != nil || suggestion.type != nil {
+                            Text("Suggestion only — review before approving.")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
                 }
 
                 if item.confidence == "low" || item.reviewed == true {
