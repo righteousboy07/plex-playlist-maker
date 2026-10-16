@@ -872,7 +872,7 @@ def test_media_exclude_patterns_are_case_insensitive_and_pre_probe(tmp_path, mon
 
     probed = []
     def probe(path):
-        probed.append(Path(path).name)
+        probed.append(core.Path(path).name)
         return {"title": None, "comment": None, "description": None, "source": None}
 
     monkeypatch.setattr(core, "probe_video_metadata", probe)
