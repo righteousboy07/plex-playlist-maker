@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Low-confidence Media Organizer clips now get cached early/middle/late review frames so mystery videos can be identified visually before renaming.
 - Added a native macOS Media Organizer with folder selection, scan preview, confidence/type review, and confirmed safe apply controls.
 - Added a local interstitial media organizer that scans video folders, cleans names from embedded metadata or filenames, classifies clips, previews changes, and safely moves/renames approved-confidence files.
 - macOS Station Editor now supports interstitial pool types and relative weights, including live approximate mix percentages.
