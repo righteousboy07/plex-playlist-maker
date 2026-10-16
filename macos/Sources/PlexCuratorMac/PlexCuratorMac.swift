@@ -363,6 +363,7 @@ struct MediaOrganizerApplyRequest: Encodable {
     let path: String
     let destination: String?
     let recursive: Bool
+    let excludePatterns: [String]
     let includeLowConfidence: Bool
     let deleteExcluded: Bool
     let overrides: [MediaOrganizerOverrideRequest]
