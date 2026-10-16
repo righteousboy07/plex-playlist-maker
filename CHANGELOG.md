@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- macOS Media Organizer now shows cached early/middle/late thumbnails for low-confidence mystery clips.
 - Low-confidence Media Organizer clips now get cached early/middle/late review frames so mystery videos can be identified visually before renaming.
 - Added a native macOS Media Organizer with folder selection, scan preview, confidence/type review, and confirmed safe apply controls.
 - Added a local interstitial media organizer that scans video folders, cleans names from embedded metadata or filenames, classifies clips, previews changes, and safely moves/renames approved-confidence files.

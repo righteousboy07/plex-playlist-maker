@@ -353,6 +353,19 @@ struct MediaOrganizerApplyRequest: Encodable {
     let includeLowConfidence: Bool
 }
 
+struct MediaOrganizerReviewFrame: Codable, Hashable, Identifiable {
+    var id: String { frameId }
+    let frameId: String
+    let position: Double
+    let timestampSeconds: Double
+
+    enum CodingKeys: String, CodingKey {
+        case frameId = "id"
+        case position
+        case timestampSeconds
+    }
+}
+
 struct MediaOrganizerItem: Codable, Identifiable, Hashable {
     var id: String { source }
     let source: String
@@ -365,6 +378,8 @@ struct MediaOrganizerItem: Codable, Identifiable, Hashable {
     let confidence: String
     let titleSource: String
     let metadataTitle: String?
+    let reviewFrameStatus: String?
+    let reviewFrames: [MediaOrganizerReviewFrame]?
     let action: String
 }
 
@@ -661,6 +676,18 @@ final class APIClient {
             body: body,
             authenticated: true
         )
+    }
+
+    func mediaOrganizerFrameURL(_ frameId: String) -> URL? {
+        let parts = frameId.split(separator: "/", omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return nil }
+        return baseURL
+            .appendingPathComponent("api")
+            .appendingPathComponent("v1")
+            .appendingPathComponent("media-organizer")
+            .appendingPathComponent("frame")
+            .appendingPathComponent(String(parts[0]))
+            .appendingPathComponent(String(parts[1]))
     }
 
     func kidsScaryWishlist() async throws -> WishlistResponse {
@@ -1706,7 +1733,7 @@ struct MediaOrganizerView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Media Organizer")
                         .font(.largeTitle.bold())
-                    Text("Scan interstitial video folders, preview clean names and categories, then safely organize the files.")
+                    Text("Scan interstitial video folders, preview clean names and categories, visually inspect mystery clips, then safely organize the files.")
                         .foregroundColor(.secondary)
                 }
                 Spacer()
@@ -1878,6 +1905,7 @@ struct MediaOrganizerView: View {
 }
 
 struct MediaOrganizerRow: View {
+    @EnvironmentObject var model: AppModel
     let item: MediaOrganizerItem
 
     private var confidenceSymbol: String {
@@ -1900,6 +1928,24 @@ struct MediaOrganizerRow: View {
         case "promo": return "Promo"
         default: return "General"
         }
+    }
+
+    private var reviewFrameMessage: String {
+        switch item.reviewFrameStatus {
+        case "ffmpeg-missing":
+            return "Visual review unavailable: ffmpeg is not installed."
+        case "duration-unavailable":
+            return "Visual review unavailable: video duration could not be read."
+        case "failed":
+            return "Visual review frames could not be extracted."
+        default:
+            return "No visual review frames available."
+        }
+    }
+
+    private func formatTimestamp(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     var body: some View {
@@ -1929,6 +1975,52 @@ struct MediaOrganizerRow: View {
                 }
                 .font(.caption)
                 .foregroundColor(.secondary)
+
+                if let frames = item.reviewFrames, !frames.isEmpty {
+                    HStack(spacing: 8) {
+                        ForEach(frames) { frame in
+                            if let url = model.api.mediaOrganizerFrameURL(frame.frameId) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    AsyncImage(url: url) { phase in
+                                        switch phase {
+                                        case .empty:
+                                            ZStack {
+                                                RoundedRectangle(cornerRadius: 6)
+                                                    .fill(.quaternary)
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                            }
+                                        case .success(let image):
+                                            image
+                                                .resizable()
+                                                .scaledToFill()
+                                        case .failure:
+                                            ZStack {
+                                                RoundedRectangle(cornerRadius: 6)
+                                                    .fill(.quaternary)
+                                                Image(systemName: "photo")
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        @unknown default:
+                                            EmptyView()
+                                        }
+                                    }
+                                    .frame(width: 150, height: 84)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                                    Text(formatTimestamp(frame.timestampSeconds))
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 4)
+                } else if item.confidence == "low" {
+                    Text(reviewFrameMessage)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
             }
 
             Spacer()
