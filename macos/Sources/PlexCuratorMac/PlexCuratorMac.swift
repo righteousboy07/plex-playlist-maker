@@ -346,11 +346,18 @@ struct MediaOrganizerRequest: Encodable {
     let recursive: Bool
 }
 
+struct MediaOrganizerOverrideRequest: Encodable {
+    let source: String
+    let title: String
+    let type: String
+}
+
 struct MediaOrganizerApplyRequest: Encodable {
     let path: String
     let destination: String?
     let recursive: Bool
     let includeLowConfidence: Bool
+    let overrides: [MediaOrganizerOverrideRequest]
 }
 
 struct MediaOrganizerReviewFrame: Codable, Hashable, Identifiable {
@@ -378,6 +385,7 @@ struct MediaOrganizerItem: Codable, Identifiable, Hashable {
     let confidence: String
     let titleSource: String
     let metadataTitle: String?
+    let reviewed: Bool?
     let reviewFrameStatus: String?
     let reviewFrames: [MediaOrganizerReviewFrame]?
     let action: String
@@ -717,14 +725,16 @@ final class APIClient {
         path: String,
         destination: String?,
         recursive: Bool,
-        includeLowConfidence: Bool
+        includeLowConfidence: Bool,
+        overrides: [MediaOrganizerOverrideRequest]
     ) async throws -> MediaOrganizerResponse {
         let body = try encoder.encode(
             MediaOrganizerApplyRequest(
                 path: path,
                 destination: destination,
                 recursive: recursive,
-                includeLowConfidence: includeLowConfidence
+                includeLowConfidence: includeLowConfidence,
+                overrides: overrides
             )
         )
         return try await request(
@@ -927,7 +937,8 @@ final class AppModel: ObservableObject {
         path: String,
         destination: String?,
         recursive: Bool,
-        includeLowConfidence: Bool
+        includeLowConfidence: Bool,
+        overrides: [MediaOrganizerOverrideRequest]
     ) async -> Bool {
         loading = true
         defer { loading = false }
@@ -936,7 +947,8 @@ final class AppModel: ObservableObject {
                 path: path,
                 destination: destination,
                 recursive: recursive,
-                includeLowConfidence: includeLowConfidence
+                includeLowConfidence: includeLowConfidence,
+                overrides: overrides
             )
             mediaOrganizer = result
             let moved = result.appliedCount ?? 0
@@ -1717,14 +1729,77 @@ struct MediaOrganizerView: View {
     @State private var recursive = true
     @State private var includeLowConfidence = false
     @State private var confirmApply = false
+    @State private var reviewedSources: Set<String> = []
+    @State private var reviewedTitles: [String: String] = [:]
+    @State private var reviewedTypes: [String: String] = [:]
 
     private var plan: MediaOrganizerResponse? { model.mediaOrganizer }
 
     private var actionableCount: Int {
         plan?.items.filter {
             $0.action != "unchanged" &&
-            (includeLowConfidence || $0.confidence != "low")
+            (
+                includeLowConfidence ||
+                $0.confidence != "low" ||
+                reviewedSources.contains($0.source)
+            )
         }.count ?? 0
+    }
+
+    private var reviewedOverrides: [MediaOrganizerOverrideRequest] {
+        guard let plan else { return [] }
+        return plan.items.compactMap { item in
+            let hasReview = reviewedSources.contains(item.source)
+            let editedTitle = reviewedTitles[item.source]
+            let editedType = reviewedTypes[item.source]
+            let changed = (editedTitle != nil && editedTitle != item.title) ||
+                (editedType != nil && editedType != item.type)
+            guard hasReview || changed else { return nil }
+            return MediaOrganizerOverrideRequest(
+                source: item.source,
+                title: (editedTitle ?? item.title).trimmingCharacters(in: .whitespacesAndNewlines),
+                type: editedType ?? item.type
+            )
+        }
+    }
+
+    private func titleBinding(_ item: MediaOrganizerItem) -> Binding<String> {
+        Binding(
+            get: { reviewedTitles[item.source] ?? item.title },
+            set: { value in
+                reviewedTitles[item.source] = value
+                reviewedSources.insert(item.source)
+            }
+        )
+    }
+
+    private func typeBinding(_ item: MediaOrganizerItem) -> Binding<String> {
+        Binding(
+            get: { reviewedTypes[item.source] ?? item.type },
+            set: { value in
+                reviewedTypes[item.source] = value
+                reviewedSources.insert(item.source)
+            }
+        )
+    }
+
+    private func reviewedBinding(_ item: MediaOrganizerItem) -> Binding<Bool> {
+        Binding(
+            get: { reviewedSources.contains(item.source) || item.reviewed == true },
+            set: { selected in
+                if selected {
+                    reviewedSources.insert(item.source)
+                    if reviewedTitles[item.source] == nil {
+                        reviewedTitles[item.source] = item.title
+                    }
+                    if reviewedTypes[item.source] == nil {
+                        reviewedTypes[item.source] = item.type
+                    }
+                } else {
+                    reviewedSources.remove(item.source)
+                }
+            }
+        )
     }
 
     var body: some View {
@@ -1797,7 +1872,12 @@ struct MediaOrganizerView: View {
                             .frame(maxWidth: .infinity, minHeight: 160)
                     } else {
                         List(plan.items) { item in
-                            MediaOrganizerRow(item: item)
+                            MediaOrganizerRow(
+                                item: item,
+                                reviewedTitle: titleBinding(item),
+                                reviewedType: typeBinding(item),
+                                reviewed: reviewedBinding(item)
+                            )
                         }
                         .frame(minHeight: 320)
                     }
@@ -1850,7 +1930,8 @@ struct MediaOrganizerView: View {
                         path: sourcePath,
                         destination: normalizedDestination,
                         recursive: recursive,
-                        includeLowConfidence: includeLowConfidence
+                        includeLowConfidence: includeLowConfidence,
+                        overrides: reviewedOverrides
                     )
                     if ok {
                         await scan()
@@ -1870,6 +1951,9 @@ struct MediaOrganizerView: View {
     }
 
     private func scan() async {
+        reviewedSources.removeAll()
+        reviewedTitles.removeAll()
+        reviewedTypes.removeAll()
         await model.scanMediaOrganizer(
             path: sourcePath.trimmingCharacters(in: .whitespacesAndNewlines),
             destination: normalizedDestination,
@@ -1907,6 +1991,9 @@ struct MediaOrganizerView: View {
 struct MediaOrganizerRow: View {
     @EnvironmentObject var model: AppModel
     let item: MediaOrganizerItem
+    @Binding var reviewedTitle: String
+    @Binding var reviewedType: String
+    @Binding var reviewed: Bool
 
     private var confidenceSymbol: String {
         switch item.confidence {
@@ -2020,6 +2107,26 @@ struct MediaOrganizerRow: View {
                     Text(reviewFrameMessage)
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                }
+
+                if item.confidence == "low" || item.reviewed == true {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Reviewed title", text: $reviewedTitle)
+
+                        HStack {
+                            Picker("Type", selection: $reviewedType) {
+                                Text("General").tag("general")
+                                Text("Station ID").tag("station-id")
+                                Text("Bumper").tag("bumper")
+                                Text("Commercial").tag("commercial")
+                                Text("Promo").tag("promo")
+                            }
+                            .frame(maxWidth: 220)
+
+                            Toggle("Reviewed / approve", isOn: $reviewed)
+                        }
+                    }
+                    .padding(.top, 4)
                 }
             }
 
