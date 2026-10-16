@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import random
@@ -31,6 +32,7 @@ SCHEDULES_FILE = CONFIG_DIR / "schedules.json"
 STATIONS_FILE = CONFIG_DIR / "stations.json"
 EXPORT_DIR = CONFIG_DIR / "exports"
 BACKUP_DIR = CONFIG_DIR / "backups"
+REVIEW_FRAMES_DIR = CONFIG_DIR / "review-frames"
 LOG_DIR = HOME / "Library" / "Logs" / "PlexCurator"
 APP_VERSION = "13.2.3"
 
@@ -590,6 +592,98 @@ def probe_video_metadata(path):
 
     return {"title": None, "comment": None, "description": None, "source": None}
 
+def probe_video_duration_seconds(path):
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                ffprobe, "-v", "quiet", "-print_format", "json",
+                "-show_entries", "format=duration", str(Path(path)),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        payload = json.loads(result.stdout)
+        duration = (payload.get("format") or {}).get("duration")
+        return float(duration) if duration is not None else None
+    except Exception:
+        return None
+
+def media_review_cache_key(path):
+    path = Path(path).resolve()
+    try:
+        stat = path.stat()
+        fingerprint = f"{path}|{stat.st_size}|{stat.st_mtime_ns}"
+    except OSError:
+        fingerprint = str(path)
+    return hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()[:24]
+
+def extract_media_review_frames(path, frame_count=3):
+    path = Path(path).resolve()
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return {"status": "ffmpeg-missing", "frames": []}
+
+    duration = probe_video_duration_seconds(path)
+    if duration is None or duration <= 0:
+        return {"status": "duration-unavailable", "frames": []}
+
+    frame_count = max(1, min(int(frame_count), 5))
+    cache_key = media_review_cache_key(path)
+    cache_dir = REVIEW_FRAMES_DIR / cache_key
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if frame_count == 1:
+        fractions = [0.5]
+    else:
+        fractions = [
+            0.12 + (0.76 * idx / (frame_count - 1))
+            for idx in range(frame_count)
+        ]
+
+    frames = []
+    for index, fraction in enumerate(fractions, 1):
+        target = cache_dir / f"frame-{index}.jpg"
+        if not target.exists():
+            timestamp = max(0.0, min(duration - 0.05, duration * fraction))
+            try:
+                result = subprocess.run(
+                    [
+                        ffmpeg, "-hide_banner", "-loglevel", "error",
+                        "-ss", f"{timestamp:.3f}",
+                        "-i", str(path),
+                        "-frames:v", "1",
+                        "-vf", "scale='min(640,iw)':-2",
+                        "-q:v", "3",
+                        "-y", str(target),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+                if result.returncode != 0 or not target.exists():
+                    continue
+            except Exception:
+                continue
+
+        frames.append({
+            "id": f"{cache_key}/frame-{index}.jpg",
+            "position": round(fraction, 3),
+            "timestamp_seconds": round(duration * fraction, 2),
+        })
+
+    return {
+        "status": "available" if frames else "failed",
+        "frames": frames,
+    }
+
 def infer_interstitial_type(path, metadata=None):
     metadata = metadata or {}
     haystack = " ".join([
@@ -679,6 +773,11 @@ def plan_media_organization(root, destination=None, recursive=True):
 
     for source in iter_video_files(root, recursive=recursive):
         identity = infer_media_identity(source)
+        review = (
+            extract_media_review_frames(source, frame_count=3)
+            if identity["confidence"] == "low"
+            else {"status": "not-needed", "frames": []}
+        )
         folder_name = INTERSTITIAL_TYPE_FOLDERS[identity["type"]]
         target_dir = destination_root / folder_name
         base_target = target_dir / f'{identity["title"]}{source.suffix.casefold()}'
@@ -701,6 +800,8 @@ def plan_media_organization(root, destination=None, recursive=True):
             "confidence": identity["confidence"],
             "title_source": identity["title_source"],
             "metadata_title": identity["metadata_title"],
+            "review_frame_status": review["status"],
+            "review_frames": review["frames"],
             "action": action,
         })
 
