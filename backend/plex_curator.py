@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import fnmatch
 import json
 import os
 import random
@@ -775,6 +776,55 @@ def infer_media_identities_bulk(paths, workers=8):
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         return dict(executor.map(inspect, paths))
 
+def normalize_exclude_patterns(patterns):
+    normalized = []
+    seen = set()
+    for raw in patterns or []:
+        pattern = str(raw or "").strip().replace("\\", "/")
+        if not pattern:
+            continue
+        key = pattern.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(pattern)
+    return normalized
+
+def media_path_matches_excludes(path, root, patterns):
+    path = Path(path)
+    root = Path(root)
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError:
+        relative = path.name
+
+    candidates = {
+        path.name.casefold(),
+        relative.casefold(),
+    }
+    for pattern in normalize_exclude_patterns(patterns):
+        folded = pattern.casefold()
+        if any(fnmatch.fnmatchcase(candidate, folded) for candidate in candidates):
+            return pattern
+    return None
+
+def partition_video_files(root, recursive=True, exclude_patterns=None):
+    root = Path(root).expanduser()
+    included = []
+    excluded = []
+    for path in iter_video_files(root, recursive=recursive):
+        matched = media_path_matches_excludes(path, root, exclude_patterns)
+        if matched:
+            excluded.append({
+                "source": str(path.resolve()),
+                "original_name": path.name,
+                "relative_path": path.relative_to(root).as_posix(),
+                "matched_pattern": matched,
+            })
+        else:
+            included.append(path)
+    return included, excluded
+
 def iter_video_files(root, recursive=True):
     root = Path(root).expanduser()
     iterator = root.rglob("*") if recursive else root.glob("*")
@@ -800,6 +850,7 @@ def plan_media_organization(
     overrides=None,
     extract_review_frames=True,
     metadata_workers=1,
+    exclude_patterns=None,
 ):
     root = Path(root).expanduser().resolve()
     if not root.exists() or not root.is_dir():
@@ -808,7 +859,11 @@ def plan_media_organization(
     destination_root = Path(destination).expanduser().resolve() if destination else root
     plans = []
     reserved = set()
-    sources = iter_video_files(root, recursive=recursive)
+    sources, excluded_items = partition_video_files(
+        root,
+        recursive=recursive,
+        exclude_patterns=exclude_patterns,
+    )
     identities = infer_media_identities_bulk(sources, workers=metadata_workers)
     override_map = {}
     for override in overrides or []:
@@ -878,8 +933,12 @@ def plan_media_organization(
         "root": str(root),
         "destination": str(destination_root),
         "recursive": bool(recursive),
+        "exclude_patterns": normalize_exclude_patterns(exclude_patterns),
+        "total_found": len(plans) + len(excluded_items),
         "count": len(plans),
+        "excluded_count": len(excluded_items),
         "review_count": sum(1 for item in plans if item["confidence"] == "low"),
+        "excluded_items": excluded_items,
         "items": plans,
     }
 
@@ -934,7 +993,29 @@ def write_media_organizer_manifest(plan, applied=False):
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
 
-def apply_media_organization(plan, include_low_confidence=False):
+def delete_excluded_media(plan):
+    deleted = []
+    errors = []
+    for item in plan.get("excluded_items", []):
+        source = Path(item["source"])
+        if not source.exists():
+            errors.append({**item, "error": "source-missing"})
+            continue
+        if not source.is_file():
+            errors.append({**item, "error": "not-a-file"})
+            continue
+        try:
+            source.unlink()
+            deleted.append(item)
+        except Exception as exc:
+            errors.append({**item, "error": str(exc)})
+    return deleted, errors
+
+def apply_media_organization(
+    plan,
+    include_low_confidence=False,
+    delete_excluded=False,
+):
     applied = []
     skipped = []
     errors = []
@@ -963,13 +1044,20 @@ def apply_media_organization(plan, include_low_confidence=False):
         except Exception as exc:
             errors.append({**item, "error": str(exc)})
 
+    deleted_excluded = []
+    if delete_excluded:
+        deleted_excluded, delete_errors = delete_excluded_media(plan)
+        errors.extend(delete_errors)
+
     result = {
         **plan,
         "applied_count": len(applied),
         "skipped_count": len(skipped),
+        "deleted_excluded_count": len(deleted_excluded),
         "error_count": len(errors),
         "applied_items": applied,
         "skipped_items": skipped,
+        "deleted_excluded_items": deleted_excluded,
         "errors": errors,
     }
     manifest = write_media_organizer_manifest(result, applied=True)
@@ -980,6 +1068,7 @@ def print_media_organizer_plan(plan):
     print(f'Source:      {plan["root"]}')
     print(f'Destination: {plan["destination"]}')
     print(f'Videos:      {plan["count"]}')
+    print(f'Excluded:    {plan.get("excluded_count", 0)}')
     print(f'Needs review:{plan["review_count"]:>3}')
     print()
     for item in plan["items"]:
@@ -994,6 +1083,7 @@ def cmd_media_organize(args):
         args.path,
         destination=args.destination,
         recursive=not args.no_recursive,
+        exclude_patterns=args.exclude or [],
     )
     if args.json:
         print(json.dumps(plan, indent=2, ensure_ascii=False))
@@ -1013,6 +1103,7 @@ def cmd_media_organize(args):
     result = apply_media_organization(
         plan,
         include_low_confidence=args.include_low_confidence,
+        delete_excluded=args.delete_excluded,
     )
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -1020,6 +1111,7 @@ def cmd_media_organize(args):
         print()
         print(f'Applied: {result["applied_count"]}')
         print(f'Skipped: {result["skipped_count"]}')
+        print(f'Deleted excluded: {result.get("deleted_excluded_count", 0)}')
         print(f'Errors:  {result["error_count"]}')
         print(f'Manifest: {result["manifest"]}')
     if result["error_count"]:
@@ -3207,6 +3299,8 @@ def build_parser():
     p.add_argument("path", help="Folder containing video clips.")
     p.add_argument("--destination", help="Destination root; defaults to organizing inside the source folder.")
     p.add_argument("--no-recursive", action="store_true", help="Only scan the top-level folder.")
+    p.add_argument("--exclude", action="append", help="Case-insensitive glob to skip before metadata analysis; repeat as needed (example: sample.*).")
+    p.add_argument("--delete-excluded", action="store_true", help="With --apply, permanently delete files matched by --exclude.")
     p.add_argument("--apply", action="store_true", help="Move and rename medium/high-confidence matches.")
     p.add_argument("--include-low-confidence", action="store_true", help="Also apply low-confidence filename guesses.")
     p.add_argument("--json", action="store_true")

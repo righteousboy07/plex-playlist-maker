@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Media Organizer now supports case-insensitive exclude globs (including a Sample preset), excludes matches before metadata analysis, previews excluded files separately, and can explicitly delete matched exclusions on confirmed apply.
 - Media Organizer now has a large-library review queue with Needs Review, Ready to Apply, Already Organized, and All filters plus filename/title/folder search.
 - Analyze Mystery Clip now uses Apple's local Vision text recognition on extracted frames to suggest network/title/type values while still requiring explicit review before rename.
 - Media Organizer bulk scans now parallelize metadata inspection, defer expensive frame extraction, use longer scan/apply request timeouts, and provide per-file deep analysis for mystery clips. This makes large recursive folders practical.

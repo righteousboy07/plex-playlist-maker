@@ -862,3 +862,79 @@ def test_single_file_analysis_generates_frames_for_mystery_clip(tmp_path, monkey
 def test_media_organizer_analyze_route_registered():
     paths = {route.path for route in api.app.routes}
     assert "/api/v1/media-organizer/analyze" in paths
+
+
+def test_media_exclude_patterns_are_case_insensitive_and_pre_probe(tmp_path, monkeypatch):
+    sample = tmp_path / "Sample.avi"
+    movie = tmp_path / "Movie.mkv"
+    sample.write_bytes(b"sample")
+    movie.write_bytes(b"movie")
+
+    probed = []
+    def probe(path):
+        probed.append(core.Path(path).name)
+        return {"title": None, "comment": None, "description": None, "source": None}
+
+    monkeypatch.setattr(core, "probe_video_metadata", probe)
+    plan = core.plan_media_organization(
+        tmp_path,
+        exclude_patterns=["sample.*"],
+        extract_review_frames=False,
+        metadata_workers=1,
+    )
+
+    assert plan["total_found"] == 2
+    assert plan["count"] == 1
+    assert plan["excluded_count"] == 1
+    assert plan["excluded_items"][0]["original_name"] == "Sample.avi"
+    assert plan["excluded_items"][0]["matched_pattern"] == "sample.*"
+    assert probed == ["Movie.mkv"]
+
+
+def test_media_exclude_pattern_matches_relative_subfolder(tmp_path):
+    folder = tmp_path / "Movie One" / "Sample"
+    folder.mkdir(parents=True)
+    clip = folder / "clip.mkv"
+    clip.write_bytes(b"sample")
+
+    included, excluded = core.partition_video_files(
+        tmp_path,
+        recursive=True,
+        exclude_patterns=["*/sample/*"],
+    )
+
+    assert included == []
+    assert excluded[0]["original_name"] == "clip.mkv"
+
+
+def test_delete_excluded_media_only_deletes_explicit_matches(tmp_path):
+    sample = tmp_path / "Sample.avi"
+    movie = tmp_path / "Movie.mkv"
+    sample.write_bytes(b"sample")
+    movie.write_bytes(b"movie")
+
+    plan = {
+        "excluded_items": [{
+            "source": str(sample),
+            "original_name": sample.name,
+            "relative_path": sample.name,
+            "matched_pattern": "sample.*",
+        }],
+        "items": [],
+    }
+    deleted, errors = core.delete_excluded_media(plan)
+
+    assert errors == []
+    assert len(deleted) == 1
+    assert not sample.exists()
+    assert movie.exists()
+
+
+def test_media_organizer_request_accepts_excludes_and_delete_flag():
+    request = api.MediaOrganizerApplyRequest(
+        path="/tmp",
+        exclude_patterns=["sample.*", "*/sample/*"],
+        delete_excluded=True,
+    )
+    assert request.exclude_patterns == ["sample.*", "*/sample/*"]
+    assert request.delete_excluded is True

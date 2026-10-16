@@ -46,6 +46,7 @@ class MediaOrganizerRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
     destination: Optional[str] = Field(default=None, max_length=4096)
     recursive: bool = True
+    exclude_patterns: list[str] = Field(default_factory=list)
 
 class MediaOrganizerOverride(BaseModel):
     source: str = Field(min_length=1, max_length=4096)
@@ -58,6 +59,7 @@ class MediaOrganizerAnalyzeRequest(BaseModel):
 
 class MediaOrganizerApplyRequest(MediaOrganizerRequest):
     include_low_confidence: bool = False
+    delete_excluded: bool = False
     overrides: list[MediaOrganizerOverride] = Field(default_factory=list)
 
 class BackupRequest(BaseModel):
@@ -692,6 +694,7 @@ def media_organizer_scan(request: MediaOrganizerRequest):
             recursive=request.recursive,
             extract_review_frames=False,
             metadata_workers=8,
+            exclude_patterns=request.exclude_patterns,
         )
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -741,6 +744,7 @@ def media_organizer_apply(
         return core.apply_media_organization(
             plan,
             include_low_confidence=request.include_low_confidence,
+            delete_excluded=request.delete_excluded,
         )
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
