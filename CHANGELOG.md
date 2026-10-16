@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Media review now finds ffmpeg/ffprobe in common Homebrew paths even when the macOS app or launchd does not inherit the shell PATH, and Doctor reports availability.
 - macOS Media Organizer now shows cached early/middle/late thumbnails for low-confidence mystery clips.
 - Low-confidence Media Organizer clips now get cached early/middle/late review frames so mystery videos can be identified visually before renaming.
 - Added a native macOS Media Organizer with folder selection, scan preview, confidence/type review, and confirmed safe apply controls.

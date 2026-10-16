@@ -701,3 +701,25 @@ def test_medium_confidence_plan_does_not_extract_review_frames(tmp_path, monkeyp
 def test_media_organizer_frame_route_registered():
     paths = {route.path for route in api.app.routes}
     assert "/api/v1/media-organizer/frame/{cache_key}/{frame_name}" in paths
+
+
+def test_find_media_tool_falls_back_to_homebrew_paths(monkeypatch):
+    monkeypatch.setattr(core.shutil, "which", lambda _name: None)
+
+    class FakePath:
+        def __init__(self, value):
+            self.value = str(value)
+        def __truediv__(self, other):
+            return FakePath(self.value.rstrip("/") + "/" + str(other))
+        def exists(self):
+            return self.value == "/opt/homebrew/bin/ffmpeg"
+        def __str__(self):
+            return self.value
+
+    original_path = core.Path
+    monkeypatch.setattr(core, "Path", FakePath)
+    monkeypatch.setattr(core.os, "access", lambda path, mode: str(path) == "/opt/homebrew/bin/ffmpeg")
+    try:
+        assert core.find_media_tool("ffmpeg") == "/opt/homebrew/bin/ffmpeg"
+    finally:
+        monkeypatch.setattr(core, "Path", original_path)
