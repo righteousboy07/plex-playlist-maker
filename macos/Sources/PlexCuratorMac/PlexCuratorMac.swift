@@ -346,6 +346,11 @@ struct MediaOrganizerRequest: Encodable {
     let recursive: Bool
 }
 
+struct MediaOrganizerAnalyzeRequest: Encodable {
+    let source: String
+    let destination: String?
+}
+
 struct MediaOrganizerOverrideRequest: Encodable {
     let source: String
     let title: String
@@ -532,14 +537,15 @@ final class APIClient {
         _ path: String,
         method: String = "GET",
         body: Data? = nil,
-        authenticated: Bool = false
+        authenticated: Bool = false,
+        timeout: TimeInterval = 30
     ) async throws -> T {
         guard let url = URL(string: path, relativeTo: baseURL) else {
             throw APIClientError.invalidResponse
         }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        req.timeoutInterval = 30
+        req.timeoutInterval = timeout
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body {
             req.httpBody = body
@@ -717,7 +723,26 @@ final class APIClient {
         return try await request(
             "/api/v1/media-organizer/scan",
             method: "POST",
-            body: body
+            body: body,
+            timeout: 300
+        )
+    }
+
+    func analyzeMediaOrganizerItem(
+        source: String,
+        destination: String?
+    ) async throws -> MediaOrganizerItem {
+        let body = try encoder.encode(
+            MediaOrganizerAnalyzeRequest(
+                source: source,
+                destination: destination
+            )
+        )
+        return try await request(
+            "/api/v1/media-organizer/analyze",
+            method: "POST",
+            body: body,
+            timeout: 90
         )
     }
 
@@ -741,7 +766,8 @@ final class APIClient {
             "/api/v1/media-organizer/apply",
             method: "POST",
             body: body,
-            authenticated: true
+            authenticated: true,
+            timeout: 300
         )
     }
 
@@ -823,6 +849,7 @@ final class AppModel: ObservableObject {
     @Published var playlists: [PlaylistSummary] = []
     @Published var schedules: [ScheduleSummary] = []
     @Published var mediaOrganizer: MediaOrganizerResponse?
+    @Published var analyzedMediaItems: [String: MediaOrganizerItem] = [:]
     @Published var error: String?
     @Published var message: String?
     @Published var loading = false
@@ -919,6 +946,7 @@ final class AppModel: ObservableObject {
         destination: String?,
         recursive: Bool
     ) async {
+        analyzedMediaItems.removeAll()
         loading = true
         defer { loading = false }
         do {
@@ -930,6 +958,24 @@ final class AppModel: ObservableObject {
             error = nil
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    func analyzeMediaOrganizerItem(
+        source: String,
+        destination: String?
+    ) async -> MediaOrganizerItem? {
+        do {
+            let item = try await api.analyzeMediaOrganizerItem(
+                source: source,
+                destination: destination
+            )
+            analyzedMediaItems[source] = item
+            error = nil
+            return item
+        } catch {
+            self.error = error.localizedDescription
+            return nil
         }
     }
 
@@ -1874,9 +1920,14 @@ struct MediaOrganizerView: View {
                         List(plan.items) { item in
                             MediaOrganizerRow(
                                 item: item,
+                                destination: normalizedDestination,
                                 reviewedTitle: titleBinding(item),
                                 reviewedType: typeBinding(item),
-                                reviewed: reviewedBinding(item)
+                                reviewed: reviewedBinding(item),
+                                onAnalyzed: { analyzed in
+                                    reviewedTitles[item.source] = analyzed.title
+                                    reviewedTypes[item.source] = analyzed.type
+                                }
                             )
                         }
                         .frame(minHeight: 320)
@@ -1991,9 +2042,17 @@ struct MediaOrganizerView: View {
 struct MediaOrganizerRow: View {
     @EnvironmentObject var model: AppModel
     let item: MediaOrganizerItem
+    let destination: String?
     @Binding var reviewedTitle: String
     @Binding var reviewedType: String
     @Binding var reviewed: Bool
+    let onAnalyzed: (MediaOrganizerItem) -> Void
+
+    @State private var analyzing = false
+
+    private var displayItem: MediaOrganizerItem {
+        model.analyzedMediaItems[item.source] ?? item
+    }
 
     private var confidenceSymbol: String {
         switch item.confidence {
@@ -2018,13 +2077,15 @@ struct MediaOrganizerRow: View {
     }
 
     private var reviewFrameMessage: String {
-        switch item.reviewFrameStatus {
+        switch displayItem.reviewFrameStatus {
         case "ffmpeg-missing":
             return "Visual review unavailable: ffmpeg is not installed."
         case "duration-unavailable":
             return "Visual review unavailable: video duration could not be read."
         case "failed":
             return "Visual review frames could not be extracted."
+        case "deferred":
+            return "Visual review deferred for fast bulk scanning."
         default:
             return "No visual review frames available."
         }
@@ -2063,7 +2124,7 @@ struct MediaOrganizerRow: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-                if let frames = item.reviewFrames, !frames.isEmpty {
+                if let frames = displayItem.reviewFrames, !frames.isEmpty {
                     HStack(spacing: 8) {
                         ForEach(frames) { frame in
                             if let url = model.api.mediaOrganizerFrameURL(frame.frameId) {
@@ -2103,10 +2164,36 @@ struct MediaOrganizerRow: View {
                         }
                     }
                     .padding(.top, 4)
-                } else if item.confidence == "low" {
+                } else if displayItem.confidence == "low" {
                     Text(reviewFrameMessage)
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                }
+
+                if item.confidence == "low" && (displayItem.reviewFrames ?? []).isEmpty {
+                    Button {
+                        analyzing = true
+                        Task {
+                            if let analyzed = await model.analyzeMediaOrganizerItem(
+                                source: item.source,
+                                destination: destination
+                            ) {
+                                onAnalyzed(analyzed)
+                            }
+                            analyzing = false
+                        }
+                    } label: {
+                        if analyzing {
+                            HStack {
+                                ProgressView().controlSize(.small)
+                                Text("Analyzing…")
+                            }
+                        } else {
+                            Label("Analyze Mystery Clip", systemImage: "film.stack")
+                        }
+                    }
+                    .disabled(analyzing)
+                    .padding(.top, 4)
                 }
 
                 if item.confidence == "low" || item.reviewed == true {
