@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- macOS Media Organizer can now load, create, update, duplicate, and delete persistent exclusion presets. The destructive Delete Excluded Files option remains runtime-only and is never saved in a preset.
 - Added persistent named Media Organizer exclusion presets, including a safe default Movie Cleanup preset. Presets store only exclusion rules; destructive delete settings are never persisted.
 - Fixed Media Organizer Apply so the exact exclusion rules used during preview are preserved when rebuilding the apply plan.
 - Media Organizer now supports case-insensitive exclude globs (including a Sample preset), excludes matches before metadata analysis, previews excluded files separately, and can explicitly delete matched exclusions on confirmed apply.
