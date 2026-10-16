@@ -345,6 +345,7 @@ struct MediaOrganizerRequest: Encodable {
     let path: String
     let destination: String?
     let recursive: Bool
+    let excludePatterns: [String]
 }
 
 struct MediaOrganizerAnalyzeRequest: Encodable {
@@ -363,6 +364,7 @@ struct MediaOrganizerApplyRequest: Encodable {
     let destination: String?
     let recursive: Bool
     let includeLowConfidence: Bool
+    let deleteExcluded: Bool
     let overrides: [MediaOrganizerOverrideRequest]
 }
 
@@ -397,15 +399,28 @@ struct MediaOrganizerItem: Codable, Identifiable, Hashable {
     let action: String
 }
 
+struct MediaOrganizerExcludedItem: Codable, Identifiable, Hashable {
+    var id: String { source }
+    let source: String
+    let originalName: String
+    let relativePath: String
+    let matchedPattern: String
+}
+
 struct MediaOrganizerResponse: Codable {
     let root: String
     let destination: String
     let recursive: Bool
+    let totalFound: Int?
     let count: Int
+    let excludedCount: Int?
     let reviewCount: Int
+    let excludePatterns: [String]?
+    let excludedItems: [MediaOrganizerExcludedItem]?
     let items: [MediaOrganizerItem]
     let appliedCount: Int?
     let skippedCount: Int?
+    let deletedExcludedCount: Int?
     let errorCount: Int?
     let manifest: String?
 }
@@ -712,13 +727,15 @@ final class APIClient {
     func scanMediaOrganizer(
         path: String,
         destination: String?,
-        recursive: Bool
+        recursive: Bool,
+        excludePatterns: [String]
     ) async throws -> MediaOrganizerResponse {
         let body = try encoder.encode(
             MediaOrganizerRequest(
                 path: path,
                 destination: destination,
-                recursive: recursive
+                recursive: recursive,
+                excludePatterns: excludePatterns
             )
         )
         return try await request(
@@ -752,6 +769,8 @@ final class APIClient {
         destination: String?,
         recursive: Bool,
         includeLowConfidence: Bool,
+        deleteExcluded: Bool,
+        excludePatterns: [String],
         overrides: [MediaOrganizerOverrideRequest]
     ) async throws -> MediaOrganizerResponse {
         let body = try encoder.encode(
@@ -759,7 +778,9 @@ final class APIClient {
                 path: path,
                 destination: destination,
                 recursive: recursive,
+                excludePatterns: excludePatterns,
                 includeLowConfidence: includeLowConfidence,
+                deleteExcluded: deleteExcluded,
                 overrides: overrides
             )
         )
@@ -1120,7 +1141,8 @@ final class AppModel: ObservableObject {
     func scanMediaOrganizer(
         path: String,
         destination: String?,
-        recursive: Bool
+        recursive: Bool,
+        excludePatterns: [String]
     ) async {
         analyzedMediaItems.removeAll()
         loading = true
@@ -1129,7 +1151,8 @@ final class AppModel: ObservableObject {
             mediaOrganizer = try await api.scanMediaOrganizer(
                 path: path,
                 destination: destination,
-                recursive: recursive
+                recursive: recursive,
+                excludePatterns: excludePatterns
             )
             error = nil
         } catch {
@@ -1160,6 +1183,8 @@ final class AppModel: ObservableObject {
         destination: String?,
         recursive: Bool,
         includeLowConfidence: Bool,
+        deleteExcluded: Bool,
+        excludePatterns: [String],
         overrides: [MediaOrganizerOverrideRequest]
     ) async -> Bool {
         loading = true
@@ -1170,12 +1195,15 @@ final class AppModel: ObservableObject {
                 destination: destination,
                 recursive: recursive,
                 includeLowConfidence: includeLowConfidence,
+                deleteExcluded: deleteExcluded,
+                excludePatterns: excludePatterns,
                 overrides: overrides
             )
             mediaOrganizer = result
             let moved = result.appliedCount ?? 0
             let skipped = result.skippedCount ?? 0
-            message = "Media Organizer moved \(moved) file\(moved == 1 ? "" : "s"); skipped \(skipped)."
+            let deleted = result.deletedExcludedCount ?? 0
+            message = "Media Organizer moved \(moved) file\(moved == 1 ? "" : "s"); skipped \(skipped); deleted \(deleted) excluded."
             error = nil
             return true
         } catch {
@@ -1965,6 +1993,8 @@ struct MediaOrganizerView: View {
     @State private var reviewedTypes: [String: String] = [:]
     @State private var organizerFilter: MediaOrganizerFilter = .review
     @State private var organizerSearch = ""
+    @State private var excludePatternsText = ""
+    @State private var deleteExcluded = false
 
     private var plan: MediaOrganizerResponse? { model.mediaOrganizer }
 
@@ -2092,6 +2122,17 @@ struct MediaOrganizerView: View {
         )
     }
 
+    private var excludePatterns: [String] {
+        excludePatternsText
+            .split(whereSeparator: { $0 == "\n" || $0 == "," })
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var excludedCount: Int {
+        plan?.excludedCount ?? 0
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -2119,6 +2160,34 @@ struct MediaOrganizerView: View {
 
                     Toggle("Scan subfolders recursively", isOn: $recursive)
 
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Exclude patterns")
+                                .font(.headline)
+                            Spacer()
+                            Button("Add Sample Preset") {
+                                let preset = ["sample.*", "*/sample/*"]
+                                let existing = Set(excludePatterns.map { $0.lowercased() })
+                                let additions = preset.filter { !existing.contains($0.lowercased()) }
+                                let current = excludePatternsText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                excludePatternsText = ([current].filter { !$0.isEmpty } + additions)
+                                    .joined(separator: "\n")
+                            }
+                        }
+
+                        TextEditor(text: $excludePatternsText)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(minHeight: 58, maxHeight: 92)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(.quaternary)
+                            )
+
+                        Text("Case-insensitive glob patterns, one per line or comma-separated. Examples: Sample.avi, sample.*, */sample/*")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
                     HStack {
                         Button {
                             Task { await scan() }
@@ -2145,6 +2214,7 @@ struct MediaOrganizerView: View {
             if let plan {
                 HStack(spacing: 12) {
                     organizerMetric("Videos", plan.count)
+                    organizerMetric("Excluded", excludedCount)
                     organizerMetric("Needs Review", unresolvedReviewCount)
                     organizerMetric("Will Change", actionableCount)
                     Spacer()
@@ -2166,6 +2236,32 @@ struct MediaOrganizerView: View {
 
                     TextField("Search files, titles, folders…", text: $organizerSearch)
                         .textFieldStyle(.roundedBorder)
+                }
+
+                if let excluded = plan.excludedItems, !excluded.isEmpty {
+                    DisclosureGroup("Excluded Files (\(excluded.count))") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(excluded.prefix(100)) { item in
+                                HStack {
+                                    Image(systemName: "nosign")
+                                        .foregroundColor(.secondary)
+                                    Text(item.relativePath)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer()
+                                    Text(item.matchedPattern)
+                                        .font(.caption.monospaced())
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            if excluded.count > 100 {
+                                Text("Showing first 100 of \(excluded.count) excluded files.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
                 }
 
                 GroupBox("Proposed Changes") {
@@ -2215,6 +2311,11 @@ struct MediaOrganizerView: View {
                     Toggle("Include low-confidence filename guesses", isOn: $includeLowConfidence)
                         .help("Low-confidence files look like generic names such as video_0047.mp4 and are skipped by default.")
 
+                    if excludedCount > 0 {
+                        Toggle("Delete excluded files", isOn: $deleteExcluded)
+                            .help("Permanently deletes only files matched by the explicit exclude patterns when Apply is confirmed.")
+                    }
+
                     Spacer()
 
                     Button(role: .destructive) {
@@ -2259,6 +2360,8 @@ struct MediaOrganizerView: View {
                         destination: normalizedDestination,
                         recursive: recursive,
                         includeLowConfidence: includeLowConfidence,
+                        deleteExcluded: deleteExcluded,
+                        excludePatterns: excludePatterns,
                         overrides: reviewedOverrides
                     )
                     if ok {
@@ -2268,7 +2371,9 @@ struct MediaOrganizerView: View {
             }
         } message: {
             Text(
-                "Curator will move and rename \(actionableCount) file\(actionableCount == 1 ? "" : "s"). Existing files are never overwritten, and a JSON manifest is saved for the operation."
+                "Curator will move and rename \(actionableCount) file\(actionableCount == 1 ? "" : "s")." +
+                (deleteExcluded && excludedCount > 0 ? " It will also permanently delete \(excludedCount) excluded file\(excludedCount == 1 ? "" : "s")." : "") +
+                " Existing files are never overwritten, and a JSON manifest is saved for the operation."
             )
         }
     }
@@ -2287,7 +2392,8 @@ struct MediaOrganizerView: View {
         await model.scanMediaOrganizer(
             path: sourcePath.trimmingCharacters(in: .whitespacesAndNewlines),
             destination: normalizedDestination,
-            recursive: recursive
+            recursive: recursive,
+            excludePatterns: excludePatterns
         )
     }
 
