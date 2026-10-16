@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 import plex_curator as core
 import plex_curator_api as api
 
@@ -1042,3 +1044,163 @@ def test_media_organizer_preset_api_routes_registered():
     paths = {route.path for route in api.app.routes}
     assert "/api/v1/media-organizer/presets" in paths
     assert "/api/v1/media-organizer/presets/{preset_id}" in paths
+
+
+def test_media_identity_bulk_reports_progress(tmp_path, monkeypatch):
+    clips = []
+    for index in range(3):
+        clip = tmp_path / f"Clip {index}.mp4"
+        clip.write_bytes(b"fake")
+        clips.append(clip)
+
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+    progress = []
+    identities = core.infer_media_identities_bulk(
+        clips,
+        workers=2,
+        progress_callback=lambda current, total, path: progress.append(
+            (current, total, core.Path(path).name)
+        ),
+    )
+
+    assert len(identities) == 3
+    assert progress[-1][0:2] == (3, 3)
+
+
+def test_media_plan_can_cancel_during_discovery(tmp_path):
+    for index in range(5):
+        (tmp_path / f"Clip {index}.mp4").write_bytes(b"fake")
+
+    checks = {"count": 0}
+
+    def cancel_check():
+        checks["count"] += 1
+        return checks["count"] > 2
+
+    with pytest.raises(core.MediaOrganizerCancelled):
+        core.plan_media_organization(
+            tmp_path,
+            extract_review_frames=False,
+            metadata_workers=1,
+            cancel_check=cancel_check,
+        )
+
+
+def test_media_scan_job_runner_completes(monkeypatch):
+    job_id = "job-complete"
+    event = api.threading.Event()
+    api._media_scan_cancel_events[job_id] = event
+    api._media_scan_jobs[job_id] = {
+        "id": job_id,
+        "status": "queued",
+        "phase": "queued",
+        "current": 0,
+        "total": None,
+        "discovered_count": 0,
+        "processed_count": 0,
+        "total_count": None,
+        "excluded_count": 0,
+        "detail": None,
+        "cancel_requested": False,
+        "created_at": api._iso_now(),
+        "started_at": None,
+        "updated_at": api._iso_now(),
+        "result": None,
+        "error": None,
+        "_started_monotonic": None,
+        "_finished_monotonic": None,
+    }
+
+    def fake_plan(path, **kwargs):
+        kwargs["progress_callback"]({
+            "phase": "analyzing",
+            "current": 2,
+            "total": 2,
+            "excluded_count": 1,
+        })
+        return {
+            "root": path,
+            "destination": path,
+            "recursive": True,
+            "exclude_patterns": [],
+            "total_found": 3,
+            "count": 2,
+            "excluded_count": 1,
+            "review_count": 0,
+            "excluded_items": [],
+            "items": [],
+        }
+
+    monkeypatch.setattr(core, "plan_media_organization", fake_plan)
+    api._run_media_scan_job(job_id, {
+        "path": "/tmp/media",
+        "destination": None,
+        "recursive": True,
+        "exclude_patterns": [],
+    })
+
+    payload = api._media_scan_job_or_404(job_id)
+    assert payload["status"] == "completed"
+    assert payload["discovered_count"] == 3
+    assert payload["processed_count"] == 2
+    assert payload["excluded_count"] == 1
+    assert payload["result"]["count"] == 2
+
+    api._media_scan_jobs.pop(job_id, None)
+    api._media_scan_cancel_events.pop(job_id, None)
+
+
+def test_media_scan_job_runner_cancels(monkeypatch):
+    job_id = "job-cancel"
+    event = api.threading.Event()
+    api._media_scan_cancel_events[job_id] = event
+    api._media_scan_jobs[job_id] = {
+        "id": job_id,
+        "status": "queued",
+        "phase": "queued",
+        "current": 0,
+        "total": None,
+        "discovered_count": 0,
+        "processed_count": 0,
+        "total_count": None,
+        "excluded_count": 0,
+        "detail": None,
+        "cancel_requested": False,
+        "created_at": api._iso_now(),
+        "started_at": None,
+        "updated_at": api._iso_now(),
+        "result": None,
+        "error": None,
+        "_started_monotonic": None,
+        "_finished_monotonic": None,
+    }
+
+    def fake_plan(_path, **kwargs):
+        event.set()
+        raise core.MediaOrganizerCancelled()
+
+    monkeypatch.setattr(core, "plan_media_organization", fake_plan)
+    api._run_media_scan_job(job_id, {
+        "path": "/tmp/media",
+        "destination": None,
+        "recursive": True,
+        "exclude_patterns": [],
+    })
+
+    payload = api._media_scan_job_or_404(job_id)
+    assert payload["status"] == "cancelled"
+    assert payload["phase"] == "cancelled"
+
+    api._media_scan_jobs.pop(job_id, None)
+    api._media_scan_cancel_events.pop(job_id, None)
+
+
+def test_media_scan_job_routes_registered():
+    paths = {route.path for route in api.app.routes}
+    assert "/api/v1/media-organizer/scan-jobs" in paths
+    assert "/api/v1/media-organizer/scan-jobs/{job_id}" in paths
+    assert "/api/v1/media-organizer/scan-jobs/{job_id}/cancel" in paths
