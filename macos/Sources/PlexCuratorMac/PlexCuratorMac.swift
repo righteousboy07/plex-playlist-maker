@@ -363,6 +363,30 @@ struct MediaOrganizerPresetMutationResponse: Codable {
     let preset: MediaOrganizerPreset
 }
 
+struct MediaOrganizerScanJob: Codable, Identifiable {
+    let id: String
+    let status: String
+    let phase: String
+    let current: Int
+    let total: Int?
+    let discoveredCount: Int
+    let processedCount: Int
+    let totalCount: Int?
+    let excludedCount: Int
+    let detail: String?
+    let cancelRequested: Bool
+    let createdAt: String
+    let startedAt: String?
+    let updatedAt: String
+    let elapsedSeconds: Double
+    let result: MediaOrganizerResponse?
+    let error: String?
+
+    var isActive: Bool {
+        ["queued", "running", "cancelling"].contains(status)
+    }
+}
+
 struct MediaOrganizerRequest: Encodable {
     let path: String
     let destination: String?
@@ -809,6 +833,43 @@ final class APIClient {
         )
     }
 
+    func startMediaOrganizerScanJob(
+        path: String,
+        destination: String?,
+        recursive: Bool,
+        excludePatterns: [String]
+    ) async throws -> MediaOrganizerScanJob {
+        let body = try encoder.encode(
+            MediaOrganizerRequest(
+                path: path,
+                destination: destination,
+                recursive: recursive,
+                excludePatterns: excludePatterns
+            )
+        )
+        return try await request(
+            "/api/v1/media-organizer/scan-jobs",
+            method: "POST",
+            body: body
+        )
+    }
+
+    func mediaOrganizerScanJob(id: String) async throws -> MediaOrganizerScanJob {
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await request(
+            "/api/v1/media-organizer/scan-jobs/\(escaped)"
+        )
+    }
+
+    func cancelMediaOrganizerScanJob(id: String) async throws -> MediaOrganizerScanJob {
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await request(
+            "/api/v1/media-organizer/scan-jobs/\(escaped)/cancel",
+            method: "POST",
+            authenticated: true
+        )
+    }
+
     func scanMediaOrganizer(
         path: String,
         destination: String?,
@@ -1131,6 +1192,8 @@ final class AppModel: ObservableObject {
     @Published var playlists: [PlaylistSummary] = []
     @Published var schedules: [ScheduleSummary] = []
     @Published var mediaOrganizer: MediaOrganizerResponse?
+    @Published var mediaOrganizerScanJob: MediaOrganizerScanJob?
+    @Published var mediaOrganizerScanning = false
     @Published var mediaOrganizerPresets: [MediaOrganizerPreset] = []
     @Published var analyzedMediaItems: [String: MediaOrganizerItem] = [:]
     @Published var error: String?
@@ -1286,15 +1349,56 @@ final class AppModel: ObservableObject {
         excludePatterns: [String]
     ) async {
         analyzedMediaItems.removeAll()
-        loading = true
-        defer { loading = false }
+        mediaOrganizer = nil
+        mediaOrganizerScanJob = nil
+        mediaOrganizerScanning = true
+        defer { mediaOrganizerScanning = false }
+
         do {
-            mediaOrganizer = try await api.scanMediaOrganizer(
+            var job = try await api.startMediaOrganizerScanJob(
                 path: path,
                 destination: destination,
                 recursive: recursive,
                 excludePatterns: excludePatterns
             )
+            mediaOrganizerScanJob = job
+            error = nil
+
+            while job.isActive {
+                try await Task.sleep(nanoseconds: 500_000_000)
+                job = try await api.mediaOrganizerScanJob(id: job.id)
+                mediaOrganizerScanJob = job
+            }
+
+            switch job.status {
+            case "completed":
+                if let result = job.result {
+                    mediaOrganizer = result
+                    message = "Media scan completed: \(result.totalFound ?? result.count) videos found, \(result.excludedCount ?? 0) excluded."
+                    error = nil
+                } else {
+                    self.error = "Media scan completed without a result."
+                }
+            case "cancelled":
+                message = "Media scan cancelled."
+                error = nil
+            case "failed":
+                self.error = job.error ?? "Media scan failed."
+            default:
+                break
+            }
+        } catch is CancellationError {
+            message = "Media scan polling stopped."
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func cancelMediaOrganizerScan() async {
+        guard let job = mediaOrganizerScanJob, job.isActive else { return }
+        do {
+            mediaOrganizerScanJob = try await api.cancelMediaOrganizerScanJob(id: job.id)
+            message = "Media scan cancellation requested."
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -2427,9 +2531,9 @@ struct MediaOrganizerView: View {
                         } label: {
                             Label("Scan / Preview", systemImage: "magnifyingglass")
                         }
-                        .disabled(sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.loading)
+                        .disabled(sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.mediaOrganizerScanning)
 
-                        if model.loading {
+                        if model.mediaOrganizerScanning {
                             ProgressView()
                                 .controlSize(.small)
                         }
@@ -2442,6 +2546,77 @@ struct MediaOrganizerView: View {
                     }
                 }
                 .padding(4)
+                .disabled(model.mediaOrganizerScanning)
+            }
+
+            if let scanJob = model.mediaOrganizerScanJob {
+                GroupBox("Scan Progress") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(scanProgressTitle(scanJob))
+                                    .font(.headline)
+                                if let detail = scanJob.detail, !detail.isEmpty, scanJob.isActive {
+                                    Text(detail)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
+
+                            Spacer()
+
+                            Text(formatElapsed(scanJob.elapsedSeconds))
+                                .font(.caption.monospacedDigit())
+                                .foregroundColor(.secondary)
+
+                            if scanJob.isActive {
+                                Button("Cancel Scan", role: .destructive) {
+                                    Task { await model.cancelMediaOrganizerScan() }
+                                }
+                                .disabled(scanJob.cancelRequested || scanJob.status == "cancelling")
+                            }
+                        }
+
+                        if scanJob.phase == "analyzing",
+                           let total = scanJob.totalCount,
+                           total > 0 {
+                            ProgressView(
+                                value: Double(scanJob.processedCount),
+                                total: Double(total)
+                            )
+                        } else if scanJob.isActive {
+                            ProgressView()
+                        } else if scanJob.status == "completed" {
+                            ProgressView(value: 1, total: 1)
+                        }
+
+                        HStack(spacing: 16) {
+                            if scanJob.discoveredCount > 0 {
+                                Label(
+                                    "\(scanJob.discoveredCount) found",
+                                    systemImage: "film.stack"
+                                )
+                            }
+                            if let total = scanJob.totalCount, total > 0 {
+                                Label(
+                                    "\(scanJob.processedCount) / \(total) analyzed",
+                                    systemImage: "magnifyingglass"
+                                )
+                            }
+                            if scanJob.excludedCount > 0 {
+                                Label(
+                                    "\(scanJob.excludedCount) excluded",
+                                    systemImage: "nosign"
+                                )
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    }
+                    .padding(4)
+                }
             }
 
             if let plan {
@@ -2556,7 +2731,7 @@ struct MediaOrganizerView: View {
                     } label: {
                         Label("Apply \(actionableCount) Changes", systemImage: "folder.badge.plus")
                     }
-                    .disabled(actionableCount == 0 || model.loading)
+                    .disabled(actionableCount == 0 || model.loading || model.mediaOrganizerScanning)
                 }
 
                 if unresolvedReviewCount > 0 && !includeLowConfidence {
@@ -2614,6 +2789,45 @@ struct MediaOrganizerView: View {
                 " Existing files are never overwritten, and a JSON manifest is saved for the operation."
             )
         }
+    }
+
+    private func scanProgressTitle(_ job: MediaOrganizerScanJob) -> String {
+        switch job.status {
+        case "queued":
+            return "Scan queued…"
+        case "cancelling":
+            return "Cancelling scan…"
+        case "cancelled":
+            return "Scan cancelled"
+        case "failed":
+            return "Scan failed"
+        case "completed":
+            return "Scan complete"
+        default:
+            switch job.phase {
+            case "discovering":
+                return job.discoveredCount > 0
+                    ? "Finding videos… \(job.discoveredCount) found"
+                    : "Finding videos…"
+            case "analyzing":
+                if let total = job.totalCount, total > 0 {
+                    return "Analyzing \(job.processedCount) of \(total) files"
+                }
+                return "Analyzing files…"
+            case "finalizing":
+                return "Finalizing scan results…"
+            default:
+                return "Scanning…"
+            }
+        }
+    }
+
+    private func formatElapsed(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        if total >= 3600 {
+            return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+        }
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     private var normalizedDestination: String? {

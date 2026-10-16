@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- macOS Media Organizer now uses background scan jobs with live discovery/analyze/finalize progress, elapsed time, current-file detail, and Cancel Scan controls instead of one long-running HTTP request.
 - Added cancellable Media Organizer scan jobs with discovery/analyze/finalize progress, elapsed time, result polling, and bounded completed-job retention. The legacy synchronous scan endpoint remains available.
 - macOS Media Organizer can now load, create, update, duplicate, and delete persistent exclusion presets. The destructive Delete Excluded Files option remains runtime-only and is never saved in a preset.
 - Added persistent named Media Organizer exclusion presets, including a safe default Movie Cleanup preset. Presets store only exclusion rules; destructive delete settings are never persisted.
