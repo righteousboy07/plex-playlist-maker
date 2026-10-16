@@ -11,7 +11,7 @@ import random
 import re
 import shutil
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import sqlite3
 import sys
 from collections import Counter
@@ -860,22 +860,61 @@ def infer_media_identity(path, metadata=None):
         "metadata_title": metadata.get("title"),
     }
 
-def infer_media_identities_bulk(paths, workers=8):
+class MediaOrganizerCancelled(Exception):
+    pass
+
+def infer_media_identities_bulk(
+    paths,
+    workers=8,
+    progress_callback=None,
+    cancel_check=None,
+):
     paths = list(paths)
     if not paths:
         return {}
 
     worker_count = max(1, min(int(workers or 1), 12, len(paths)))
+    total = len(paths)
+
+    def cancelled():
+        return bool(cancel_check and cancel_check())
 
     def inspect(path):
+        if cancelled():
+            raise MediaOrganizerCancelled()
         metadata = probe_video_metadata(path)
+        if cancelled():
+            raise MediaOrganizerCancelled()
         return str(Path(path).resolve()), infer_media_identity(path, metadata=metadata)
 
+    identities = {}
     if worker_count == 1:
-        return dict(inspect(path) for path in paths)
+        for index, path in enumerate(paths, 1):
+            if cancelled():
+                raise MediaOrganizerCancelled()
+            key, identity = inspect(path)
+            identities[key] = identity
+            if progress_callback:
+                progress_callback(index, total, path)
+        return identities
 
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        return dict(executor.map(inspect, paths))
+    executor = ThreadPoolExecutor(max_workers=worker_count)
+    futures = {executor.submit(inspect, path): path for path in paths}
+    completed = 0
+    try:
+        for future in as_completed(futures):
+            if cancelled():
+                for pending in futures:
+                    pending.cancel()
+                raise MediaOrganizerCancelled()
+            key, identity = future.result()
+            identities[key] = identity
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, total, futures[future])
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+    return identities
 
 def normalize_exclude_patterns(patterns):
     normalized = []
@@ -909,11 +948,25 @@ def media_path_matches_excludes(path, root, patterns):
             return pattern
     return None
 
-def partition_video_files(root, recursive=True, exclude_patterns=None):
+def partition_video_files(
+    root,
+    recursive=True,
+    exclude_patterns=None,
+    progress_callback=None,
+    cancel_check=None,
+):
     root = Path(root).expanduser()
     included = []
     excluded = []
-    for path in iter_video_files(root, recursive=recursive):
+    files = iter_video_files(
+        root,
+        recursive=recursive,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
+    )
+    for path in files:
+        if cancel_check and cancel_check():
+            raise MediaOrganizerCancelled()
         matched = media_path_matches_excludes(path, root, exclude_patterns)
         if matched:
             excluded.append({
@@ -926,13 +979,34 @@ def partition_video_files(root, recursive=True, exclude_patterns=None):
             included.append(path)
     return included, excluded
 
-def iter_video_files(root, recursive=True):
+def iter_video_files(
+    root,
+    recursive=True,
+    progress_callback=None,
+    cancel_check=None,
+):
     root = Path(root).expanduser()
-    iterator = root.rglob("*") if recursive else root.glob("*")
-    return sorted(
-        path for path in iterator
-        if path.is_file() and path.suffix.casefold() in VIDEO_EXTENSIONS
-    )
+    found = []
+
+    if recursive:
+        iterator = root.rglob("*")
+    else:
+        iterator = root.glob("*")
+
+    for path in iterator:
+        if cancel_check and cancel_check():
+            raise MediaOrganizerCancelled()
+        try:
+            is_video = path.is_file() and path.suffix.casefold() in VIDEO_EXTENSIONS
+        except OSError:
+            is_video = False
+        if not is_video:
+            continue
+        found.append(path)
+        if progress_callback:
+            progress_callback(len(found), None, path)
+
+    return sorted(found)
 
 def unique_media_target(target, reserved):
     target = Path(target)
@@ -952,6 +1026,8 @@ def plan_media_organization(
     extract_review_frames=True,
     metadata_workers=1,
     exclude_patterns=None,
+    progress_callback=None,
+    cancel_check=None,
 ):
     root = Path(root).expanduser().resolve()
     if not root.exists() or not root.is_dir():
@@ -960,12 +1036,57 @@ def plan_media_organization(
     destination_root = Path(destination).expanduser().resolve() if destination else root
     plans = []
     reserved = set()
+    def emit_progress(phase, current=0, total=None, detail=None, excluded_count=0):
+        if progress_callback:
+            progress_callback({
+                "phase": phase,
+                "current": int(current or 0),
+                "total": int(total) if total is not None else None,
+                "detail": str(detail) if detail is not None else None,
+                "excluded_count": int(excluded_count or 0),
+            })
+
+    emit_progress("discovering", 0, None, root)
     sources, excluded_items = partition_video_files(
         root,
         recursive=recursive,
         exclude_patterns=exclude_patterns,
+        progress_callback=lambda current, total, path: emit_progress(
+            "discovering", current, total, path
+        ),
+        cancel_check=cancel_check,
     )
-    identities = infer_media_identities_bulk(sources, workers=metadata_workers)
+    if cancel_check and cancel_check():
+        raise MediaOrganizerCancelled()
+
+    emit_progress(
+        "analyzing",
+        0,
+        len(sources),
+        None,
+        excluded_count=len(excluded_items),
+    )
+    identities = infer_media_identities_bulk(
+        sources,
+        workers=metadata_workers,
+        progress_callback=lambda current, total, path: emit_progress(
+            "analyzing",
+            current,
+            total,
+            path,
+            excluded_count=len(excluded_items),
+        ),
+        cancel_check=cancel_check,
+    )
+    if cancel_check and cancel_check():
+        raise MediaOrganizerCancelled()
+    emit_progress(
+        "finalizing",
+        len(sources),
+        len(sources),
+        None,
+        excluded_count=len(excluded_items),
+    )
     override_map = {}
     for override in overrides or []:
         source_key = str(Path(override.get("source", "")).expanduser().resolve())
@@ -973,6 +1094,8 @@ def plan_media_organization(
             override_map[source_key] = override
 
     for source in sources:
+        if cancel_check and cancel_check():
+            raise MediaOrganizerCancelled()
         identity = dict(identities[str(source.resolve())])
         override = override_map.get(str(source.resolve()))
         reviewed = False
@@ -1030,6 +1153,13 @@ def plan_media_organization(
             "action": action,
         })
 
+    emit_progress(
+        "complete",
+        len(sources),
+        len(sources),
+        None,
+        excluded_count=len(excluded_items),
+    )
     return {
         "root": str(root),
         "destination": str(destination_root),
