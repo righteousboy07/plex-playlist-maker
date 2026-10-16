@@ -723,3 +723,67 @@ def test_find_media_tool_falls_back_to_homebrew_paths(monkeypatch):
         assert core.find_media_tool("ffmpeg") == "/opt/homebrew/bin/ffmpeg"
     finally:
         monkeypatch.setattr(core, "Path", original_path)
+
+
+def test_review_override_promotes_low_confidence_and_changes_target(tmp_path, monkeypatch):
+    clip = tmp_path / "video_0047.mp4"
+    clip.write_bytes(b"fake")
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+
+    plan = core.plan_media_organization(
+        tmp_path,
+        overrides=[{
+            "source": str(clip),
+            "title": "Nickelodeon Slime Bumper 1997",
+            "type": "bumper",
+        }],
+    )
+    item = plan["items"][0]
+
+    assert item["confidence"] == "reviewed"
+    assert item["reviewed"] is True
+    assert item["title_source"] == "review"
+    assert item["folder"] == "Bumpers"
+    assert item["proposed_name"] == "Nickelodeon Slime Bumper 1997.mp4"
+
+
+def test_reviewed_low_confidence_clip_can_apply_without_bulk_override(tmp_path, monkeypatch):
+    clip = tmp_path / "video_0047.mp4"
+    clip.write_bytes(b"fake")
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+    monkeypatch.setattr(core, "EXPORT_DIR", tmp_path / "exports")
+    monkeypatch.setattr(core, "CONFIG_DIR", tmp_path / "config")
+
+    plan = core.plan_media_organization(
+        tmp_path,
+        overrides=[{
+            "source": str(clip),
+            "title": "Retro Station ID 1996",
+            "type": "station-id",
+        }],
+    )
+    result = core.apply_media_organization(plan, include_low_confidence=False)
+
+    assert result["applied_count"] == 1
+    assert (tmp_path / "Station IDs" / "Retro Station ID 1996.mp4").exists()
+
+
+def test_media_override_api_model():
+    override = api.MediaOrganizerOverride(
+        source="/tmp/video_0047.mp4",
+        title="Nickelodeon Bumper 1997",
+        type="bumper",
+    )
+    request = api.MediaOrganizerApplyRequest(
+        path="/tmp",
+        overrides=[override],
+    )
+    assert request.overrides[0].type == "bumper"
