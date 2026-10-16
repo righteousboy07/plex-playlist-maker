@@ -787,3 +787,78 @@ def test_media_override_api_model():
         overrides=[override],
     )
     assert request.overrides[0].type == "bumper"
+
+
+def test_fast_media_plan_defers_review_frames(tmp_path, monkeypatch):
+    clips = []
+    for index in range(4):
+        clip = tmp_path / f"video_{index:04}.mp4"
+        clip.write_bytes(b"fake")
+        clips.append(clip)
+
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+    monkeypatch.setattr(
+        core,
+        "extract_media_review_frames",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bulk scan must not extract frames")
+        ),
+    )
+
+    plan = core.plan_media_organization(
+        tmp_path,
+        extract_review_frames=False,
+        metadata_workers=4,
+    )
+
+    assert plan["count"] == 4
+    assert plan["review_count"] == 4
+    assert all(item["review_frame_status"] == "deferred" for item in plan["items"])
+
+
+def test_bulk_identity_scan_returns_each_source(tmp_path, monkeypatch):
+    paths = []
+    for index in range(3):
+        clip = tmp_path / f"Bumper {index}.mp4"
+        clip.write_bytes(b"fake")
+        paths.append(clip)
+
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+
+    identities = core.infer_media_identities_bulk(paths, workers=3)
+    assert set(identities) == {str(path.resolve()) for path in paths}
+
+
+def test_single_file_analysis_generates_frames_for_mystery_clip(tmp_path, monkeypatch):
+    clip = tmp_path / "video_0047.mp4"
+    clip.write_bytes(b"fake")
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+    monkeypatch.setattr(
+        core,
+        "extract_media_review_frames",
+        lambda _path, frame_count=3: {
+            "status": "available",
+            "frames": [{"id": "abc/frame-1.jpg", "position": 0.5, "timestamp_seconds": 5}],
+        },
+    )
+
+    item = core.analyze_media_organizer_file(clip)
+    assert item["review_frame_status"] == "available"
+    assert len(item["review_frames"]) == 1
+
+
+def test_media_organizer_analyze_route_registered():
+    paths = {route.path for route in api.app.routes}
+    assert "/api/v1/media-organizer/analyze" in paths
