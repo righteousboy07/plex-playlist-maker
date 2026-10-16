@@ -938,3 +938,29 @@ def test_media_organizer_request_accepts_excludes_and_delete_flag():
     )
     assert request.exclude_patterns == ["sample.*", "*/sample/*"]
     assert request.delete_excluded is True
+
+
+def test_media_organizer_apply_preserves_exclude_patterns(monkeypatch):
+    captured = {}
+
+    def fake_plan(path, **kwargs):
+        captured["path"] = path
+        captured.update(kwargs)
+        return {"items": [], "excluded_items": []}
+
+    monkeypatch.setattr(core, "plan_media_organization", fake_plan)
+    monkeypatch.setattr(
+        core,
+        "apply_media_organization",
+        lambda plan, **kwargs: {"ok": True, "plan": plan, **kwargs},
+    )
+
+    request = api.MediaOrganizerApplyRequest(
+        path="/tmp/movies",
+        exclude_patterns=["sample.*", "*/sample/*"],
+        delete_excluded=True,
+    )
+    result = api.media_organizer_apply(request, _authorized=True)
+
+    assert captured["exclude_patterns"] == ["sample.*", "*/sample/*"]
+    assert result["delete_excluded"] is True

@@ -740,6 +740,7 @@ def media_organizer_apply(
             overrides=[override.model_dump() for override in request.overrides],
             extract_review_frames=False,
             metadata_workers=8,
+            exclude_patterns=request.exclude_patterns,
         )
         return core.apply_media_organization(
             plan,
