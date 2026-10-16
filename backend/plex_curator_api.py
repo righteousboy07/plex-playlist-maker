@@ -52,6 +52,10 @@ class MediaOrganizerOverride(BaseModel):
     title: Optional[str] = Field(default=None, max_length=240)
     type: Optional[str] = None
 
+class MediaOrganizerAnalyzeRequest(BaseModel):
+    source: str = Field(min_length=1, max_length=4096)
+    destination: Optional[str] = Field(default=None, max_length=4096)
+
 class MediaOrganizerApplyRequest(MediaOrganizerRequest):
     include_low_confidence: bool = False
     overrides: list[MediaOrganizerOverride] = Field(default_factory=list)
@@ -686,10 +690,22 @@ def media_organizer_scan(request: MediaOrganizerRequest):
             request.path,
             destination=request.destination,
             recursive=request.recursive,
+            extract_review_frames=False,
+            metadata_workers=8,
         )
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {**plan, "read_only": True}
+
+@app.post("/api/v1/media-organizer/analyze")
+def media_organizer_analyze(request: MediaOrganizerAnalyzeRequest):
+    try:
+        return core.analyze_media_organizer_file(
+            request.source,
+            destination=request.destination,
+        )
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 @app.get("/api/v1/media-organizer/frame/{cache_key}/{frame_name}")
 def media_organizer_frame(cache_key: str, frame_name: str):
@@ -719,6 +735,8 @@ def media_organizer_apply(
             destination=request.destination,
             recursive=request.recursive,
             overrides=[override.model_dump() for override in request.overrides],
+            extract_review_frames=False,
+            metadata_workers=8,
         )
         return core.apply_media_organization(
             plan,

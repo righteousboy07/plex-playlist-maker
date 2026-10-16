@@ -10,6 +10,7 @@ import random
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 import sqlite3
 import sys
 from collections import Counter
@@ -729,9 +730,9 @@ def infer_interstitial_type(path, metadata=None):
             return media_type
     return "general"
 
-def infer_media_identity(path):
+def infer_media_identity(path, metadata=None):
     path = Path(path)
-    metadata = probe_video_metadata(path)
+    metadata = metadata if metadata is not None else probe_video_metadata(path)
     metadata_title = clean_media_title(metadata.get("title")) if metadata.get("title") else None
     filename_title = clean_media_title(path.stem)
 
@@ -757,6 +758,23 @@ def infer_media_identity(path):
         "metadata_title": metadata.get("title"),
     }
 
+def infer_media_identities_bulk(paths, workers=8):
+    paths = list(paths)
+    if not paths:
+        return {}
+
+    worker_count = max(1, min(int(workers or 1), 12, len(paths)))
+
+    def inspect(path):
+        metadata = probe_video_metadata(path)
+        return str(Path(path).resolve()), infer_media_identity(path, metadata=metadata)
+
+    if worker_count == 1:
+        return dict(inspect(path) for path in paths)
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        return dict(executor.map(inspect, paths))
+
 def iter_video_files(root, recursive=True):
     root = Path(root).expanduser()
     iterator = root.rglob("*") if recursive else root.glob("*")
@@ -775,7 +793,14 @@ def unique_media_target(target, reserved):
     reserved.add(str(candidate).casefold())
     return candidate
 
-def plan_media_organization(root, destination=None, recursive=True, overrides=None):
+def plan_media_organization(
+    root,
+    destination=None,
+    recursive=True,
+    overrides=None,
+    extract_review_frames=True,
+    metadata_workers=1,
+):
     root = Path(root).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise SystemExit(f"Media organizer source folder not found: {root}")
@@ -783,14 +808,16 @@ def plan_media_organization(root, destination=None, recursive=True, overrides=No
     destination_root = Path(destination).expanduser().resolve() if destination else root
     plans = []
     reserved = set()
+    sources = iter_video_files(root, recursive=recursive)
+    identities = infer_media_identities_bulk(sources, workers=metadata_workers)
     override_map = {}
     for override in overrides or []:
         source_key = str(Path(override.get("source", "")).expanduser().resolve())
         if source_key:
             override_map[source_key] = override
 
-    for source in iter_video_files(root, recursive=recursive):
-        identity = infer_media_identity(source)
+    for source in sources:
+        identity = dict(identities[str(source.resolve())])
         override = override_map.get(str(source.resolve()))
         reviewed = False
         if override:
@@ -809,8 +836,15 @@ def plan_media_organization(root, destination=None, recursive=True, overrides=No
             reviewed = True
         review = (
             extract_media_review_frames(source, frame_count=3)
-            if identity["confidence"] == "low"
-            else {"status": "not-needed", "frames": []}
+            if extract_review_frames and identity["confidence"] == "low"
+            else {
+                "status": (
+                    "deferred"
+                    if identity["confidence"] == "low"
+                    else "not-needed"
+                ),
+                "frames": [],
+            }
         )
         folder_name = INTERSTITIAL_TYPE_FOLDERS[identity["type"]]
         target_dir = destination_root / folder_name
@@ -847,6 +881,43 @@ def plan_media_organization(root, destination=None, recursive=True, overrides=No
         "count": len(plans),
         "review_count": sum(1 for item in plans if item["confidence"] == "low"),
         "items": plans,
+    }
+
+def analyze_media_organizer_file(source, destination=None):
+    source = Path(source).expanduser().resolve()
+    if not source.exists() or not source.is_file():
+        raise SystemExit(f"Media organizer file not found: {source}")
+    if source.suffix.casefold() not in VIDEO_EXTENSIONS:
+        raise SystemExit(f"Unsupported video file: {source.name}")
+
+    destination_root = (
+        Path(destination).expanduser().resolve()
+        if destination
+        else source.parent
+    )
+    identity = infer_media_identity(source)
+    review = (
+        extract_media_review_frames(source, frame_count=3)
+        if identity["confidence"] == "low"
+        else {"status": "not-needed", "frames": []}
+    )
+    folder_name = INTERSTITIAL_TYPE_FOLDERS[identity["type"]]
+    target = destination_root / folder_name / f'{identity["title"]}{source.suffix.casefold()}'
+    return {
+        "source": str(source),
+        "target": str(target),
+        "original_name": source.name,
+        "proposed_name": target.name,
+        "title": identity["title"],
+        "type": identity["type"],
+        "folder": folder_name,
+        "confidence": identity["confidence"],
+        "title_source": identity["title_source"],
+        "metadata_title": identity["metadata_title"],
+        "reviewed": False,
+        "review_frame_status": review["status"],
+        "review_frames": review["frames"],
+        "action": "unchanged" if source == target else "move",
     }
 
 def write_media_organizer_manifest(plan, applied=False):
