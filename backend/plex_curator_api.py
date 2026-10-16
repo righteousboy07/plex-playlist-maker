@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.5"
+API_VERSION = "1.6"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
 KIDS_SCARY_WISHLIST = core.APP_DIR / "examples" / "kids-scary-missing-wishlist.txt"
@@ -41,6 +41,11 @@ class RefreshRequest(BaseModel):
 class RefreshAllRequest(BaseModel):
     dry_run: bool = False
     include_disabled: bool = False
+
+class MediaOrganizerPresetRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    exclude_patterns: list[str] = Field(default_factory=list)
 
 class MediaOrganizerRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
@@ -684,6 +689,57 @@ def station_refresh_all(
         "dry_run": request.dry_run,
         "results": results,
     }
+
+@app.get("/api/v1/media-organizer/presets")
+def media_organizer_presets():
+    return {"presets": list(core.load_media_organizer_presets().values())}
+
+@app.post("/api/v1/media-organizer/presets")
+def media_organizer_preset_create(
+    request: MediaOrganizerPresetRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        return {
+            "ok": True,
+            "preset": core.upsert_media_organizer_preset(
+                name=request.name,
+                description=request.description,
+                exclude_patterns=request.exclude_patterns,
+            ),
+        }
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+@app.put("/api/v1/media-organizer/presets/{preset_id}")
+def media_organizer_preset_update(
+    preset_id: str,
+    request: MediaOrganizerPresetRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        return {
+            "ok": True,
+            "preset": core.upsert_media_organizer_preset(
+                name=request.name,
+                description=request.description,
+                exclude_patterns=request.exclude_patterns,
+                preset_id=preset_id,
+            ),
+        }
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+@app.delete("/api/v1/media-organizer/presets/{preset_id}")
+def media_organizer_preset_delete(
+    preset_id: str,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        deleted = core.delete_media_organizer_preset(preset_id)
+        return {"ok": True, "preset": deleted}
+    except SystemExit as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 @app.post("/api/v1/media-organizer/scan")
 def media_organizer_scan(request: MediaOrganizerRequest):
