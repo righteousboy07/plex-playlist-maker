@@ -641,3 +641,63 @@ def test_media_organizer_api_routes_registered():
     paths = {route.path for route in api.app.routes}
     assert "/api/v1/media-organizer/scan" in paths
     assert "/api/v1/media-organizer/apply" in paths
+
+
+def test_media_review_cache_key_changes_when_file_changes(tmp_path):
+    clip = tmp_path / "mystery.mp4"
+    clip.write_bytes(b"one")
+    first = core.media_review_cache_key(clip)
+    clip.write_bytes(b"two-two")
+    second = core.media_review_cache_key(clip)
+    assert first != second
+
+
+def test_low_confidence_plan_includes_review_frames(tmp_path, monkeypatch):
+    clip = tmp_path / "video_0047.mp4"
+    clip.write_bytes(b"fake")
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+    monkeypatch.setattr(
+        core,
+        "extract_media_review_frames",
+        lambda _path, frame_count=3: {
+            "status": "available",
+            "frames": [
+                {"id": "abc/frame-1.jpg", "position": 0.12, "timestamp_seconds": 1.2},
+                {"id": "abc/frame-2.jpg", "position": 0.5, "timestamp_seconds": 5.0},
+            ],
+        },
+    )
+
+    plan = core.plan_media_organization(tmp_path)
+    item = plan["items"][0]
+    assert item["review_frame_status"] == "available"
+    assert len(item["review_frames"]) == 2
+
+
+def test_medium_confidence_plan_does_not_extract_review_frames(tmp_path, monkeypatch):
+    clip = tmp_path / "Cartoon Network Bumper 1999.mp4"
+    clip.write_bytes(b"fake")
+    monkeypatch.setattr(
+        core,
+        "probe_video_metadata",
+        lambda _path: {"title": None, "comment": None, "description": None, "source": None},
+    )
+    monkeypatch.setattr(
+        core,
+        "extract_media_review_frames",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not run")),
+    )
+
+    plan = core.plan_media_organization(tmp_path)
+    item = plan["items"][0]
+    assert item["review_frame_status"] == "not-needed"
+    assert item["review_frames"] == []
+
+
+def test_media_organizer_frame_route_registered():
+    paths = {route.path for route in api.app.routes}
+    assert "/api/v1/media-organizer/frame/{cache_key}/{frame_name}" in paths

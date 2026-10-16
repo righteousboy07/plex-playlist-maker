@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -12,12 +13,12 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.4"
+API_VERSION = "1.5"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
 KIDS_SCARY_WISHLIST = core.APP_DIR / "examples" / "kids-scary-missing-wishlist.txt"
@@ -683,6 +684,23 @@ def media_organizer_scan(request: MediaOrganizerRequest):
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {**plan, "read_only": True}
+
+@app.get("/api/v1/media-organizer/frame/{cache_key}/{frame_name}")
+def media_organizer_frame(cache_key: str, frame_name: str):
+    if not re.fullmatch(r"[a-f0-9]{24}", cache_key):
+        raise HTTPException(status_code=404, detail="Unknown review frame.")
+    if not re.fullmatch(r"frame-[1-5]\.jpg", frame_name):
+        raise HTTPException(status_code=404, detail="Unknown review frame.")
+
+    candidate = (core.REVIEW_FRAMES_DIR / cache_key / frame_name).resolve()
+    root = core.REVIEW_FRAMES_DIR.resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Unknown review frame.")
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Review frame not found.")
+    return FileResponse(candidate, media_type="image/jpeg")
 
 @app.post("/api/v1/media-organizer/apply")
 def media_organizer_apply(
