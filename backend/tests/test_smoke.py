@@ -964,3 +964,81 @@ def test_media_organizer_apply_preserves_exclude_patterns(monkeypatch):
 
     assert captured["exclude_patterns"] == ["sample.*", "*/sample/*"]
     assert result["delete_excluded"] is True
+
+
+def test_media_organizer_presets_seed_movie_cleanup(tmp_path, monkeypatch):
+    monkeypatch.setattr(core, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(core, "MEDIA_ORGANIZER_PRESETS_FILE", tmp_path / "media-organizer-presets.json")
+    monkeypatch.setattr(core, "EXPORT_DIR", tmp_path / "exports")
+    monkeypatch.setattr(core, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(core, "PRESETS_FILE", tmp_path / "presets.json")
+    monkeypatch.setattr(core, "SCHEDULES_FILE", tmp_path / "schedules.json")
+    monkeypatch.setattr(core, "STATIONS_FILE", tmp_path / "stations.json")
+    monkeypatch.setattr(core, "STATE_DB", tmp_path / "state.sqlite3")
+
+    presets = core.load_media_organizer_presets()
+
+    assert presets["movie-cleanup"]["name"] == "Movie Cleanup"
+    assert presets["movie-cleanup"]["exclude_patterns"] == ["sample.*", "*/sample/*"]
+
+
+def test_media_organizer_preset_crud(tmp_path, monkeypatch):
+    preset_file = tmp_path / "media-organizer-presets.json"
+    preset_file.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(core, "MEDIA_ORGANIZER_PRESETS_FILE", preset_file)
+    monkeypatch.setattr(core, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(core, "EXPORT_DIR", tmp_path / "exports")
+    monkeypatch.setattr(core, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(core, "PRESETS_FILE", tmp_path / "presets.json")
+    monkeypatch.setattr(core, "SCHEDULES_FILE", tmp_path / "schedules.json")
+    monkeypatch.setattr(core, "STATIONS_FILE", tmp_path / "stations.json")
+    monkeypatch.setattr(core, "STATE_DB", tmp_path / "state.sqlite3")
+
+    created = core.upsert_media_organizer_preset(
+        "Downloads Cleanup",
+        ["sample.*", "*trailer*"],
+        description="Skip disposable downloads extras.",
+    )
+    assert created["id"] == "downloads-cleanup"
+
+    updated = core.upsert_media_organizer_preset(
+        "Downloads Cleanup",
+        ["sample.*"],
+        preset_id="downloads-cleanup",
+    )
+    assert updated["exclude_patterns"] == ["sample.*"]
+
+    deleted = core.delete_media_organizer_preset("downloads-cleanup")
+    assert deleted["name"] == "Downloads Cleanup"
+    assert "downloads-cleanup" not in core.load_media_organizer_presets()
+
+
+def test_resolve_media_organizer_excludes_merges_presets_and_explicit(tmp_path, monkeypatch):
+    preset_file = tmp_path / "media-organizer-presets.json"
+    preset_file.write_text(json.dumps({
+        "movie-cleanup": {
+            "name": "Movie Cleanup",
+            "description": "",
+            "exclude_patterns": ["sample.*", "*/sample/*"],
+        }
+    }), encoding="utf-8")
+    monkeypatch.setattr(core, "MEDIA_ORGANIZER_PRESETS_FILE", preset_file)
+    monkeypatch.setattr(core, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(core, "EXPORT_DIR", tmp_path / "exports")
+    monkeypatch.setattr(core, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(core, "PRESETS_FILE", tmp_path / "presets.json")
+    monkeypatch.setattr(core, "SCHEDULES_FILE", tmp_path / "schedules.json")
+    monkeypatch.setattr(core, "STATIONS_FILE", tmp_path / "stations.json")
+    monkeypatch.setattr(core, "STATE_DB", tmp_path / "state.sqlite3")
+
+    patterns = core.resolve_media_organizer_excludes(
+        ["movie-cleanup"],
+        ["Sample.avi", "sample.*"],
+    )
+    assert patterns == ["sample.*", "*/sample/*", "Sample.avi"]
+
+
+def test_media_organizer_preset_api_routes_registered():
+    paths = {route.path for route in api.app.routes}
+    assert "/api/v1/media-organizer/presets" in paths
+    assert "/api/v1/media-organizer/presets/{preset_id}" in paths
