@@ -32,6 +32,7 @@ STATE_DB = CONFIG_DIR / "state.sqlite3"
 PRESETS_FILE = CONFIG_DIR / "presets.json"
 SCHEDULES_FILE = CONFIG_DIR / "schedules.json"
 STATIONS_FILE = CONFIG_DIR / "stations.json"
+MEDIA_ORGANIZER_PRESETS_FILE = CONFIG_DIR / "media-organizer-presets.json"
 EXPORT_DIR = CONFIG_DIR / "exports"
 BACKUP_DIR = CONFIG_DIR / "backups"
 REVIEW_FRAMES_DIR = CONFIG_DIR / "review-frames"
@@ -52,6 +53,14 @@ MEDIA_NOISE_TOKENS = {
     "1080p", "720p", "480p", "2160p", "4k", "uhd", "hdr", "x264", "x265",
     "h264", "h265", "hevc", "av1", "aac", "ac3", "webdl", "web-dl", "webrip",
     "bluray", "blu-ray", "dvdrip", "remux", "proper", "repack", "yt", "youtube",
+}
+
+DEFAULT_MEDIA_ORGANIZER_PRESETS = {
+    "movie-cleanup": {
+        "name": "Movie Cleanup",
+        "description": "Skip common disposable sample video files before scanning.",
+        "exclude_patterns": ["sample.*", "*/sample/*"],
+    },
 }
 
 
@@ -293,6 +302,11 @@ def ensure_config():
         SCHEDULES_FILE.write_text(json.dumps(DEFAULT_SCHEDULES, indent=2), encoding="utf-8")
     if not STATIONS_FILE.exists():
         STATIONS_FILE.write_text(json.dumps(DEFAULT_STATIONS, indent=2), encoding="utf-8")
+    if not MEDIA_ORGANIZER_PRESETS_FILE.exists():
+        MEDIA_ORGANIZER_PRESETS_FILE.write_text(
+            json.dumps(DEFAULT_MEDIA_ORGANIZER_PRESETS, indent=2) + "\n",
+            encoding="utf-8",
+        )
     init_db()
 
 def init_db():
@@ -501,6 +515,93 @@ def parse_title_spec(spec):
     except ValueError:
         return spec.strip(), None
 
+
+def media_organizer_preset_id(value):
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().casefold()).strip("-")
+    if not slug:
+        raise SystemExit("Media Organizer preset name must contain letters or numbers.")
+    return slug
+
+def normalize_media_organizer_preset(preset_id, raw):
+    if not isinstance(raw, dict):
+        raise SystemExit(f'Invalid Media Organizer preset "{preset_id}".')
+    name = str(raw.get("name") or preset_id).strip()
+    if not name:
+        raise SystemExit(f'Media Organizer preset "{preset_id}" requires a name.')
+    return {
+        "id": preset_id,
+        "name": name,
+        "description": str(raw.get("description") or "").strip(),
+        "exclude_patterns": normalize_exclude_patterns(raw.get("exclude_patterns") or []),
+    }
+
+def load_media_organizer_presets():
+    ensure_config()
+    try:
+        payload = json.loads(MEDIA_ORGANIZER_PRESETS_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"Could not read Media Organizer presets: {exc}")
+    if not isinstance(payload, dict):
+        raise SystemExit("Media Organizer presets file must contain a JSON object.")
+    return {
+        preset_id: normalize_media_organizer_preset(preset_id, raw)
+        for preset_id, raw in payload.items()
+    }
+
+def save_media_organizer_presets(presets):
+    ensure_config()
+    payload = {}
+    for preset_id, preset in sorted(presets.items()):
+        normalized = normalize_media_organizer_preset(preset_id, preset)
+        payload[preset_id] = {
+            "name": normalized["name"],
+            "description": normalized["description"],
+            "exclude_patterns": normalized["exclude_patterns"],
+        }
+    temp = MEDIA_ORGANIZER_PRESETS_FILE.with_suffix(".json.tmp")
+    temp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temp.replace(MEDIA_ORGANIZER_PRESETS_FILE)
+
+def upsert_media_organizer_preset(name, exclude_patterns, description="", preset_id=None):
+    presets = load_media_organizer_presets()
+    if preset_id:
+        resolved_id = media_organizer_preset_id(preset_id)
+    else:
+        base = media_organizer_preset_id(name)
+        resolved_id = base
+        counter = 2
+        while resolved_id in presets:
+            resolved_id = f"{base}-{counter}"
+            counter += 1
+
+    presets[resolved_id] = {
+        "name": str(name).strip(),
+        "description": str(description or "").strip(),
+        "exclude_patterns": normalize_exclude_patterns(exclude_patterns),
+    }
+    save_media_organizer_presets(presets)
+    return load_media_organizer_presets()[resolved_id]
+
+def delete_media_organizer_preset(preset_id):
+    preset_id = media_organizer_preset_id(preset_id)
+    presets = load_media_organizer_presets()
+    if preset_id not in presets:
+        raise SystemExit(f'Unknown Media Organizer preset "{preset_id}".')
+    deleted = presets.pop(preset_id)
+    save_media_organizer_presets(presets)
+    return deleted
+
+def resolve_media_organizer_excludes(preset_ids=None, explicit_patterns=None):
+    presets = load_media_organizer_presets() if preset_ids else {}
+    patterns = []
+    for preset_id in preset_ids or []:
+        normalized_id = media_organizer_preset_id(preset_id)
+        preset = presets.get(normalized_id)
+        if not preset:
+            raise SystemExit(f'Unknown Media Organizer preset "{preset_id}".')
+        patterns.extend(preset["exclude_patterns"])
+    patterns.extend(explicit_patterns or [])
+    return normalize_exclude_patterns(patterns)
 
 # ---------------------------------------------------------------------------
 # Local interstitial media organizer
@@ -1079,11 +1180,15 @@ def print_media_organizer_plan(plan):
         )
 
 def cmd_media_organize(args):
+    exclude_patterns = resolve_media_organizer_excludes(
+        preset_ids=args.exclude_preset or [],
+        explicit_patterns=args.exclude or [],
+    )
     plan = plan_media_organization(
         args.path,
         destination=args.destination,
         recursive=not args.no_recursive,
-        exclude_patterns=args.exclude or [],
+        exclude_patterns=exclude_patterns,
     )
     if args.json:
         print(json.dumps(plan, indent=2, ensure_ascii=False))
@@ -1118,6 +1223,28 @@ def cmd_media_organize(args):
         raise SystemExit(1)
 
 
+def cmd_media_preset_list(args):
+    presets = load_media_organizer_presets()
+    if args.json:
+        print(json.dumps({"presets": list(presets.values())}, indent=2))
+        return
+    for preset_id, preset in presets.items():
+        patterns = ", ".join(preset["exclude_patterns"]) or "(none)"
+        print(f'{preset_id}\t{preset["name"]}\t{patterns}')
+
+def cmd_media_preset_save(args):
+    preset = upsert_media_organizer_preset(
+        name=args.name,
+        description=args.description or "",
+        exclude_patterns=args.exclude or [],
+        preset_id=args.preset_id,
+    )
+    print(json.dumps(preset, indent=2) if args.json else f'Saved preset: {preset["id"]} ({preset["name"]})')
+
+def cmd_media_preset_delete(args):
+    deleted = delete_media_organizer_preset(args.preset_id)
+    print(json.dumps(deleted, indent=2) if args.json else f'Deleted preset: {args.preset_id}')
+
 # ---------------------------------------------------------------------------
 # Backups / reliability helpers (v11)
 # ---------------------------------------------------------------------------
@@ -1141,7 +1268,13 @@ def create_backup(reason="manual"):
     target.mkdir(parents=True, exist_ok=False)
 
     copied = []
-    for src in (CONFIG_FILE, PRESETS_FILE, SCHEDULES_FILE, STATIONS_FILE):
+    for src in (
+        CONFIG_FILE,
+        PRESETS_FILE,
+        SCHEDULES_FILE,
+        STATIONS_FILE,
+        MEDIA_ORGANIZER_PRESETS_FILE,
+    ):
         if src.exists():
             dest = target / src.name
             shutil.copy2(src, dest)
@@ -3300,11 +3433,29 @@ def build_parser():
     p.add_argument("--destination", help="Destination root; defaults to organizing inside the source folder.")
     p.add_argument("--no-recursive", action="store_true", help="Only scan the top-level folder.")
     p.add_argument("--exclude", action="append", help="Case-insensitive glob to skip before metadata analysis; repeat as needed (example: sample.*).")
+    p.add_argument("--exclude-preset", action="append", help="Named Media Organizer exclusion preset to apply; repeat as needed.")
     p.add_argument("--delete-excluded", action="store_true", help="With --apply, permanently delete files matched by --exclude.")
     p.add_argument("--apply", action="store_true", help="Move and rename medium/high-confidence matches.")
     p.add_argument("--include-low-confidence", action="store_true", help="Also apply low-confidence filename guesses.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_media_organize)
+
+    p = sp.add_parser("media-preset-list", help="List saved Media Organizer exclusion presets.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_media_preset_list)
+
+    p = sp.add_parser("media-preset-save", help="Create or update a Media Organizer exclusion preset.")
+    p.add_argument("name")
+    p.add_argument("--preset-id", help="Update this preset ID; omit to create a new preset.")
+    p.add_argument("--description")
+    p.add_argument("--exclude", action="append", default=[], help="Case-insensitive exclusion glob; repeat as needed.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_media_preset_save)
+
+    p = sp.add_parser("media-preset-delete", help="Delete a Media Organizer exclusion preset.")
+    p.add_argument("preset_id")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_media_preset_delete)
 
     p = sp.add_parser("logs", help="Read launchd logs.")
     p.add_argument("job", nargs="?")
