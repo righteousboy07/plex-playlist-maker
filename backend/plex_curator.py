@@ -775,7 +775,7 @@ def unique_media_target(target, reserved):
     reserved.add(str(candidate).casefold())
     return candidate
 
-def plan_media_organization(root, destination=None, recursive=True):
+def plan_media_organization(root, destination=None, recursive=True, overrides=None):
     root = Path(root).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise SystemExit(f"Media organizer source folder not found: {root}")
@@ -783,9 +783,30 @@ def plan_media_organization(root, destination=None, recursive=True):
     destination_root = Path(destination).expanduser().resolve() if destination else root
     plans = []
     reserved = set()
+    override_map = {}
+    for override in overrides or []:
+        source_key = str(Path(override.get("source", "")).expanduser().resolve())
+        if source_key:
+            override_map[source_key] = override
 
     for source in iter_video_files(root, recursive=recursive):
         identity = infer_media_identity(source)
+        override = override_map.get(str(source.resolve()))
+        reviewed = False
+        if override:
+            requested_title = str(override.get("title") or "").strip()
+            requested_type = str(override.get("type") or "").strip().casefold()
+            if requested_title:
+                identity["title"] = sanitize_media_filename(requested_title)
+            if requested_type:
+                if requested_type not in INTERSTITIAL_TYPE_FOLDERS:
+                    raise SystemExit(
+                        f'Invalid reviewed interstitial type "{requested_type}" for {source.name}.'
+                    )
+                identity["type"] = requested_type
+            identity["confidence"] = "reviewed"
+            identity["title_source"] = "review"
+            reviewed = True
         review = (
             extract_media_review_frames(source, frame_count=3)
             if identity["confidence"] == "low"
@@ -813,6 +834,7 @@ def plan_media_organization(root, destination=None, recursive=True):
             "confidence": identity["confidence"],
             "title_source": identity["title_source"],
             "metadata_title": identity["metadata_title"],
+            "reviewed": reviewed,
             "review_frame_status": review["status"],
             "review_frames": review["frames"],
             "action": action,
