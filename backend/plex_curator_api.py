@@ -7,6 +7,9 @@ import secrets
 import sqlite3
 import subprocess
 import sys
+import threading
+import time
+import uuid
 import requests
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +21,7 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.6"
+API_VERSION = "1.7"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
 KIDS_SCARY_WISHLIST = core.APP_DIR / "examples" / "kids-scary-missing-wishlist.txt"
@@ -29,6 +32,11 @@ app = FastAPI(
     version=API_VERSION,
     description="Localhost-only API for Plex Curator.",
 )
+
+MEDIA_SCAN_JOB_LIMIT = 20
+_media_scan_jobs = {}
+_media_scan_cancel_events = {}
+_media_scan_jobs_lock = threading.Lock()
 
 class PreviewRequest(BaseModel):
     total: Optional[int] = Field(default=None, ge=1, le=1000)
@@ -52,6 +60,9 @@ class MediaOrganizerRequest(BaseModel):
     destination: Optional[str] = Field(default=None, max_length=4096)
     recursive: bool = True
     exclude_patterns: list[str] = Field(default_factory=list)
+
+class MediaOrganizerScanJobRequest(MediaOrganizerRequest):
+    pass
 
 class MediaOrganizerOverride(BaseModel):
     source: str = Field(min_length=1, max_length=4096)
@@ -690,6 +701,123 @@ def station_refresh_all(
         "results": results,
     }
 
+def _iso_now():
+    return datetime.now(timezone.utc).isoformat()
+
+def _media_scan_job_payload(job):
+    payload = {
+        key: value
+        for key, value in job.items()
+        if not key.startswith("_")
+    }
+    started_mono = job.get("_started_monotonic")
+    finished_mono = job.get("_finished_monotonic")
+    if started_mono is not None:
+        end = finished_mono if finished_mono is not None else time.monotonic()
+        payload["elapsed_seconds"] = round(max(0.0, end - started_mono), 2)
+    else:
+        payload["elapsed_seconds"] = 0.0
+    return payload
+
+def _trim_media_scan_jobs():
+    with _media_scan_jobs_lock:
+        completed = [
+            (job_id, job)
+            for job_id, job in _media_scan_jobs.items()
+            if job.get("status") in {"completed", "cancelled", "failed"}
+        ]
+        completed.sort(key=lambda pair: pair[1].get("updated_at") or "")
+        while len(_media_scan_jobs) > MEDIA_SCAN_JOB_LIMIT and completed:
+            job_id, _job = completed.pop(0)
+            _media_scan_jobs.pop(job_id, None)
+            _media_scan_cancel_events.pop(job_id, None)
+
+def _run_media_scan_job(job_id, request_data):
+    cancel_event = _media_scan_cancel_events[job_id]
+
+    with _media_scan_jobs_lock:
+        job = _media_scan_jobs[job_id]
+        job["status"] = "running"
+        job["phase"] = "discovering"
+        job["started_at"] = _iso_now()
+        job["updated_at"] = job["started_at"]
+        job["_started_monotonic"] = time.monotonic()
+
+    def progress(update):
+        with _media_scan_jobs_lock:
+            job = _media_scan_jobs.get(job_id)
+            if not job:
+                return
+            phase = update.get("phase") or job.get("phase")
+            current = int(update.get("current") or 0)
+            total = update.get("total")
+            job["phase"] = phase
+            job["current"] = current
+            job["total"] = int(total) if total is not None else None
+            if phase == "discovering":
+                job["discovered_count"] = current
+            elif total is not None:
+                job["processed_count"] = current
+                job["total_count"] = int(total)
+            job["excluded_count"] = int(update.get("excluded_count") or job.get("excluded_count") or 0)
+            job["detail"] = update.get("detail")
+            job["updated_at"] = _iso_now()
+
+    try:
+        plan = core.plan_media_organization(
+            request_data["path"],
+            destination=request_data.get("destination"),
+            recursive=request_data.get("recursive", True),
+            extract_review_frames=False,
+            metadata_workers=8,
+            exclude_patterns=request_data.get("exclude_patterns") or [],
+            progress_callback=progress,
+            cancel_check=cancel_event.is_set,
+        )
+        if cancel_event.is_set():
+            raise core.MediaOrganizerCancelled()
+
+        with _media_scan_jobs_lock:
+            job = _media_scan_jobs[job_id]
+            job["status"] = "completed"
+            job["phase"] = "complete"
+            job["current"] = plan["count"]
+            job["total"] = plan["count"]
+            job["processed_count"] = plan["count"]
+            job["total_count"] = plan["count"]
+            job["discovered_count"] = plan["total_found"]
+            job["excluded_count"] = plan["excluded_count"]
+            job["result"] = {**plan, "read_only": True}
+            job["updated_at"] = _iso_now()
+            job["_finished_monotonic"] = time.monotonic()
+    except core.MediaOrganizerCancelled:
+        with _media_scan_jobs_lock:
+            job = _media_scan_jobs.get(job_id)
+            if job:
+                job["status"] = "cancelled"
+                job["phase"] = "cancelled"
+                job["cancel_requested"] = True
+                job["updated_at"] = _iso_now()
+                job["_finished_monotonic"] = time.monotonic()
+    except Exception as exc:
+        with _media_scan_jobs_lock:
+            job = _media_scan_jobs.get(job_id)
+            if job:
+                job["status"] = "failed"
+                job["phase"] = "failed"
+                job["error"] = str(exc)
+                job["updated_at"] = _iso_now()
+                job["_finished_monotonic"] = time.monotonic()
+    finally:
+        _trim_media_scan_jobs()
+
+def _media_scan_job_or_404(job_id):
+    with _media_scan_jobs_lock:
+        job = _media_scan_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Media Organizer scan job not found.")
+        return _media_scan_job_payload(job)
+
 @app.get("/api/v1/media-organizer/presets")
 def media_organizer_presets():
     return {"presets": list(core.load_media_organizer_presets().values())}
@@ -740,6 +868,67 @@ def media_organizer_preset_delete(
         return {"ok": True, "preset": deleted}
     except SystemExit as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+@app.post("/api/v1/media-organizer/scan-jobs")
+def media_organizer_scan_job_start(request: MediaOrganizerScanJobRequest):
+    _trim_media_scan_jobs()
+    job_id = uuid.uuid4().hex
+    created_at = _iso_now()
+    job = {
+        "id": job_id,
+        "status": "queued",
+        "phase": "queued",
+        "current": 0,
+        "total": None,
+        "discovered_count": 0,
+        "processed_count": 0,
+        "total_count": None,
+        "excluded_count": 0,
+        "detail": None,
+        "cancel_requested": False,
+        "created_at": created_at,
+        "started_at": None,
+        "updated_at": created_at,
+        "result": None,
+        "error": None,
+        "_started_monotonic": None,
+        "_finished_monotonic": None,
+    }
+    cancel_event = threading.Event()
+    with _media_scan_jobs_lock:
+        _media_scan_jobs[job_id] = job
+        _media_scan_cancel_events[job_id] = cancel_event
+
+    thread = threading.Thread(
+        target=_run_media_scan_job,
+        args=(job_id, request.model_dump()),
+        daemon=True,
+        name=f"plex-curator-media-scan-{job_id[:8]}",
+    )
+    thread.start()
+    return _media_scan_job_or_404(job_id)
+
+@app.get("/api/v1/media-organizer/scan-jobs/{job_id}")
+def media_organizer_scan_job_status(job_id: str):
+    return _media_scan_job_or_404(job_id)
+
+@app.post("/api/v1/media-organizer/scan-jobs/{job_id}/cancel")
+def media_organizer_scan_job_cancel(
+    job_id: str,
+    _authorized: bool = Depends(require_api_key),
+):
+    with _media_scan_jobs_lock:
+        job = _media_scan_jobs.get(job_id)
+        event = _media_scan_cancel_events.get(job_id)
+        if not job or not event:
+            raise HTTPException(status_code=404, detail="Media Organizer scan job not found.")
+        if job.get("status") in {"completed", "cancelled", "failed"}:
+            return _media_scan_job_payload(job)
+        event.set()
+        job["cancel_requested"] = True
+        job["status"] = "cancelling"
+        job["updated_at"] = _iso_now()
+        return _media_scan_job_payload(job)
 
 @app.post("/api/v1/media-organizer/scan")
 def media_organizer_scan(request: MediaOrganizerRequest):
