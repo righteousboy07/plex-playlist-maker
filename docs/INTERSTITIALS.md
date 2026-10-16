@@ -85,3 +85,38 @@ CLI example:
 ```
 
 Existing `interstitial_playlists` configurations remain supported and are treated as `general` pools with weight `1`.
+
+
+## Media Organizer exclusions
+
+Large media trees often contain disposable sample videos. The Media Organizer can skip these before metadata probing using case-insensitive glob patterns.
+
+Examples:
+
+```text
+Sample.avi
+sample.*
+*/sample/*
+```
+
+In the macOS app, **Add Sample Preset** adds the common `sample.*` and `*/sample/*` rules. Excluded files are shown separately in the scan preview and are not analyzed or proposed for organization.
+
+Deletion is separate from exclusion. Enabling **Delete excluded files** permanently deletes only files that matched the explicit exclude patterns, and only after the normal Apply confirmation.
+
+CLI example:
+
+```bash
+./plex-curator media-organize "/path/to/Movies" \
+  --exclude "sample.*" \
+  --exclude "*/sample/*"
+```
+
+To apply normal organization and permanently remove the matched sample files:
+
+```bash
+./plex-curator media-organize "/path/to/Movies" \
+  --exclude "sample.*" \
+  --exclude "*/sample/*" \
+  --apply \
+  --delete-excluded
+```
