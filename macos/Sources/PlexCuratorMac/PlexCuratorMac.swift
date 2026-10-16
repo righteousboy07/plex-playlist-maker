@@ -341,6 +341,28 @@ struct AutomationActionResponse: Codable {
     let job: AutomationJob
 }
 
+struct MediaOrganizerPreset: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let description: String
+    let excludePatterns: [String]
+}
+
+struct MediaOrganizerPresetsResponse: Codable {
+    let presets: [MediaOrganizerPreset]
+}
+
+struct MediaOrganizerPresetRequest: Encodable {
+    let name: String
+    let description: String
+    let excludePatterns: [String]
+}
+
+struct MediaOrganizerPresetMutationResponse: Codable {
+    let ok: Bool
+    let preset: MediaOrganizerPreset
+}
+
 struct MediaOrganizerRequest: Encodable {
     let path: String
     let destination: String?
@@ -725,6 +747,68 @@ final class APIClient {
         try await request("/api/v1/wishlist/kids-scary")
     }
 
+    func mediaOrganizerPresets() async throws -> [MediaOrganizerPreset] {
+        let response: MediaOrganizerPresetsResponse = try await request(
+            "/api/v1/media-organizer/presets"
+        )
+        return response.presets.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    func createMediaOrganizerPreset(
+        name: String,
+        description: String,
+        excludePatterns: [String]
+    ) async throws -> MediaOrganizerPreset {
+        let body = try encoder.encode(
+            MediaOrganizerPresetRequest(
+                name: name,
+                description: description,
+                excludePatterns: excludePatterns
+            )
+        )
+        let response: MediaOrganizerPresetMutationResponse = try await request(
+            "/api/v1/media-organizer/presets",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+        return response.preset
+    }
+
+    func updateMediaOrganizerPreset(
+        id: String,
+        name: String,
+        description: String,
+        excludePatterns: [String]
+    ) async throws -> MediaOrganizerPreset {
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let body = try encoder.encode(
+            MediaOrganizerPresetRequest(
+                name: name,
+                description: description,
+                excludePatterns: excludePatterns
+            )
+        )
+        let response: MediaOrganizerPresetMutationResponse = try await request(
+            "/api/v1/media-organizer/presets/\(escaped)",
+            method: "PUT",
+            body: body,
+            authenticated: true
+        )
+        return response.preset
+    }
+
+    func deleteMediaOrganizerPreset(id: String) async throws {
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let _: MediaOrganizerPresetMutationResponse = try await request(
+            "/api/v1/media-organizer/presets/\(escaped)",
+            method: "DELETE",
+            authenticated: true
+        )
+    }
+
     func scanMediaOrganizer(
         path: String,
         destination: String?,
@@ -1047,6 +1131,7 @@ final class AppModel: ObservableObject {
     @Published var playlists: [PlaylistSummary] = []
     @Published var schedules: [ScheduleSummary] = []
     @Published var mediaOrganizer: MediaOrganizerResponse?
+    @Published var mediaOrganizerPresets: [MediaOrganizerPreset] = []
     @Published var analyzedMediaItems: [String: MediaOrganizerItem] = [:]
     @Published var error: String?
     @Published var message: String?
@@ -1136,6 +1221,61 @@ final class AppModel: ObservableObject {
             error = nil
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    func loadMediaOrganizerPresets() async {
+        do {
+            mediaOrganizerPresets = try await api.mediaOrganizerPresets()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func saveMediaOrganizerPreset(
+        id: String?,
+        name: String,
+        description: String,
+        excludePatterns: [String],
+        createNew: Bool = false
+    ) async -> MediaOrganizerPreset? {
+        do {
+            let preset: MediaOrganizerPreset
+            if let id, !id.isEmpty, !createNew {
+                preset = try await api.updateMediaOrganizerPreset(
+                    id: id,
+                    name: name,
+                    description: description,
+                    excludePatterns: excludePatterns
+                )
+            } else {
+                preset = try await api.createMediaOrganizerPreset(
+                    name: name,
+                    description: description,
+                    excludePatterns: excludePatterns
+                )
+            }
+            await loadMediaOrganizerPresets()
+            message = "Saved Media Organizer preset \(preset.name)."
+            error = nil
+            return preset
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func deleteMediaOrganizerPreset(id: String) async -> Bool {
+        do {
+            try await api.deleteMediaOrganizerPreset(id: id)
+            await loadMediaOrganizerPresets()
+            message = "Deleted Media Organizer preset."
+            error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
         }
     }
 
@@ -1996,6 +2136,9 @@ struct MediaOrganizerView: View {
     @State private var organizerSearch = ""
     @State private var excludePatternsText = ""
     @State private var deleteExcluded = false
+    @State private var selectedPresetID = ""
+    @State private var presetName = ""
+    @State private var presetDescription = ""
 
     private var plan: MediaOrganizerResponse? { model.mediaOrganizer }
 
@@ -2134,6 +2277,22 @@ struct MediaOrganizerView: View {
         plan?.excludedCount ?? 0
     }
 
+    private var selectedPreset: MediaOrganizerPreset? {
+        model.mediaOrganizerPresets.first { $0.id == selectedPresetID }
+    }
+
+    private var canSavePreset: Bool {
+        !presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func loadPreset(_ preset: MediaOrganizerPreset) {
+        selectedPresetID = preset.id
+        presetName = preset.name
+        presetDescription = preset.description
+        excludePatternsText = preset.excludePatterns.joined(separator: "\n")
+        deleteExcluded = false
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -2161,18 +2320,85 @@ struct MediaOrganizerView: View {
 
                     Toggle("Scan subfolders recursively", isOn: $recursive)
 
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Exclusion preset")
+                            .font(.headline)
+
+                        HStack {
+                            Picker("Preset", selection: $selectedPresetID) {
+                                Text("Custom / Unsaved").tag("")
+                                ForEach(model.mediaOrganizerPresets) { preset in
+                                    Text(preset.name).tag(preset.id)
+                                }
+                            }
+                            .frame(maxWidth: 260)
+                            .onChange(of: selectedPresetID) { newValue in
+                                guard !newValue.isEmpty,
+                                      let preset = model.mediaOrganizerPresets.first(where: { $0.id == newValue })
+                                else { return }
+                                loadPreset(preset)
+                            }
+
+                            TextField("Preset name", text: $presetName)
+                                .frame(maxWidth: 220)
+
+                            Button(selectedPresetID.isEmpty ? "Save New" : "Update") {
+                                Task {
+                                    if let saved = await model.saveMediaOrganizerPreset(
+                                        id: selectedPresetID.isEmpty ? nil : selectedPresetID,
+                                        name: presetName,
+                                        description: presetDescription,
+                                        excludePatterns: excludePatterns
+                                    ) {
+                                        loadPreset(saved)
+                                    }
+                                }
+                            }
+                            .disabled(!canSavePreset)
+
+                            if !selectedPresetID.isEmpty {
+                                Button("Save As New") {
+                                    Task {
+                                        if let saved = await model.saveMediaOrganizerPreset(
+                                            id: nil,
+                                            name: presetName,
+                                            description: presetDescription,
+                                            excludePatterns: excludePatterns,
+                                            createNew: true
+                                        ) {
+                                            loadPreset(saved)
+                                        }
+                                    }
+                                }
+                                .disabled(!canSavePreset)
+
+                                Button("Delete Preset", role: .destructive) {
+                                    let deleting = selectedPresetID
+                                    Task {
+                                        if await model.deleteMediaOrganizerPreset(id: deleting) {
+                                            selectedPresetID = ""
+                                            presetName = ""
+                                            presetDescription = ""
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        TextField("Preset description (optional)", text: $presetDescription)
+
                         HStack {
                             Text("Exclude patterns")
                                 .font(.headline)
                             Spacer()
-                            Button("Add Sample Preset") {
+                            Button("Add Sample Rules") {
                                 let preset = ["sample.*", "*/sample/*"]
                                 let existing = Set(excludePatterns.map { $0.lowercased() })
                                 let additions = preset.filter { !existing.contains($0.lowercased()) }
                                 let current = excludePatternsText.trimmingCharacters(in: .whitespacesAndNewlines)
                                 excludePatternsText = ([current].filter { !$0.isEmpty } + additions)
                                     .joined(separator: "\n")
+                                selectedPresetID = ""
                             }
                         }
 
@@ -2183,6 +2409,12 @@ struct MediaOrganizerView: View {
                                 RoundedRectangle(cornerRadius: 6)
                                     .stroke(.quaternary)
                             )
+
+                        if let selectedPreset {
+                            Text("Loaded preset: \(selectedPreset.name). Editing rules does not change the saved preset until Update is clicked.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
 
                         Text("Case-insensitive glob patterns, one per line or comma-separated. Examples: Sample.avi, sample.*, */sample/*")
                             .font(.caption)
@@ -2352,6 +2584,11 @@ struct MediaOrganizerView: View {
         }
         .padding()
         .navigationTitle("Media Organizer")
+        .task {
+            if model.mediaOrganizerPresets.isEmpty {
+                await model.loadMediaOrganizerPresets()
+            }
+        }
         .alert("Apply file organization?", isPresented: $confirmApply) {
             Button("Cancel", role: .cancel) {}
             Button("Move & Rename", role: .destructive) {
