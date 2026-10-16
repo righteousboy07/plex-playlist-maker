@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Media Organizer bulk scans now parallelize metadata inspection, defer expensive frame extraction, use longer scan/apply request timeouts, and provide per-file deep analysis for mystery clips. This makes large recursive folders practical.
 - Mystery clips in the macOS Media Organizer can now be given a reviewed title/type and explicitly approved; reviewed items apply safely without enabling bulk low-confidence renames.
 - Media review now finds ffmpeg/ffprobe in common Homebrew paths even when the macOS app or launchd does not inherit the shell PATH, and Doctor reports availability.
 - macOS Media Organizer now shows cached early/middle/late thumbnails for low-confidence mystery clips.
