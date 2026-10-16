@@ -546,9 +546,22 @@ def sanitize_media_filename(title):
     title = re.sub(r"\s+", " ", title).strip(" .-")
     return title or "Untitled Clip"
 
+def find_media_tool(name):
+    discovered = shutil.which(name)
+    if discovered:
+        return discovered
+    for candidate in (
+        Path("/opt/homebrew/bin") / name,
+        Path("/usr/local/bin") / name,
+        Path("/usr/bin") / name,
+    ):
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
 def probe_video_metadata(path):
     path = Path(path)
-    ffprobe = shutil.which("ffprobe")
+    ffprobe = find_media_tool("ffprobe")
     if ffprobe:
         try:
             result = subprocess.run(
@@ -626,7 +639,7 @@ def media_review_cache_key(path):
 
 def extract_media_review_frames(path, frame_count=3):
     path = Path(path).resolve()
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = find_media_tool("ffmpeg")
     if not ffmpeg:
         return {"status": "ffmpeg-missing", "frames": []}
 
@@ -2704,6 +2717,22 @@ def cmd_doctor(args):
         report("PASS", "Python", sys.version.split()[0])
     else:
         report("FAIL", "Python", f"{sys.version.split()[0]} (3.10+ required)")
+
+    ffmpeg_path = find_media_tool("ffmpeg")
+    ffprobe_path = find_media_tool("ffprobe")
+    if ffmpeg_path and ffprobe_path:
+        report("PASS", "ffmpeg / ffprobe", f"{ffmpeg_path}; {ffprobe_path}")
+    else:
+        missing = []
+        if not ffmpeg_path:
+            missing.append("ffmpeg")
+        if not ffprobe_path:
+            missing.append("ffprobe")
+        report(
+            "WARN",
+            "Media review tools",
+            "missing " + ", ".join(missing) + "; visual mystery-clip thumbnails will be unavailable",
+        )
 
     try:
         import plexapi
