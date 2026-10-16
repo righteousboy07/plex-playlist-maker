@@ -1943,6 +1943,15 @@ struct StationEditorView: View {
     }
 }
 
+enum MediaOrganizerFilter: String, CaseIterable, Identifiable {
+    case review = "Needs Review"
+    case ready = "Ready to Apply"
+    case unchanged = "Already Organized"
+    case all = "All"
+
+    var id: String { rawValue }
+}
+
 struct MediaOrganizerView: View {
     @EnvironmentObject var model: AppModel
 
@@ -1954,8 +1963,67 @@ struct MediaOrganizerView: View {
     @State private var reviewedSources: Set<String> = []
     @State private var reviewedTitles: [String: String] = [:]
     @State private var reviewedTypes: [String: String] = [:]
+    @State private var organizerFilter: MediaOrganizerFilter = .review
+    @State private var organizerSearch = ""
 
     private var plan: MediaOrganizerResponse? { model.mediaOrganizer }
+
+    private var unresolvedReviewCount: Int {
+        plan?.items.filter {
+            $0.confidence == "low" &&
+            $0.reviewed != true &&
+            !reviewedSources.contains($0.source)
+        }.count ?? 0
+    }
+
+    private var filteredItems: [MediaOrganizerItem] {
+        guard let plan else { return [] }
+        let query = organizerSearch
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        return plan.items.filter { item in
+            let matchesFilter: Bool
+            switch organizerFilter {
+            case .review:
+                matchesFilter =
+                    item.confidence == "low" &&
+                    item.reviewed != true &&
+                    !reviewedSources.contains(item.source)
+            case .ready:
+                matchesFilter =
+                    item.action != "unchanged" &&
+                    (
+                        includeLowConfidence ||
+                        item.confidence != "low" ||
+                        item.reviewed == true ||
+                        reviewedSources.contains(item.source)
+                    )
+            case .unchanged:
+                matchesFilter = item.action == "unchanged"
+            case .all:
+                matchesFilter = true
+            }
+
+            guard matchesFilter else { return false }
+            guard !query.isEmpty else { return true }
+
+            let reviewedTitle = reviewedTitles[item.source] ?? item.title
+            let reviewedType = reviewedTypes[item.source] ?? item.type
+            return [
+                item.originalName,
+                item.proposedName,
+                item.source,
+                item.folder,
+                reviewedTitle,
+                reviewedType,
+                item.metadataTitle ?? ""
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            .contains(query)
+        }
+    }
 
     private var actionableCount: Int {
         plan?.items.filter {
@@ -2077,7 +2145,7 @@ struct MediaOrganizerView: View {
             if let plan {
                 HStack(spacing: 12) {
                     organizerMetric("Videos", plan.count)
-                    organizerMetric("Needs Review", plan.reviewCount)
+                    organizerMetric("Needs Review", unresolvedReviewCount)
                     organizerMetric("Will Change", actionableCount)
                     Spacer()
                     Text(plan.destination)
@@ -2087,13 +2155,46 @@ struct MediaOrganizerView: View {
                         .truncationMode(.middle)
                 }
 
+                HStack(spacing: 12) {
+                    Picker("Show", selection: $organizerFilter) {
+                        ForEach(MediaOrganizerFilter.allCases) { filter in
+                            Text(filter.rawValue).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 620)
+
+                    TextField("Search files, titles, folders…", text: $organizerSearch)
+                        .textFieldStyle(.roundedBorder)
+                }
+
                 GroupBox("Proposed Changes") {
                     if plan.items.isEmpty {
                         Text("No supported video files were found.")
                             .foregroundColor(.secondary)
                             .frame(maxWidth: .infinity, minHeight: 160)
+                    } else if filteredItems.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: organizerFilter == .review ? "checkmark.circle" : "line.3.horizontal.decrease.circle")
+                                .font(.system(size: 32))
+                                .foregroundColor(.secondary)
+                            Text(
+                                organizerFilter == .review && organizerSearch.isEmpty
+                                    ? "Review queue is clear."
+                                    : "No files match this filter."
+                            )
+                            .font(.headline)
+                            Text(
+                                organizerFilter == .review && organizerSearch.isEmpty
+                                    ? "Low-confidence files will appear here after the next scan."
+                                    : "Try another filter or search term."
+                            )
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 180)
                     } else {
-                        List(plan.items) { item in
+                        List(filteredItems) { item in
                             MediaOrganizerRow(
                                 item: item,
                                 destination: normalizedDestination,
@@ -2124,9 +2225,9 @@ struct MediaOrganizerView: View {
                     .disabled(actionableCount == 0 || model.loading)
                 }
 
-                if plan.reviewCount > 0 && !includeLowConfidence {
+                if unresolvedReviewCount > 0 && !includeLowConfidence {
                     Label(
-                        "\(plan.reviewCount) low-confidence file\(plan.reviewCount == 1 ? "" : "s") will remain untouched for review.",
+                        "\(unresolvedReviewCount) low-confidence file\(unresolvedReviewCount == 1 ? "" : "s") will remain untouched for review.",
                         systemImage: "exclamationmark.triangle"
                     )
                     .font(.caption)
@@ -2181,6 +2282,8 @@ struct MediaOrganizerView: View {
         reviewedSources.removeAll()
         reviewedTitles.removeAll()
         reviewedTypes.removeAll()
+        organizerFilter = .review
+        organizerSearch = ""
         await model.scanMediaOrganizer(
             path: sourcePath.trimmingCharacters(in: .whitespacesAndNewlines),
             destination: normalizedDestination,
