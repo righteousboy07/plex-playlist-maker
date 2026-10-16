@@ -47,8 +47,14 @@ class MediaOrganizerRequest(BaseModel):
     destination: Optional[str] = Field(default=None, max_length=4096)
     recursive: bool = True
 
+class MediaOrganizerOverride(BaseModel):
+    source: str = Field(min_length=1, max_length=4096)
+    title: Optional[str] = Field(default=None, max_length=240)
+    type: Optional[str] = None
+
 class MediaOrganizerApplyRequest(MediaOrganizerRequest):
     include_low_confidence: bool = False
+    overrides: list[MediaOrganizerOverride] = Field(default_factory=list)
 
 class BackupRequest(BaseModel):
     reason: str = Field(default="api", min_length=1, max_length=80)
@@ -712,6 +718,7 @@ def media_organizer_apply(
             request.path,
             destination=request.destination,
             recursive=request.recursive,
+            overrides=[override.model_dump() for override in request.overrides],
         )
         return core.apply_media_organization(
             plan,
