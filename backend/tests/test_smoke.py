@@ -1015,7 +1015,7 @@ def test_media_organizer_preset_crud(tmp_path, monkeypatch):
 
 def test_resolve_media_organizer_excludes_merges_presets_and_explicit(tmp_path, monkeypatch):
     preset_file = tmp_path / "media-organizer-presets.json"
-    preset_file.write_text(json.dumps({
+    preset_file.write_text(core.json.dumps({
         "movie-cleanup": {
             "name": "Movie Cleanup",
             "description": "",
