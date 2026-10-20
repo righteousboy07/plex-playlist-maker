@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.10"
+API_VERSION = "1.11"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
 KIDS_SCARY_WISHLIST = core.APP_DIR / "examples" / "kids-scary-missing-wishlist.txt"
@@ -119,6 +119,21 @@ class InterstitialPoolRequest(BaseModel):
 class InterstitialBreakRequest(BaseModel):
     after: int = Field(ge=1, le=1000)
     sequence: list[str] = Field(min_length=1, max_length=20)
+
+class StationCreateRequest(BaseModel):
+    station_id: str = Field(min_length=1, max_length=80)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=500)
+    playlist: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    preset: str = Field(default="all-cartoons")
+    enabled: bool = True
+    adult: bool = False
+
+class StationCloneRequest(BaseModel):
+    new_station_id: str = Field(min_length=1, max_length=80)
+    name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    playlist: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    enabled: bool = False
 
 class StationUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=120)
@@ -552,9 +567,64 @@ def stations():
         ]
     }
 
+@app.post("/api/v1/stations")
+def station_create(
+    request: StationCreateRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    overrides = request.model_dump(exclude={"station_id"}, exclude_none=True)
+    try:
+        cfg = core.create_station_profile(request.station_id, overrides)
+    except SystemExit as exc:
+        status = 409 if "already exists" in str(exc) else 422
+        raise HTTPException(status_code=status, detail=str(exc))
+    return {
+        "ok": True,
+        "station": {"id": request.station_id, **cfg},
+    }
+
 @app.get("/api/v1/stations/{station_id}")
 def station_detail(station_id: str):
     return station_summary(station_id, core.load_stations().get(station_id, {})) if station_id in core.load_stations() else station_or_404(station_id)
+
+@app.post("/api/v1/stations/{station_id}/clone")
+def station_clone(
+    station_id: str,
+    request: StationCloneRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        cfg = core.clone_station_profile(
+            station_id,
+            request.new_station_id,
+            name=request.name,
+            playlist=request.playlist,
+            enabled=request.enabled,
+        )
+    except SystemExit as exc:
+        message = str(exc)
+        status = 404 if "Unknown source station" in message else (
+            409 if "already exists" in message else 422
+        )
+        raise HTTPException(status_code=status, detail=message)
+    return {
+        "ok": True,
+        "station": {"id": request.new_station_id, **cfg},
+    }
+
+@app.delete("/api/v1/stations/{station_id}")
+def station_delete(
+    station_id: str,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        result = core.delete_station_profile(station_id)
+    except SystemExit as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {
+        "ok": True,
+        **result,
+    }
 
 @app.put("/api/v1/stations/{station_id}")
 def station_update(

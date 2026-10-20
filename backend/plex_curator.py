@@ -3073,12 +3073,86 @@ def cmd_station_refresh_all(args):
         for sid, err in failures:
             print(f"  - {sid}: {err}")
 
-def cmd_station_create(args):
-    sid = validate_station_id(args.station_id)
+def create_station_profile(station_id, overrides=None, replace=False):
+    station_id = validate_station_id(station_id)
     stations = load_stations()
-    if sid in stations and not args.replace:
-        raise SystemExit(f'Station "{sid}" already exists. Use --replace to overwrite its profile.')
+    if station_id in stations and not replace:
+        raise SystemExit(
+            f'Station "{station_id}" already exists. Use replace to overwrite its profile.'
+        )
 
+    title = station_id.replace("-", " ").replace("_", " ").title()
+    cfg = {
+        "name": title,
+        "description": "",
+        "enabled": True,
+        "playlist": title,
+        "preset": "all-cartoons",
+        "year_min": None,
+        "year_max": None,
+        "kids_only": True,
+        "adult": False,
+        "per_show": 5,
+        "total": 40,
+        "avoid_recent": 120,
+        "min_show_gap": 2,
+        "seasonal": "auto",
+        "special_every": 8,
+        "interstitial_playlists": [],
+        "interstitial_pools": [],
+        "interstitial_every": 0,
+        "interstitial_count": 1,
+        "interstitial_sequence": [],
+        "interstitial_break_pattern": [],
+        "runtime_block_minutes": 0,
+        "runtime_block_count": 1,
+        "unwatched": False,
+        "sync_watch_progress": True,
+        "include_shows": [],
+        "exclude_shows": [],
+        "genres_any": [],
+    }
+    overrides = dict(overrides or {})
+    if overrides.get("adult") is True and "kids_only" not in overrides:
+        overrides["kids_only"] = False
+    cfg.update(overrides)
+    cfg = normalize_station(station_id, cfg)
+    stations[station_id] = cfg
+    save_stations(stations)
+    return cfg
+
+def clone_station_profile(source_station_id, new_station_id, name=None, playlist=None,
+                          enabled=True, replace=False):
+    new_station_id = validate_station_id(new_station_id)
+    stations = load_stations()
+    if source_station_id not in stations:
+        raise SystemExit(f'Unknown source station "{source_station_id}".')
+    if new_station_id in stations and not replace:
+        raise SystemExit(f'Station "{new_station_id}" already exists.')
+
+    cfg = dict(normalize_station(source_station_id, stations[source_station_id]))
+    cfg["name"] = name or new_station_id.replace("-", " ").replace("_", " ").title()
+    cfg["playlist"] = playlist or cfg["name"]
+    cfg["enabled"] = bool(enabled)
+    stations[new_station_id] = normalize_station(new_station_id, cfg)
+    save_stations(stations)
+    return stations[new_station_id]
+
+def delete_station_profile(station_id):
+    stations = load_stations()
+    if station_id not in stations:
+        raise SystemExit(f'Unknown station "{station_id}".')
+    backup = create_backup("before-station-delete")
+    del stations[station_id]
+    save_stations(stations)
+    return {
+        "station_id": station_id,
+        "backup": str(backup),
+        "plex_playlist_preserved": True,
+        "history_preserved": True,
+    }
+
+def cmd_station_create(args):
     cfg = {
         "name": args.name or sid.replace("-", " ").title(),
         "description": args.description or "",
@@ -3115,9 +3189,8 @@ def cmd_station_create(args):
         "exclude_shows": args.exclude_show or [],
         "genres_any": args.genre or [],
     }
-    cfg = normalize_station(sid, cfg)
-    stations[sid] = cfg
-    save_stations(stations)
+    sid = validate_station_id(args.station_id)
+    create_station_profile(sid, cfg, replace=args.replace)
     print(f'Created station "{sid}".')
     cmd_station_show(argparse.Namespace(station_id=sid))
 
@@ -3208,18 +3281,14 @@ def cmd_station_update(args):
 
 def cmd_station_clone(args):
     new_id = validate_station_id(args.new_station_id)
-    stations = load_stations()
-    if args.source_station_id not in stations:
-        raise SystemExit(f'Unknown source station "{args.source_station_id}".')
-    if new_id in stations and not args.replace:
-        raise SystemExit(f'Station "{new_id}" already exists.')
-    cfg = normalize_station(args.source_station_id, stations[args.source_station_id])
-    cfg = dict(cfg)
-    cfg["name"] = args.name or new_id.replace("-", " ").title()
-    cfg["playlist"] = args.playlist or cfg["name"]
-    cfg["enabled"] = not args.disabled
-    stations[new_id] = normalize_station(new_id, cfg)
-    save_stations(stations)
+    clone_station_profile(
+        args.source_station_id,
+        new_id,
+        name=args.name,
+        playlist=args.playlist,
+        enabled=not args.disabled,
+        replace=args.replace,
+    )
     print(f'Cloned "{args.source_station_id}" -> "{new_id}".')
 
 def cmd_station_enable(args):
@@ -3239,15 +3308,10 @@ def cmd_station_disable(args):
     print(f'Disabled station "{args.station_id}".')
 
 def cmd_station_delete(args):
-    stations = load_stations()
-    if args.station_id not in stations:
-        raise SystemExit(f'Unknown station "{args.station_id}".')
     if not args.yes:
         raise SystemExit("Refusing to delete a station profile without --yes.")
-    backup = create_backup("before-station-delete")
-    print(f"Safety backup: {backup}")
-    del stations[args.station_id]
-    save_stations(stations)
+    result = delete_station_profile(args.station_id)
+    print(f'Safety backup: {result["backup"]}')
     print(f'Deleted station profile "{args.station_id}".')
     print("The Plex playlist and station history were left untouched.")
 

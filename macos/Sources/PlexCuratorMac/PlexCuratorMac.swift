@@ -73,6 +73,36 @@ struct Station: Codable, Identifiable, Hashable {
 
 struct StationsResponse: Codable { let stations: [Station] }
 
+struct StationCreateRequest: Encodable {
+    let stationId: String
+    let name: String?
+    let description: String?
+    let playlist: String?
+    let preset: String
+    let enabled: Bool
+    let adult: Bool
+}
+
+struct StationCloneRequest: Encodable {
+    let newStationId: String
+    let name: String?
+    let playlist: String?
+    let enabled: Bool
+}
+
+struct StationMutationResponse: Codable {
+    let ok: Bool
+    let station: Station
+}
+
+struct StationDeleteResponse: Codable {
+    let ok: Bool
+    let stationId: String
+    let backup: String?
+    let plexPlaylistPreserved: Bool?
+    let historyPreserved: Bool?
+}
+
 struct PlaylistSummary: Codable, Identifiable, Hashable {
     var id: String { ratingKey.isEmpty ? title : ratingKey }
     let title: String
@@ -698,6 +728,17 @@ final class APIClient {
         )
     }
 
+    func createStation(_ value: StationCreateRequest) async throws -> Station {
+        let body = try encoder.encode(value)
+        let response: StationMutationResponse = try await request(
+            "/api/v1/stations",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+        return response.station
+    }
+
     func updateStation(_ id: String, request update: StationUpdateRequest) async throws -> Station {
         let body = try encoder.encode(update)
         let response: StationUpdateResponse = try await request(
@@ -707,6 +748,25 @@ final class APIClient {
             authenticated: true
         )
         return response.station
+    }
+
+    func cloneStation(_ id: String, request value: StationCloneRequest) async throws -> Station {
+        let body = try encoder.encode(value)
+        let response: StationMutationResponse = try await request(
+            "/api/v1/stations/\(id)/clone",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+        return response.station
+    }
+
+    func deleteStation(_ id: String) async throws -> StationDeleteResponse {
+        try await request(
+            "/api/v1/stations/\(id)",
+            method: "DELETE",
+            authenticated: true
+        )
     }
 
     func playlists() async throws -> [PlaylistSummary] {
@@ -1286,6 +1346,22 @@ final class AppModel: ObservableObject {
         } catch { self.error = error.localizedDescription }
     }
 
+    func createStation(_ request: StationCreateRequest) async -> Station? {
+        do {
+            let created = try await api.createStation(request)
+            stations.append(created)
+            stations.sort {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+            message = "Created \(created.name)."
+            error = nil
+            return created
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
     func updateStation(_ station: Station, request: StationUpdateRequest) async -> Station? {
         do {
             let updated = try await api.updateStation(station.id, request: request)
@@ -1298,6 +1374,39 @@ final class AppModel: ObservableObject {
         } catch {
             self.error = error.localizedDescription
             return nil
+        }
+    }
+
+    func cloneStation(_ station: Station, request: StationCloneRequest) async -> Station? {
+        do {
+            let created = try await api.cloneStation(station.id, request: request)
+            stations.append(created)
+            stations.sort {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+            message = "Duplicated \(station.name) as \(created.name)."
+            error = nil
+            return created
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func deleteStation(_ station: Station) async -> Bool {
+        do {
+            let result = try await api.deleteStation(station.id)
+            stations.removeAll { $0.id == station.id }
+            preview = nil
+            diff = nil
+            message = result.backup.map {
+                "Deleted \(station.name). Safety backup: \($0)"
+            } ?? "Deleted \(station.name). Plex playlist and history were preserved."
+            error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
         }
     }
 
@@ -1667,6 +1776,7 @@ struct StationsView: View {
     @EnvironmentObject var model: AppModel
     @State private var searchText = ""
     @State private var statusFilter = 0
+    @State private var showCreateStation = false
 
     private var filteredStations: [Station] {
         model.stations.filter { station in
@@ -1718,16 +1828,30 @@ struct StationsView: View {
             }
             .pickerStyle(SegmentedPickerStyle())
             .frame(width: 220)
+
+            Button {
+                showCreateStation = true
+            } label: {
+                Label("New Station", systemImage: "plus")
+            }
+        }
+        .sheet(isPresented: $showCreateStation) {
+            StationCreateView()
+                .environmentObject(model)
+                .frame(minWidth: 480, minHeight: 430)
         }
     }
 }
 
 struct StationDetailView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
     @State private var station: Station
     @State private var tab = 0
     @State private var confirmRefresh = false
     @State private var showEditor = false
+    @State private var showClone = false
+    @State private var confirmDelete = false
 
     init(station: Station) {
         _station = State(initialValue: station)
@@ -1745,10 +1869,12 @@ struct StationDetailView: View {
                 }
                 Spacer()
                 Button("Edit") { showEditor = true }
+                Button("Duplicate") { showClone = true }
                 Button("Preview") { tab = 1; Task { await model.loadPreview(station) } }
                 Button("Diff") { tab = 2; Task { await model.loadDiff(station) } }
                 Button("Dry Run") { Task { await model.dryRun(station) } }
                 Button("Refresh") { confirmRefresh = true }.disabled(!station.enabled)
+                Button("Delete", role: .destructive) { confirmDelete = true }
             }.padding()
 
             Picker("", selection: $tab) {
@@ -1770,6 +1896,23 @@ struct StationDetailView: View {
             }
             .environmentObject(model)
             .frame(minWidth: 620, minHeight: 690)
+        }
+        .sheet(isPresented: $showClone) {
+            StationCloneView(station: station)
+                .environmentObject(model)
+                .frame(minWidth: 480, minHeight: 360)
+        }
+        .alert("Delete \(station.name)?", isPresented: $confirmDelete) {
+            Button("Delete Station", role: .destructive) {
+                Task {
+                    if await model.deleteStation(station) {
+                        dismiss()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This deletes only the station profile. A safety backup is created first. The Plex playlist and station history are left untouched.")
         }
         .alert(isPresented: $confirmRefresh) {
             Alert(
@@ -1888,6 +2031,196 @@ struct StationDetailView: View {
 
     private func metric(_ name: String, _ value: Int) -> some View {
         VStack { Text("\(value)").font(.title2.bold()); Text(name).font(.caption).foregroundColor(.secondary) }
+    }
+}
+
+struct StationCreateView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var stationId = ""
+    @State private var name = ""
+    @State private var description = ""
+    @State private var playlist = ""
+    @State private var preset = "all-cartoons"
+    @State private var enabled = true
+    @State private var adult = false
+    @State private var validationMessage: String?
+
+    private var normalizedId: String {
+        stationId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private var validId: Bool {
+        !normalizedId.isEmpty && normalizedId.allSatisfy {
+            $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("New Station").font(.title2.bold())
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Create") { create() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+
+            Divider()
+
+            Form {
+                Section("Identity") {
+                    TextField("Station ID", text: $stationId)
+                    Text("Lowercase letters, numbers, hyphens, and underscores. This ID is permanent.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    TextField("Name (optional)", text: $name)
+                    TextField("Description", text: $description)
+                    TextField("Plex playlist (optional)", text: $playlist)
+                }
+
+                Section("Programming") {
+                    Picker("Preset", selection: $preset) {
+                        Text("All Cartoons").tag("all-cartoons")
+                        Text("80s Cartoons").tag("80s-cartoons")
+                        Text("90s Cartoons").tag("90s-cartoons")
+                        Text("Saturday Morning").tag("saturday-morning")
+                    }
+                    Toggle("Enabled", isOn: $enabled)
+                    Toggle("Allow adult animation", isOn: $adult)
+                    Text("After creation, open Edit Station for the full programming, interstitial, runtime-block, and show-filter controls.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let validationMessage {
+                    Section {
+                        Text(validationMessage).foregroundColor(.red)
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+
+    private func create() {
+        guard validId else {
+            validationMessage = "Enter a valid station ID using lowercase letters, numbers, hyphens, or underscores."
+            return
+        }
+
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPlaylist = playlist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let request = StationCreateRequest(
+            stationId: normalizedId,
+            name: trimmedName.isEmpty ? nil : trimmedName,
+            description: description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? nil
+                : description.trimmingCharacters(in: .whitespacesAndNewlines),
+            playlist: trimmedPlaylist.isEmpty ? nil : trimmedPlaylist,
+            preset: preset,
+            enabled: enabled,
+            adult: adult
+        )
+
+        Task {
+            if await model.createStation(request) != nil {
+                dismiss()
+            }
+        }
+    }
+}
+
+struct StationCloneView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    let station: Station
+
+    @State private var newStationId: String
+    @State private var name: String
+    @State private var playlist: String
+    @State private var enabled = false
+    @State private var validationMessage: String?
+
+    init(station: Station) {
+        self.station = station
+        _newStationId = State(initialValue: station.id + "-copy")
+        _name = State(initialValue: station.name + " Copy")
+        _playlist = State(initialValue: station.playlist + " Copy")
+    }
+
+    private var normalizedId: String {
+        newStationId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private var validId: Bool {
+        !normalizedId.isEmpty && normalizedId.allSatisfy {
+            $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Duplicate Station").font(.title2.bold())
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Duplicate") { duplicate() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+
+            Divider()
+
+            Form {
+                Section("Copy of \(station.name)") {
+                    TextField("New station ID", text: $newStationId)
+                    TextField("Name", text: $name)
+                    TextField("Plex playlist", text: $playlist)
+                    Toggle("Enable immediately", isOn: $enabled)
+                    Text("The duplicate copies all programming rules, filters, interstitial settings, and runtime-block settings. It starts disabled unless you enable it here.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                if let validationMessage {
+                    Section {
+                        Text(validationMessage).foregroundColor(.red)
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+
+    private func duplicate() {
+        guard validId else {
+            validationMessage = "Enter a valid station ID using lowercase letters, numbers, hyphens, or underscores."
+            return
+        }
+
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPlaylist = playlist.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, !trimmedPlaylist.isEmpty else {
+            validationMessage = "Name and Plex playlist are required."
+            return
+        }
+
+        let request = StationCloneRequest(
+            newStationId: normalizedId,
+            name: trimmedName,
+            playlist: trimmedPlaylist,
+            enabled: enabled
+        )
+
+        Task {
+            if await model.cloneStation(station, request: request) != nil {
+                dismiss()
+            }
+        }
     }
 }
 

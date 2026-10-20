@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Added native station creation, duplication, and deletion to the macOS app, backed by authenticated local API endpoints and safety-backup deletion that preserves Plex playlists and station history.
 - Added runtime-aware broadcast blocks with 30/60/90/custom-minute targets, multi-block station builds, nearest-item boundary fitting, and block runtime summaries in macOS previews.
 - Added cyclic station break patterns so stations can alternate short and long breaks with different program-item intervals and ordered clip sequences.
 - Added ordered station break sequences so interstitials can follow a deliberate pattern such as Station ID → Commercial → Commercial → Bumper, while preserving weighted-mix behavior for existing stations.

@@ -163,7 +163,7 @@ The current client now includes:
 - native notifications after refresh/automation actions
 - friendlier history date formatting
 
-Station creation/deletion still remains CLI-first while the GUI write surface continues to mature.
+Station creation, duplication, editing, enable/disable, and deletion are now available in the native app. Station deletion creates a backend safety backup and preserves the Plex playlist and station history.
 
 ## v13.2 additions
 

@@ -53,6 +53,7 @@ def test_api_routes_are_registered():
     assert "/api/v1/status" in paths
     assert "/api/v1/stations" in paths
     assert "/api/v1/stations/{station_id}" in paths
+    assert "/api/v1/stations/{station_id}/clone" in paths
     assert "/api/v1/stations/{station_id}/refresh" in paths
     assert "/api/v1/automation" in paths
     assert "/api/v1/automation/{job_name}/install" in paths
@@ -105,6 +106,68 @@ def test_station_update_config_persists_normalized_profile(tmp_path, monkeypatch
     saved = core.load_stations()["retro-kids"]
     assert saved["enabled"] is False
     assert saved["total"] == 72
+
+
+def test_station_profile_create_clone_delete(tmp_path, monkeypatch):
+    stations_file = tmp_path / "stations.json"
+    stations_file.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(core, "STATIONS_FILE", stations_file)
+    monkeypatch.setattr(core, "ensure_config", lambda: None)
+    monkeypatch.setattr(
+        core,
+        "create_backup",
+        lambda _reason: tmp_path / "backup-before-delete",
+    )
+
+    created = core.create_station_profile(
+        "saturday-cartoons",
+        {
+            "name": "Saturday Cartoons",
+            "playlist": "Saturday Cartoons Channel",
+            "preset": "90s-cartoons",
+            "enabled": True,
+        },
+    )
+    assert created["name"] == "Saturday Cartoons"
+    assert created["preset"] == "90s-cartoons"
+
+    cloned = core.clone_station_profile(
+        "saturday-cartoons",
+        "saturday-cartoons-copy",
+        name="Saturday Cartoons Copy",
+        enabled=False,
+    )
+    assert cloned["name"] == "Saturday Cartoons Copy"
+    assert cloned["enabled"] is False
+    assert cloned["playlist"] == "Saturday Cartoons Copy"
+
+    deleted = core.delete_station_profile("saturday-cartoons-copy")
+    assert deleted["plex_playlist_preserved"] is True
+    assert deleted["history_preserved"] is True
+    assert "saturday-cartoons-copy" not in core.load_stations()
+
+
+def test_station_create_api_rejects_duplicate_id(tmp_path, monkeypatch):
+    stations_file = tmp_path / "stations.json"
+    stations_file.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(core, "STATIONS_FILE", stations_file)
+    monkeypatch.setattr(core, "ensure_config", lambda: None)
+
+    request = api.StationCreateRequest(
+        station_id="retro-kids",
+        name="Retro Kids",
+    )
+    first = api.station_create(request, _authorized=True)
+    assert first["station"]["id"] == "retro-kids"
+
+    with pytest.raises(Exception) as exc:
+        api.station_create(request, _authorized=True)
+    assert getattr(exc.value, "status_code", None) == 409
+
+
+def test_station_clone_api_defaults_to_disabled():
+    request = api.StationCloneRequest(new_station_id="copy")
+    assert request.enabled is False
 
 
 def test_station_update_rejects_invalid_year_range(tmp_path, monkeypatch):
