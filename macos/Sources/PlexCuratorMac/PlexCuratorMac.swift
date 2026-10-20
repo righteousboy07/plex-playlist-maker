@@ -2338,7 +2338,7 @@ struct StationEditorView: View {
                                 interstitialSequence = ["station-id", "commercial", "commercial", "bumper"]
                             }
                         }
-                    } else {
+                    } else if !cyclicBreaksEnabled {
                         Stepper(
                             "Clips per break: \(interstitialCount)",
                             value: $interstitialCount,
