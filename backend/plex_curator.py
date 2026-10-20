@@ -3153,6 +3153,7 @@ def delete_station_profile(station_id):
     }
 
 def cmd_station_create(args):
+    sid = validate_station_id(args.station_id)
     cfg = {
         "name": args.name or sid.replace("-", " ").title(),
         "description": args.description or "",
@@ -3189,7 +3190,6 @@ def cmd_station_create(args):
         "exclude_shows": args.exclude_show or [],
         "genres_any": args.genre or [],
     }
-    sid = validate_station_id(args.station_id)
     create_station_profile(sid, cfg, replace=args.replace)
     print(f'Created station "{sid}".')
     cmd_station_show(argparse.Namespace(station_id=sid))
