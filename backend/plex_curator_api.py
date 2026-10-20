@@ -344,7 +344,7 @@ def build_schedule_payload(plex, schedule_id: str, request: ScheduleOptionsReque
 
         if block_type == "cartoons":
             estimated = max(1, round(minutes / 22))
-            picked, _shows, mode, block_cursor_updates = core.build_channel(
+            picked, _shows, mode, block_cursor_updates, _runtime_blocks = core.build_channel(
                 plex=plex,
                 preset_name=block.get("preset", "all-cartoons"),
                 channel_name=f"schedule:{schedule_id}:{block_name}",
