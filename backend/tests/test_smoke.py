@@ -552,6 +552,79 @@ def test_parse_interstitial_pool_spec():
     assert pool == {"playlist": "Station IDs", "type": "station-id", "weight": 20}
 
 
+def test_structured_interstitial_sequence_keeps_requested_order(monkeypatch):
+    programs = [
+        SimpleNamespace(ratingKey="ep-1", title="Episode 1"),
+        SimpleNamespace(ratingKey="ep-2", title="Episode 2"),
+    ]
+    station_id = SimpleNamespace(ratingKey="id-1", title="Station ID")
+    ad_1 = SimpleNamespace(ratingKey="ad-1", title="Commercial 1")
+    ad_2 = SimpleNamespace(ratingKey="ad-2", title="Commercial 2")
+    bumper = SimpleNamespace(ratingKey="bump-1", title="Bumper")
+    states = [
+        {"playlist": "IDs", "type": "station-id", "weight": 1, "items": core.deque([station_id])},
+        {"playlist": "Ads", "type": "commercial", "weight": 1, "items": core.deque([ad_1, ad_2])},
+        {"playlist": "Bumpers", "type": "bumper", "weight": 1, "items": core.deque([bumper])},
+    ]
+    monkeypatch.setattr(core.random, "choices", lambda population, weights, k: [population[0]])
+
+    result = core.inject_structured_interstitials(
+        programs,
+        states,
+        every=1,
+        sequence=["station-id", "commercial", "commercial", "bumper"],
+    )
+
+    assert [item.ratingKey for item in result] == [
+        "ep-1", "id-1", "ad-1", "ad-2", "bump-1", "ep-2"
+    ]
+
+
+def test_structured_interstitial_sequence_skips_empty_types(monkeypatch):
+    program = SimpleNamespace(ratingKey="ep-1", title="Episode 1")
+    commercial = SimpleNamespace(ratingKey="ad-1", title="Commercial")
+    states = [
+        {"playlist": "Ads", "type": "commercial", "weight": 1, "items": core.deque([commercial])},
+    ]
+    monkeypatch.setattr(core.random, "choices", lambda population, weights, k: [population[0]])
+
+    result = core.inject_structured_interstitials(
+        [program],
+        states,
+        every=1,
+        sequence=["station-id", "commercial", "bumper"],
+    )
+
+    assert [item.ratingKey for item in result] == ["ep-1", "ad-1"]
+
+
+def test_station_normalizes_ordered_interstitial_sequence():
+    cfg = core.normalize_station("structured", {
+        "preset": "all-cartoons",
+        "interstitial_sequence": [" Station-ID ", "commercial", "commercial", "BUMPER"],
+    })
+
+    assert cfg["interstitial_sequence"] == [
+        "station-id", "commercial", "commercial", "bumper"
+    ]
+
+
+def test_station_rejects_invalid_ordered_interstitial_type():
+    with pytest.raises(SystemExit):
+        core.normalize_station("structured", {
+            "preset": "all-cartoons",
+            "interstitial_sequence": ["station-id", "not-a-real-type"],
+        })
+
+
+def test_station_update_request_accepts_ordered_interstitial_sequence():
+    request = api.StationUpdateRequest(
+        interstitial_sequence=["station-id", "commercial", "bumper"],
+    )
+
+    assert request.interstitial_sequence == ["station-id", "commercial", "bumper"]
+
+
 def test_clean_media_title_removes_common_release_noise():
     assert core.clean_media_title("nickelodeon_bumper_1998_1080p_x264.mp4") == "Nickelodeon Bumper 1998"
 

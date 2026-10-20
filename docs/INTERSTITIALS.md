@@ -120,3 +120,55 @@ To apply normal organization and permanently remove the matched sample files:
   --apply \
   --delete-excluded
 ```
+
+
+## Ordered break sequences
+
+Stations can optionally use an ordered break pattern instead of drawing every clip from the full weighted mix.
+
+An ordered sequence contains interstitial **types**, in playback order. For example:
+
+```text
+station-id
+commercial
+commercial
+bumper
+```
+
+With a break frequency of one program item, the resulting rhythm is:
+
+```text
+Episode → Station ID → Commercial → Commercial → Bumper → Episode
+```
+
+Repeat a type when you want more than one clip of that kind. If no unused clip is available for a requested type, Curator skips that step and continues the sequence. Existing recent-history and same-build repeat protection still apply.
+
+Weights remain useful in ordered mode when multiple playlists share the same type: Curator uses the configured weights to choose which matching pool supplies that step.
+
+CLI example:
+
+```bash
+./plex-curator station-update retro-kids \
+  --interstitial-step station-id \
+  --interstitial-step commercial \
+  --interstitial-step commercial \
+  --interstitial-step bumper \
+  --interstitial-every 1
+```
+
+Return to the legacy weighted-mix behavior:
+
+```bash
+./plex-curator station-update retro-kids --clear-interstitial-sequence
+```
+
+The API field is `interstitial_sequence`:
+
+```json
+{
+  "interstitial_sequence": ["station-id", "commercial", "commercial", "bumper"],
+  "interstitial_every": 1
+}
+```
+
+When `interstitial_sequence` is non-empty it takes precedence over `interstitial_count`. When it is empty, the existing weighted behavior is unchanged.

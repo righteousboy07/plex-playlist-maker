@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Added ordered station break sequences so interstitials can follow a deliberate pattern such as Station ID → Commercial → Commercial → Bumper, while preserving weighted-mix behavior for existing stations.
 - macOS Media Organizer now uses background scan jobs with live discovery/analyze/finalize progress, elapsed time, current-file detail, and Cancel Scan controls instead of one long-running HTTP request.
 - Added cancellable Media Organizer scan jobs with discovery/analyze/finalize progress, elapsed time, result polling, and bounded completed-job retention. The legacy synchronous scan endpoint remains available.
 - macOS Media Organizer can now load, create, update, duplicate, and delete persistent exclusion presets. The destructive Delete Excluded Files option remains runtime-only and is never saved in a preset.

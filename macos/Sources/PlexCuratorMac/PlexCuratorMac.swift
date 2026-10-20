@@ -54,6 +54,7 @@ struct Station: Codable, Identifiable, Hashable {
     let specialEvery: Int
     let interstitialPlaylists: [String]
     let interstitialPools: [InterstitialPool]
+    let interstitialSequence: [String]?
     let interstitialEvery: Int
     let interstitialCount: Int
     let unwatched: Bool
@@ -494,6 +495,7 @@ struct StationUpdateRequest: Encodable {
     let specialEvery: Int
     let interstitialPlaylists: [String]
     let interstitialPools: [InterstitialPool]
+    let interstitialSequence: [String]
     let interstitialEvery: Int
     let interstitialCount: Int
     let unwatched: Bool
@@ -505,7 +507,7 @@ struct StationUpdateRequest: Encodable {
         case name, description, enabled, playlist, preset
         case yearMin, yearMax, kidsOnly, adult, perShow, total
         case avoidRecent, minShowGap, seasonal, specialEvery
-        case interstitialPlaylists, interstitialPools, interstitialEvery, interstitialCount
+        case interstitialPlaylists, interstitialPools, interstitialSequence, interstitialEvery, interstitialCount
         case unwatched, syncWatchProgress, includeShows, excludeShows
     }
 
@@ -528,6 +530,7 @@ struct StationUpdateRequest: Encodable {
         try c.encode(specialEvery, forKey: .specialEvery)
         try c.encode(interstitialPlaylists, forKey: .interstitialPlaylists)
         try c.encode(interstitialPools, forKey: .interstitialPools)
+        try c.encode(interstitialSequence, forKey: .interstitialSequence)
         try c.encode(interstitialEvery, forKey: .interstitialEvery)
         try c.encode(interstitialCount, forKey: .interstitialCount)
         try c.encode(unwatched, forKey: .unwatched)
@@ -1840,6 +1843,8 @@ struct StationEditorView: View {
     @State private var interstitialPlaylists: Set<String>
     @State private var interstitialTypes: [String: String]
     @State private var interstitialWeights: [String: Int]
+    @State private var structuredBreaksEnabled: Bool
+    @State private var interstitialSequence: [String]
     @State private var interstitialEvery: Int
     @State private var interstitialCount: Int
     @State private var unwatched: Bool
@@ -1882,6 +1887,9 @@ struct StationEditorView: View {
                 uniqueKeysWithValues: savedPools.map { ($0.playlist, $0.weight) }
             )
         )
+        let savedSequence = station.interstitialSequence ?? []
+        _structuredBreaksEnabled = State(initialValue: !savedSequence.isEmpty)
+        _interstitialSequence = State(initialValue: savedSequence)
         _interstitialEvery = State(initialValue: station.interstitialEvery)
         _interstitialCount = State(initialValue: station.interstitialCount)
         _unwatched = State(initialValue: station.unwatched)
@@ -1949,6 +1957,40 @@ struct StationEditorView: View {
         guard totalInterstitialWeight > 0 else { return 0 }
         let weight = max(1, interstitialWeights[title] ?? 1)
         return Int((Double(weight) / Double(totalInterstitialWeight) * 100.0).rounded())
+    }
+
+    private func interstitialWeightLabel(_ title: String) -> String {
+        let weight = max(1, interstitialWeights[title] ?? 1)
+        if structuredBreaksEnabled {
+            return "Weight: \(weight) (within type)"
+        }
+        return "Weight: \(weight) (~\(mixPercent(title))%)"
+    }
+
+    private var structuredBreaksBinding: Binding<Bool> {
+        Binding(
+            get: { structuredBreaksEnabled },
+            set: { enabled in
+                structuredBreaksEnabled = enabled
+                if enabled && interstitialSequence.isEmpty {
+                    interstitialSequence = ["station-id", "commercial", "bumper"]
+                }
+            }
+        )
+    }
+
+    private func interstitialSequenceBinding(_ index: Int) -> Binding<String> {
+        Binding(
+            get: { interstitialSequence[index] },
+            set: { interstitialSequence[index] = $0 }
+        )
+    }
+
+    private func moveInterstitialStep(_ index: Int, by offset: Int) {
+        let target = index + offset
+        guard interstitialSequence.indices.contains(index),
+              interstitialSequence.indices.contains(target) else { return }
+        interstitialSequence.swapAt(index, target)
     }
 
     var body: some View {
@@ -2032,7 +2074,7 @@ struct StationEditorView: View {
                                         .frame(maxWidth: 220)
 
                                         Stepper(
-                                            "Weight: \(interstitialWeights[plexPlaylist.title] ?? 1) (~\(mixPercent(plexPlaylist.title))%)",
+                                            interstitialWeightLabel(plexPlaylist.title),
                                             value: interstitialWeightBinding(plexPlaylist.title),
                                             in: 1...1000
                                         )
@@ -2063,7 +2105,7 @@ struct StationEditorView: View {
                                         .frame(maxWidth: 220)
 
                                         Stepper(
-                                            "Weight: \(interstitialWeights[title] ?? 1) (~\(mixPercent(title))%)",
+                                            interstitialWeightLabel(title),
                                             value: interstitialWeightBinding(title),
                                             in: 1...1000
                                         )
@@ -2081,12 +2123,69 @@ struct StationEditorView: View {
                         value: $interstitialEvery,
                         in: 0...1000
                     )
-                    Stepper(
-                        "Clips per break: \(interstitialCount)",
-                        value: $interstitialCount,
-                        in: 1...20
-                    )
+                    Picker("Break style", selection: structuredBreaksBinding) {
+                        Text("Weighted mix").tag(false)
+                        Text("Ordered sequence").tag(true)
+                    }
                     .disabled(interstitialEvery == 0)
+
+                    if structuredBreaksEnabled {
+                        Text("Each break follows these steps in order. Repeat a type to play more than one clip of that kind.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        ForEach(Array(interstitialSequence.indices), id: \.self) { index in
+                            HStack {
+                                Text("\(index + 1).")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 24, alignment: .trailing)
+
+                                Picker("Step \(index + 1)", selection: interstitialSequenceBinding(index)) {
+                                    ForEach(interstitialTypeOptions, id: \.0) { option in
+                                        Text(option.1).tag(option.0)
+                                    }
+                                }
+                                .labelsHidden()
+
+                                Button {
+                                    moveInterstitialStep(index, by: -1)
+                                } label: {
+                                    Image(systemName: "arrow.up")
+                                }
+                                .disabled(index == interstitialSequence.startIndex)
+
+                                Button {
+                                    moveInterstitialStep(index, by: 1)
+                                } label: {
+                                    Image(systemName: "arrow.down")
+                                }
+                                .disabled(index == interstitialSequence.index(before: interstitialSequence.endIndex))
+
+                                Button(role: .destructive) {
+                                    interstitialSequence.remove(at: index)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                            }
+                        }
+
+                        HStack {
+                            Button("Add Step") {
+                                interstitialSequence.append("commercial")
+                            }
+                            Button("Classic TV Break") {
+                                interstitialSequence = ["station-id", "commercial", "commercial", "bumper"]
+                            }
+                        }
+                    } else {
+                        Stepper(
+                            "Clips per break: \(interstitialCount)",
+                            value: $interstitialCount,
+                            in: 1...20
+                        )
+                        .disabled(interstitialEvery == 0)
+                    }
 
                     if interstitialPlaylists.isEmpty {
                         Text("Select at least one playlist to use interstitials.")
@@ -2094,6 +2193,10 @@ struct StationEditorView: View {
                             .foregroundColor(.secondary)
                     } else if interstitialEvery == 0 {
                         Text("Pools are configured, but insertion is disabled until break frequency is above 0.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else if structuredBreaksEnabled {
+                        Text("Ordered mode uses pool weights only when more than one playlist can satisfy the same step type.")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     } else {
@@ -2174,6 +2277,10 @@ struct StationEditorView: View {
             validationMessage = "Minimum year cannot be greater than maximum year."
             return
         }
+        if structuredBreaksEnabled && interstitialSequence.isEmpty {
+            validationMessage = "Ordered breaks need at least one step."
+            return
+        }
 
         let request = StationUpdateRequest(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2199,6 +2306,7 @@ struct StationEditorView: View {
                     weight: max(1, interstitialWeights[$0] ?? 1)
                 )
             },
+            interstitialSequence: structuredBreaksEnabled ? interstitialSequence : [],
             interstitialEvery: interstitialEvery,
             interstitialCount: interstitialCount,
             unwatched: unwatched,

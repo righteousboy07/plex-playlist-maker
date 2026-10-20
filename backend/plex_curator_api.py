@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.7"
+API_VERSION = "1.8"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
 KIDS_SCARY_WISHLIST = core.APP_DIR / "examples" / "kids-scary-missing-wishlist.txt"
@@ -134,6 +134,7 @@ class StationUpdateRequest(BaseModel):
     special_every: Optional[int] = Field(default=None, ge=1, le=1000)
     interstitial_playlists: Optional[list[str]] = None
     interstitial_pools: Optional[list[InterstitialPoolRequest]] = None
+    interstitial_sequence: Optional[list[str]] = Field(default=None, max_length=20)
     interstitial_every: Optional[int] = Field(default=None, ge=0, le=1000)
     interstitial_count: Optional[int] = Field(default=None, ge=1, le=20)
     unwatched: Optional[bool] = None
