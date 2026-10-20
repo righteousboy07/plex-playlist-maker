@@ -229,3 +229,42 @@ Clear the cycle and fall back to the station's other break settings:
 ```
 
 The macOS station editor includes a **Cyclic pattern** mode and a **Classic Alternating** preset matching the example above.
+
+
+## Runtime-aware broadcast blocks
+
+Stations can optionally target real broadcast-style time blocks instead of ending after a fixed number of playlist items.
+
+Set:
+
+- `runtime_block_minutes`: target length of each block. `0` disables runtime mode.
+- `runtime_block_count`: number of blocks to build.
+
+Curator first assembles the station normally, including ordered or cyclic interstitial breaks. It then counts the Plex runtime of **every program and interstitial clip** and chooses the nearest complete-item boundary to each target. Clips are never cut in half.
+
+For example, a 30-minute block might land at 29.3 minutes if adding the next 4-minute clip would push it to 33.3 minutes. The next item begins the next block.
+
+```json
+{
+  "runtime_block_minutes": 30,
+  "runtime_block_count": 8
+}
+```
+
+CLI:
+
+```bash
+./plex-curator station-update retro-kids \
+  --runtime-block-minutes 30 \
+  --runtime-block-count 8
+```
+
+Disable runtime-aware blocks:
+
+```bash
+./plex-curator station-update retro-kids --runtime-block-minutes 0
+```
+
+The macOS station editor provides 30-, 60-, and 90-minute shortcuts plus a custom 5-minute-step target. Station previews show each block's actual runtime, item range, and difference from the target.
+
+The existing `total` station length remains a candidate floor while runtime mode is enabled. Curator automatically raises the candidate count when necessary so there is enough material to form the requested blocks.

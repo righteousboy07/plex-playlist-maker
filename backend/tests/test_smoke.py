@@ -714,6 +714,76 @@ def test_station_update_request_accepts_cyclic_break_pattern():
     assert request.interstitial_break_pattern[0].sequence[-1] == "bumper"
 
 
+def test_runtime_block_plan_prefers_nearest_item_boundary():
+    minute = 60000
+    items = [
+        SimpleNamespace(ratingKey="ep-1", duration=22 * minute),
+        SimpleNamespace(ratingKey="ad-1", duration=4 * minute),
+        SimpleNamespace(ratingKey="bump-1", duration=3 * minute),
+        SimpleNamespace(ratingKey="ep-2", duration=10 * minute),
+    ]
+
+    plan = core.plan_runtime_blocks(items, target_minutes=30, block_count=1)
+
+    assert [item.ratingKey for item in plan["items"]] == ["ep-1", "ad-1", "bump-1"]
+    assert plan["blocks"][0]["duration_minutes"] == 29
+    assert plan["blocks"][0]["delta_minutes"] == -1
+    assert plan["blocks"][0]["complete"] is True
+
+
+def test_runtime_block_plan_builds_multiple_blocks():
+    minute = 60000
+    items = [
+        SimpleNamespace(ratingKey="ep-1", duration=22 * minute),
+        SimpleNamespace(ratingKey="ad-1", duration=4 * minute),
+        SimpleNamespace(ratingKey="bump-1", duration=3 * minute),
+        SimpleNamespace(ratingKey="ep-2", duration=22 * minute),
+        SimpleNamespace(ratingKey="ad-2", duration=5 * minute),
+        SimpleNamespace(ratingKey="bump-2", duration=4 * minute),
+    ]
+
+    plan = core.plan_runtime_blocks(items, target_minutes=30, block_count=2)
+
+    assert len(plan["blocks"]) == 2
+    assert plan["blocks"][0]["duration_minutes"] == 29
+    assert plan["blocks"][1]["duration_minutes"] == 31
+    assert plan["blocks"][1]["end_position"] == 6
+
+
+def test_runtime_block_plan_marks_short_final_block_incomplete():
+    minute = 60000
+    items = [
+        SimpleNamespace(ratingKey="ep-1", duration=12 * minute),
+        SimpleNamespace(ratingKey="ad-1", duration=4 * minute),
+    ]
+
+    plan = core.plan_runtime_blocks(items, target_minutes=30, block_count=1)
+
+    assert plan["blocks"][0]["duration_minutes"] == 16
+    assert plan["blocks"][0]["complete"] is False
+
+
+def test_station_normalizes_runtime_broadcast_blocks():
+    cfg = core.normalize_station("runtime", {
+        "preset": "all-cartoons",
+        "runtime_block_minutes": 30,
+        "runtime_block_count": 8,
+    })
+
+    assert cfg["runtime_block_minutes"] == 30
+    assert cfg["runtime_block_count"] == 8
+
+
+def test_station_update_request_accepts_runtime_broadcast_blocks():
+    request = api.StationUpdateRequest(
+        runtime_block_minutes=60,
+        runtime_block_count=4,
+    )
+
+    assert request.runtime_block_minutes == 60
+    assert request.runtime_block_count == 4
+
+
 def test_clean_media_title_removes_common_release_noise():
     assert core.clean_media_title("nickelodeon_bumper_1998_1080p_x264.mp4") == "Nickelodeon Bumper 1998"
 

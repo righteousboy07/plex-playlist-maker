@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.9"
+API_VERSION = "1.10"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
 KIDS_SCARY_WISHLIST = core.APP_DIR / "examples" / "kids-scary-missing-wishlist.txt"
@@ -142,6 +142,8 @@ class StationUpdateRequest(BaseModel):
     interstitial_break_pattern: Optional[list[InterstitialBreakRequest]] = Field(default=None, max_length=12)
     interstitial_every: Optional[int] = Field(default=None, ge=0, le=1000)
     interstitial_count: Optional[int] = Field(default=None, ge=1, le=20)
+    runtime_block_minutes: Optional[int] = Field(default=None, ge=0, le=1440)
+    runtime_block_count: Optional[int] = Field(default=None, ge=1, le=96)
     unwatched: Optional[bool] = None
     sync_watch_progress: Optional[bool] = None
     include_shows: Optional[list[str]] = None
@@ -576,6 +578,14 @@ def station_preview(station_id: str, request: PreviewRequest):
         "show_count": len(shows),
         "seasonal_mode": mode,
         "item_count": len(items),
+        "runtime_blocks": (
+            core.plan_runtime_blocks(
+                items,
+                cfg["runtime_block_minutes"],
+                cfg["runtime_block_count"],
+            )["blocks"]
+            if cfg["runtime_block_minutes"] > 0 else []
+        ),
         "items": [
             serialize_item(item, i)
             for i, item in enumerate(items, 1)

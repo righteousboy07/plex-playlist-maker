@@ -63,6 +63,8 @@ struct Station: Codable, Identifiable, Hashable {
     let interstitialBreakPattern: [InterstitialBreakRule]?
     let interstitialEvery: Int
     let interstitialCount: Int
+    let runtimeBlockMinutes: Int
+    let runtimeBlockCount: Int
     let unwatched: Bool
     let syncWatchProgress: Bool
     let includeShows: [String]
@@ -252,11 +254,25 @@ struct MediaItem: Codable, Identifiable {
     }
 }
 
+struct RuntimeBlockSummary: Codable, Identifiable {
+    var id: Int { index }
+    let index: Int
+    let targetMinutes: Int
+    let durationMinutes: Double
+    let deltaMinutes: Double
+    let itemCount: Int
+    let startPosition: Int
+    let endPosition: Int
+    let complete: Bool
+    let unknownDurationCount: Int
+}
+
 struct PreviewResponse: Codable {
     let station: Station
     let showCount: Int
     let seasonalMode: String
     let itemCount: Int
+    let runtimeBlocks: [RuntimeBlockSummary]?
     let items: [MediaItem]
 }
 
@@ -505,6 +521,8 @@ struct StationUpdateRequest: Encodable {
     let interstitialBreakPattern: [InterstitialBreakRule]
     let interstitialEvery: Int
     let interstitialCount: Int
+    let runtimeBlockMinutes: Int
+    let runtimeBlockCount: Int
     let unwatched: Bool
     let syncWatchProgress: Bool
     let includeShows: [String]
@@ -515,6 +533,7 @@ struct StationUpdateRequest: Encodable {
         case yearMin, yearMax, kidsOnly, adult, perShow, total
         case avoidRecent, minShowGap, seasonal, specialEvery
         case interstitialPlaylists, interstitialPools, interstitialSequence, interstitialBreakPattern, interstitialEvery, interstitialCount
+        case runtimeBlockMinutes, runtimeBlockCount
         case unwatched, syncWatchProgress, includeShows, excludeShows
     }
 
@@ -541,6 +560,8 @@ struct StationUpdateRequest: Encodable {
         try c.encode(interstitialBreakPattern, forKey: .interstitialBreakPattern)
         try c.encode(interstitialEvery, forKey: .interstitialEvery)
         try c.encode(interstitialCount, forKey: .interstitialCount)
+        try c.encode(runtimeBlockMinutes, forKey: .runtimeBlockMinutes)
+        try c.encode(runtimeBlockCount, forKey: .runtimeBlockCount)
         try c.encode(unwatched, forKey: .unwatched)
         try c.encode(syncWatchProgress, forKey: .syncWatchProgress)
         try c.encode(includeShows, forKey: .includeShows)
@@ -1766,6 +1787,12 @@ struct StationDetailView: View {
                 row("Enabled", station.enabled ? "Yes" : "No")
                 row("Preset", station.preset)
                 row("Total", "\(station.total)")
+                if station.runtimeBlockMinutes > 0 {
+                    row(
+                        "Broadcast blocks",
+                        "\(station.runtimeBlockCount) × \(station.runtimeBlockMinutes) min"
+                    )
+                }
                 row("Per show", "\(station.perShow)")
                 row("Show gap", "\(station.minShowGap)")
                 row("Avoid recent", "\(station.avoidRecent)")
@@ -1789,7 +1816,45 @@ struct StationDetailView: View {
     private var previewList: some View {
         Group {
             if let p = model.preview, p.station.id == station.id {
-                List(p.items) { item in Text(item.displayTitle) }
+                List {
+                    if let blocks = p.runtimeBlocks, !blocks.isEmpty {
+                        Section("Runtime Blocks") {
+                            ForEach(blocks) { block in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Block \(block.index)")
+                                            .font(.headline)
+                                        Text(
+                                            "Items \(block.startPosition)–\(block.endPosition) • "
+                                            + "\(block.itemCount) items"
+                                        )
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    VStack(alignment: .trailing, spacing: 2) {
+                                        Text(String(format: "%.1f min", block.durationMinutes))
+                                        Text(
+                                            String(
+                                                format: "%+.1f min vs %d",
+                                                block.deltaMinutes,
+                                                block.targetMinutes
+                                            )
+                                        )
+                                        .font(.caption)
+                                        .foregroundColor(block.complete ? .secondary : .orange)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Section("Lineup") {
+                        ForEach(p.items) { item in
+                            Text(item.displayTitle)
+                        }
+                    }
+                }
             } else {
                 Button("Load Preview") { Task { await model.loadPreview(station) } }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1856,6 +1921,8 @@ struct StationEditorView: View {
     @State private var interstitialBreakPattern: [InterstitialBreakRule]
     @State private var interstitialEvery: Int
     @State private var interstitialCount: Int
+    @State private var runtimeBlockMinutes: Int
+    @State private var runtimeBlockCount: Int
     @State private var unwatched: Bool
     @State private var syncWatchProgress: Bool
     @State private var includeShows: String
@@ -1907,6 +1974,8 @@ struct StationEditorView: View {
         _interstitialBreakPattern = State(initialValue: savedPattern)
         _interstitialEvery = State(initialValue: station.interstitialEvery)
         _interstitialCount = State(initialValue: station.interstitialCount)
+        _runtimeBlockMinutes = State(initialValue: station.runtimeBlockMinutes)
+        _runtimeBlockCount = State(initialValue: station.runtimeBlockCount)
         _unwatched = State(initialValue: station.unwatched)
         _syncWatchProgress = State(initialValue: station.syncWatchProgress)
         _includeShows = State(initialValue: station.includeShows.joined(separator: "\n"))
@@ -2123,7 +2192,50 @@ struct StationEditorView: View {
                     }
 
                     Stepper("Episodes per show: \(perShow)", value: $perShow, in: 1...100)
-                    Stepper("Station length: \(total)", value: $total, in: 1...1000)
+                    Stepper(
+                        runtimeBlockMinutes > 0
+                            ? "Candidate item floor: \(total)"
+                            : "Station length: \(total)",
+                        value: $total,
+                        in: 1...1000
+                    )
+
+                    Toggle(
+                        "Runtime-aware broadcast blocks",
+                        isOn: Binding(
+                            get: { runtimeBlockMinutes > 0 },
+                            set: { enabled in
+                                runtimeBlockMinutes = enabled
+                                    ? max(30, runtimeBlockMinutes)
+                                    : 0
+                            }
+                        )
+                    )
+
+                    if runtimeBlockMinutes > 0 {
+                        HStack {
+                            Button("30 min") { runtimeBlockMinutes = 30 }
+                            Button("60 min") { runtimeBlockMinutes = 60 }
+                            Button("90 min") { runtimeBlockMinutes = 90 }
+                        }
+
+                        Stepper(
+                            "Target block: \(runtimeBlockMinutes) minutes",
+                            value: $runtimeBlockMinutes,
+                            in: 5...180,
+                            step: 5
+                        )
+                        Stepper(
+                            "Blocks to build: \(runtimeBlockCount)",
+                            value: $runtimeBlockCount,
+                            in: 1...96
+                        )
+
+                        Text("Curator counts both programs and interstitials, then ends each block at the nearest complete item boundary. The candidate item floor only ensures enough material is available.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
                     Stepper("Avoid recent: \(avoidRecent)", value: $avoidRecent, in: 0...100000)
                     Stepper("Minimum show gap: \(minShowGap)", value: $minShowGap, in: 0...100)
                     Stepper("Special every: \(specialEvery)", value: $specialEvery, in: 1...1000)
@@ -2482,6 +2594,8 @@ struct StationEditorView: View {
             interstitialBreakPattern: cyclicBreaksEnabled ? interstitialBreakPattern : [],
             interstitialEvery: interstitialEvery,
             interstitialCount: interstitialCount,
+            runtimeBlockMinutes: runtimeBlockMinutes,
+            runtimeBlockCount: runtimeBlockCount,
             unwatched: unwatched,
             syncWatchProgress: syncWatchProgress,
             includeShows: lines(includeShows),

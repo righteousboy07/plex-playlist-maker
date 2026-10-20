@@ -2239,11 +2239,82 @@ def inject_cyclic_interstitial_breaks(items, pool_states, pattern):
         break_index = (break_index + 1) % len(pattern)
     return out
 
+def item_duration_ms(item):
+    try:
+        value = int(getattr(item, "duration", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, value)
+
+def plan_runtime_blocks(items, target_minutes, block_count):
+    items = list(items or [])
+    try:
+        target_minutes = int(target_minutes or 0)
+        block_count = int(block_count or 0)
+    except (TypeError, ValueError):
+        return {"items": items, "blocks": []}
+    if target_minutes <= 0 or block_count <= 0 or not items:
+        return {"items": items, "blocks": []}
+
+    target_ms = target_minutes * 60000
+    blocks = []
+    cursor = 0
+
+    for block_index in range(block_count):
+        if cursor >= len(items):
+            break
+
+        start = cursor
+        elapsed_ms = 0
+        closed_near_target = False
+
+        while cursor < len(items):
+            duration_ms = item_duration_ms(items[cursor])
+            before_ms = elapsed_ms
+            after_ms = elapsed_ms + duration_ms
+
+            if cursor > start and before_ms > 0 and duration_ms > 0 and after_ms >= target_ms:
+                if abs(target_ms - before_ms) <= abs(after_ms - target_ms):
+                    closed_near_target = True
+                    break
+
+            elapsed_ms = after_ms
+            cursor += 1
+
+            if elapsed_ms >= target_ms:
+                closed_near_target = True
+                break
+
+        if cursor == start:
+            elapsed_ms = item_duration_ms(items[cursor])
+            cursor += 1
+            closed_near_target = elapsed_ms >= target_ms
+
+        block_items = items[start:cursor]
+        unknown_count = sum(1 for item in block_items if item_duration_ms(item) <= 0)
+        blocks.append({
+            "index": block_index + 1,
+            "target_minutes": target_minutes,
+            "duration_minutes": round(elapsed_ms / 60000, 2),
+            "delta_minutes": round((elapsed_ms - target_ms) / 60000, 2),
+            "item_count": len(block_items),
+            "start_position": start + 1,
+            "end_position": cursor,
+            "complete": closed_near_target,
+            "unknown_duration_count": unknown_count,
+        })
+
+    return {
+        "items": items[:cursor],
+        "blocks": blocks,
+    }
+
 def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, avoid_recent,
                   sync_watch_progress, min_show_gap, seasonal, special_every, adult=False,
                   profile_overrides=None, interstitial_playlists=None,
                   interstitial_pools=None, interstitial_every=0, interstitial_count=1,
-                  interstitial_sequence=None, interstitial_break_pattern=None):
+                  interstitial_sequence=None, interstitial_break_pattern=None,
+                  runtime_block_minutes=0, runtime_block_count=1):
     if preset_name not in CHANNEL_PRESETS:
         raise SystemExit(f"Unknown channel preset: {preset_name}")
     cfg = dict(CHANNEL_PRESETS[preset_name])
@@ -2257,6 +2328,15 @@ def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, a
     if adult:
         cfg["kids_only"] = False
 
+    runtime_blocks_enabled = runtime_block_minutes > 0 and runtime_block_count > 0
+    selection_total = total
+    if runtime_blocks_enabled:
+        estimated_items_per_block = max(2, (runtime_block_minutes + 4) // 5)
+        selection_total = min(
+            1000,
+            max(total, runtime_block_count * estimated_items_per_block),
+        )
+
     sec = get_section(plex, "TV Shows")
     shows = eligible_cartoon_shows(sec, cfg)
     random.shuffle(shows)
@@ -2268,7 +2348,11 @@ def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, a
         )
         if chosen:
             queues.append((show, deque(chosen), source))
-    base_items, cursor_steps = interleave_show_queues(queues, total, min_show_gap)
+    base_items, cursor_steps = interleave_show_queues(
+        queues,
+        selection_total,
+        min_show_gap,
+    )
     mode = seasonal_mode(seasonal)
     base_keys = {str(getattr(ep, "ratingKey", "")) for ep in base_items}
     specials = collect_seasonal_specials(shows, mode, recent | base_keys)
@@ -2311,7 +2395,16 @@ def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, a
                 interstitial_count,
             )
 
-    items = items[:total]
+    if runtime_blocks_enabled:
+        runtime_plan = plan_runtime_blocks(
+            items,
+            runtime_block_minutes,
+            runtime_block_count,
+        )
+        items = runtime_plan["items"]
+    else:
+        items = items[:total]
+
     cursor_updates = cursor_updates_for_items(channel_name, items, cursor_steps)
     return items, shows, mode, cursor_updates
 
@@ -2606,6 +2699,8 @@ STATION_UPDATE_FIELDS = {
     "interstitial_pools": list,
     "interstitial_sequence": list,
     "interstitial_break_pattern": list,
+    "runtime_block_minutes": int,
+    "runtime_block_count": int,
 }
 
 def load_stations():
@@ -2795,6 +2890,8 @@ def normalize_station(station_id, cfg):
         "interstitial_break_pattern": interstitial_break_pattern,
         "interstitial_every": int(cfg.get("interstitial_every", 0) or 0),
         "interstitial_count": int(cfg.get("interstitial_count", 1) or 1),
+        "runtime_block_minutes": int(cfg.get("runtime_block_minutes", 0) or 0),
+        "runtime_block_count": int(cfg.get("runtime_block_count", 1) or 1),
         "unwatched": bool(cfg.get("unwatched", False)),
         "sync_watch_progress": bool(cfg.get("sync_watch_progress", True)),
         "include_shows": list(cfg.get("include_shows", [])),
@@ -2813,6 +2910,14 @@ def normalize_station(station_id, cfg):
         raise SystemExit(f'Station "{station_id}" requires interstitial_every >= 0.')
     if out["interstitial_count"] < 1:
         raise SystemExit(f'Station "{station_id}" requires interstitial_count >= 1.')
+    if out["runtime_block_minutes"] < 0 or out["runtime_block_minutes"] > 1440:
+        raise SystemExit(
+            f'Station "{station_id}" requires runtime_block_minutes from 0 through 1440.'
+        )
+    if out["runtime_block_count"] < 1 or out["runtime_block_count"] > 96:
+        raise SystemExit(
+            f'Station "{station_id}" requires runtime_block_count from 1 through 96.'
+        )
     return out
 
 def cmd_station_list(_args):
@@ -2857,6 +2962,8 @@ def station_build_items(plex, station_id, cfg, total_override=None):
         interstitial_count=cfg["interstitial_count"],
         interstitial_sequence=cfg["interstitial_sequence"],
         interstitial_break_pattern=cfg["interstitial_break_pattern"],
+        runtime_block_minutes=cfg["runtime_block_minutes"],
+        runtime_block_count=cfg["runtime_block_count"],
     )
 
 def print_station_lineup(station_id, cfg, items, shows, mode):
@@ -2865,6 +2972,11 @@ def print_station_lineup(station_id, cfg, items, shows, mode):
     print(f'Preset:   {cfg["preset"]}')
     print(f'Shows:    {len(shows)}')
     print(f'Seasonal: {mode}')
+    if cfg.get("runtime_block_minutes", 0) > 0:
+        print(
+            f'Runtime:  {cfg["runtime_block_count"]} × '
+            f'{cfg["runtime_block_minutes"]}-minute broadcast blocks'
+        )
     print()
     for i, item in enumerate(items, 1):
         if getattr(item, "type", "") == "episode":
@@ -2981,6 +3093,8 @@ def cmd_station_create(args):
             parse_interstitial_break_spec(spec)
             for spec in (args.interstitial_break or [])
         ],
+        "runtime_block_minutes": args.runtime_block_minutes,
+        "runtime_block_count": args.runtime_block_count,
         "unwatched": args.unwatched,
         "sync_watch_progress": not args.ignore_watch_progress,
         "include_shows": args.include_show or [],
@@ -3014,6 +3128,8 @@ def cmd_station_update(args):
         "special_every": args.special_every,
         "interstitial_every": args.interstitial_every,
         "interstitial_count": args.interstitial_count,
+        "runtime_block_minutes": args.runtime_block_minutes,
+        "runtime_block_count": args.runtime_block_count,
     }
     for key, val in updates.items():
         if val is not None:
@@ -3668,6 +3784,8 @@ def build_parser():
     p.add_argument("--interstitial-break", action="append", help="Cyclic break rule as AFTER|TYPE,TYPE,...; repeat in cycle order.")
     p.add_argument("--interstitial-every", type=int, default=0, help="Insert an interstitial break after this many program items; 0 disables non-cyclic modes.")
     p.add_argument("--interstitial-count", type=int, default=1, help="Weighted-mode clips per break; ignored when ordered steps are configured.")
+    p.add_argument("--runtime-block-minutes", type=int, default=0, help="Target minutes per broadcast block; 0 disables runtime-aware blocks.")
+    p.add_argument("--runtime-block-count", type=int, default=1, help="Number of runtime-aware broadcast blocks to build.")
     p.add_argument("--unwatched", action="store_true")
     p.add_argument("--ignore-watch-progress", action="store_true")
     p.add_argument("--include-show", action="append")
@@ -3701,6 +3819,8 @@ def build_parser():
     p.add_argument("--clear-interstitial-break-pattern", action="store_true", help="Clear cyclic break rules.")
     p.add_argument("--interstitial-every", type=int)
     p.add_argument("--interstitial-count", type=int)
+    p.add_argument("--runtime-block-minutes", type=int)
+    p.add_argument("--runtime-block-count", type=int)
     p.add_argument("--unwatched", action="store_true", default=None)
     p.add_argument("--allow-watched", action="store_true", default=None)
     p.add_argument("--ignore-watch-progress", action="store_true", default=None)
