@@ -2177,19 +2177,19 @@ struct DashboardView: View {
     @ViewBuilder
     private func attentionLink(_ item: DashboardAttentionItem, title: String) -> some View {
         switch item.destination {
-        case .health:
+        case .some(.health):
             NavigationLink(destination: HealthView()) {
                 Label(title, systemImage: "arrow.right.circle")
             }
-        case .automation:
+        case .some(.automation):
             NavigationLink(destination: AutomationView()) {
                 Label(title, systemImage: "arrow.right.circle")
             }
-        case .mediaOrganizer:
+        case .some(.mediaOrganizer):
             NavigationLink(destination: MediaOrganizerView()) {
                 Label(title, systemImage: "arrow.right.circle")
             }
-        case .settings:
+        case .some(.settings):
             NavigationLink(destination: SettingsView()) {
                 Label(title, systemImage: "arrow.right.circle")
             }
