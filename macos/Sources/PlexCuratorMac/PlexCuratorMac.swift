@@ -1855,18 +1855,28 @@ struct StatusBadge: View {
     }
 }
 
+enum DashboardDestination {
+    case health
+    case automation
+    case mediaOrganizer
+    case settings
+}
+
 struct DashboardAttentionItem: Identifiable {
     var id: String { title + detail }
     let icon: String
     let title: String
     let detail: String
     let critical: Bool
+    let destination: DashboardDestination?
+    let actionTitle: String?
 }
 
 struct DashboardView: View {
     @EnvironmentObject var model: AppModel
     @State private var confirmRefreshAll = false
     @State private var lastBulkResult: RefreshAllResponse?
+    @State private var showCreateStation = false
 
     private let metricColumns = [
         GridItem(.adaptive(minimum: 180, maximum: 260), spacing: 14)
@@ -1885,7 +1895,9 @@ struct DashboardView: View {
                     icon: "bolt.horizontal.circle.fill",
                     title: "Plex is offline",
                     detail: model.status?.plex.error ?? "The backend cannot currently reach Plex.",
-                    critical: true
+                    critical: true,
+                    destination: .settings,
+                    actionTitle: "Open Settings"
                 )
             )
         }
@@ -1901,7 +1913,9 @@ struct DashboardView: View {
                             .prefix(3)
                             .map(\.label)
                             .joined(separator: " • "),
-                        critical: true
+                        critical: true,
+                        destination: .health,
+                        actionTitle: "Open Health"
                     )
                 )
             }
@@ -1915,7 +1929,9 @@ struct DashboardView: View {
                             .prefix(3)
                             .map(\.label)
                             .joined(separator: " • "),
-                        critical: false
+                        critical: false,
+                        destination: .health,
+                        actionTitle: "Review Health"
                     )
                 )
             }
@@ -1930,7 +1946,9 @@ struct DashboardView: View {
                     icon: "clock.badge.exclamationmark.fill",
                     title: "\(failedJobs.count) automation job\(failedJobs.count == 1 ? "" : "s") reported an error",
                     detail: failedJobs.prefix(3).map(\.name).joined(separator: " • "),
-                    critical: true
+                    critical: true,
+                    destination: .automation,
+                    actionTitle: "Open Automation"
                 )
             )
         }
@@ -1942,7 +1960,9 @@ struct DashboardView: View {
                     icon: "server.rack",
                     title: "API LaunchAgent is not loaded",
                     detail: "The app is connected now, but the protected API service is not registered with launchd.",
-                    critical: false
+                    critical: false,
+                    destination: .automation,
+                    actionTitle: "Open Automation"
                 )
             )
         }
@@ -1959,7 +1979,9 @@ struct DashboardView: View {
                     icon: "folder.badge.gearshape",
                     title: "Media Organizer scan is \(scan.status)",
                     detail: detail,
-                    critical: false
+                    critical: false,
+                    destination: .mediaOrganizer,
+                    actionTitle: "Open Media Organizer"
                 )
             )
         }
@@ -2023,6 +2045,11 @@ struct DashboardView: View {
             .padding(24)
         }
         .navigationTitle("Dashboard")
+        .sheet(isPresented: $showCreateStation) {
+            StationCreateView()
+                .environmentObject(model)
+                .frame(minWidth: 480, minHeight: 430)
+        }
         .alert("Refresh every enabled station?", isPresented: $confirmRefreshAll) {
             Button("Refresh Enabled Stations") {
                 Task {
@@ -2120,13 +2147,18 @@ struct DashboardView: View {
                         Image(systemName: item.icon)
                             .foregroundColor(item.critical ? .red : .orange)
                             .frame(width: 22)
-                        VStack(alignment: .leading, spacing: 3) {
+                        VStack(alignment: .leading, spacing: 5) {
                             Text(item.title)
                                 .font(.headline)
                             if !item.detail.isEmpty {
                                 Text(item.detail)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                            }
+                            if let actionTitle = item.actionTitle,
+                               item.destination != nil {
+                                attentionLink(item, title: actionTitle)
+                                    .font(.caption)
                             }
                         }
                         Spacer()
@@ -2139,6 +2171,30 @@ struct DashboardView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func attentionLink(_ item: DashboardAttentionItem, title: String) -> some View {
+        switch item.destination {
+        case .health:
+            NavigationLink(destination: HealthView()) {
+                Label(title, systemImage: "arrow.right.circle")
+            }
+        case .automation:
+            NavigationLink(destination: AutomationView()) {
+                Label(title, systemImage: "arrow.right.circle")
+            }
+        case .mediaOrganizer:
+            NavigationLink(destination: MediaOrganizerView()) {
+                Label(title, systemImage: "arrow.right.circle")
+            }
+        case .settings:
+            NavigationLink(destination: SettingsView()) {
+                Label(title, systemImage: "arrow.right.circle")
+            }
+        case .none:
+            EmptyView()
         }
     }
 
@@ -2164,6 +2220,11 @@ struct DashboardView: View {
                 }
 
                 HStack(spacing: 14) {
+                    Button {
+                        showCreateStation = true
+                    } label: {
+                        Label("New Station", systemImage: "plus.circle")
+                    }
                     NavigationLink(destination: StationsView()) {
                         Label("Stations", systemImage: "tv")
                     }

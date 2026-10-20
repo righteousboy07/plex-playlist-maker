@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Made Dashboard attention cards actionable with direct navigation to Health, Automation, Media Organizer, or Settings, and added a New Station quick action.
 - Rebuilt the macOS Dashboard into an operational control center with health/attention cards, automation and library metrics, recent programming history, quick navigation, Dry Run All, and confirmed refresh-all controls.
 - Added native station creation, duplication, and deletion to the macOS app, backed by authenticated local API endpoints and safety-backup deletion that preserves Plex playlists and station history.
 - Added runtime-aware broadcast blocks with 30/60/90/custom-minute targets, multi-block station builds, nearest-item boundary fitting, and block runtime summaries in macOS previews.
