@@ -392,10 +392,10 @@ def build_schedule_payload(plex, schedule_id: str, request: ScheduleOptionsReque
 def build_station_payload(station_id: str, total: Optional[int] = None):
     cfg = station_or_404(station_id)
     plex = core.connect()
-    items, shows, mode, cursor_updates = core.station_build_items(
+    items, shows, mode, cursor_updates, runtime_blocks = core.station_build_items(
         plex, station_id, cfg, total
     )
-    return plex, cfg, items, shows, mode, cursor_updates
+    return plex, cfg, items, shows, mode, cursor_updates, runtime_blocks
 
 def playlist_diff_payload(plex, cfg, proposed_items):
     existing = core.find_playlist(plex, cfg["playlist"])
@@ -570,7 +570,7 @@ def station_update(
 
 @app.post("/api/v1/stations/{station_id}/preview")
 def station_preview(station_id: str, request: PreviewRequest):
-    _plex, cfg, items, shows, mode, _cursor_updates = build_station_payload(
+    _plex, cfg, items, shows, mode, _cursor_updates, runtime_blocks = build_station_payload(
         station_id, request.total
     )
     return {
@@ -578,14 +578,7 @@ def station_preview(station_id: str, request: PreviewRequest):
         "show_count": len(shows),
         "seasonal_mode": mode,
         "item_count": len(items),
-        "runtime_blocks": (
-            core.plan_runtime_blocks(
-                items,
-                cfg["runtime_block_minutes"],
-                cfg["runtime_block_count"],
-            )["blocks"]
-            if cfg["runtime_block_minutes"] > 0 else []
-        ),
+        "runtime_blocks": runtime_blocks,
         "items": [
             serialize_item(item, i)
             for i, item in enumerate(items, 1)
@@ -595,7 +588,9 @@ def station_preview(station_id: str, request: PreviewRequest):
 
 @app.get("/api/v1/stations/{station_id}/diff")
 def station_diff(station_id: str, total: Optional[int] = Query(default=None, ge=1, le=1000)):
-    plex, cfg, items, shows, mode, _cursor_updates = build_station_payload(station_id, total)
+    plex, cfg, items, shows, mode, _cursor_updates, _runtime_blocks = build_station_payload(
+        station_id, total
+    )
     diff = playlist_diff_payload(plex, cfg, items)
     return {
         "station": {"id": station_id, **cfg},
@@ -615,7 +610,7 @@ def station_refresh(
     request: RefreshRequest,
     _authorized: bool = Depends(require_api_key),
 ):
-    plex, cfg, items, shows, mode, cursor_updates = build_station_payload(
+    plex, cfg, items, shows, mode, cursor_updates, runtime_blocks = build_station_payload(
         station_id, request.total
     )
     if not cfg["enabled"] and not request.force:
@@ -634,6 +629,7 @@ def station_refresh(
             "station": {"id": station_id, **cfg},
             "diff": diff,
             "item_count": len(items),
+            "runtime_blocks": runtime_blocks,
             "read_only": True,
         }
 
@@ -652,6 +648,7 @@ def station_refresh(
         "station_id": station_id,
         "playlist": cfg["playlist"],
         "item_count": len(items),
+        "runtime_blocks": runtime_blocks,
         "seasonal_mode": mode,
         "diff": diff,
     }
@@ -670,7 +667,7 @@ def station_refresh_all(
         if not cfg["enabled"] and not request.include_disabled:
             continue
         try:
-            items, shows, mode, cursor_updates = core.station_build_items(
+            items, shows, mode, cursor_updates, runtime_blocks = core.station_build_items(
                 plex, station_id, cfg, None
             )
             diff = playlist_diff_payload(plex, cfg, items)
@@ -680,6 +677,7 @@ def station_refresh_all(
                     "ok": True,
                     "dry_run": True,
                     "item_count": len(items),
+                    "runtime_blocks": runtime_blocks,
                     "diff": diff,
                 })
                 continue
@@ -702,6 +700,7 @@ def station_refresh_all(
                 "ok": True,
                 "dry_run": False,
                 "item_count": len(items),
+                "runtime_blocks": runtime_blocks,
                 "playlist": cfg["playlist"],
             })
         except Exception as exc:
