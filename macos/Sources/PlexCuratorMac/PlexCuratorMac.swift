@@ -1902,7 +1902,11 @@ struct StationDetailView: View {
                 .environmentObject(model)
                 .frame(minWidth: 480, minHeight: 360)
         }
-        .alert("Delete \(station.name)?", isPresented: $confirmDelete) {
+        .confirmationDialog(
+            "Delete \(station.name)?",
+            isPresented: $confirmDelete,
+            titleVisibility: .visible
+        ) {
             Button("Delete Station", role: .destructive) {
                 Task {
                     if await model.deleteStation(station) {
