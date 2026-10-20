@@ -2395,6 +2395,7 @@ def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, a
                 interstitial_count,
             )
 
+    runtime_blocks = []
     if runtime_blocks_enabled:
         runtime_plan = plan_runtime_blocks(
             items,
@@ -2402,16 +2403,17 @@ def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, a
             runtime_block_count,
         )
         items = runtime_plan["items"]
+        runtime_blocks = runtime_plan["blocks"]
     else:
         items = items[:total]
 
     cursor_updates = cursor_updates_for_items(channel_name, items, cursor_steps)
-    return items, shows, mode, cursor_updates
+    return items, shows, mode, cursor_updates, runtime_blocks
 
 def cmd_channel(args):
     plex = connect()
     cfg = CHANNEL_PRESETS[args.preset]
-    items, shows, mode, cursor_updates = build_channel(
+    items, shows, mode, cursor_updates, _runtime_blocks = build_channel(
         plex=plex,
         preset_name=args.preset,
         channel_name=args.preset,
@@ -2494,7 +2496,7 @@ def cmd_schedule_build(args):
         print(f"[{bname}] {minutes} min")
         if btype == "cartoons":
             estimated = max(1, round(minutes / 22))
-            picked, _shows, _mode, block_cursor_updates = build_channel(
+            picked, _shows, _mode, block_cursor_updates, _runtime_blocks = build_channel(
                 plex=plex,
                 preset_name=block.get("preset", "all-cartoons"),
                 channel_name=f"schedule:{args.name}:{bname}",
@@ -2994,8 +2996,16 @@ def cmd_station_preview(args):
         raise SystemExit(f'Unknown station "{args.station_id}".')
     cfg = normalize_station(args.station_id, stations[args.station_id])
     plex = connect()
-    items, shows, mode, _cursor_updates = station_build_items(plex, args.station_id, cfg, args.total)
+    items, shows, mode, _cursor_updates, runtime_blocks = station_build_items(
+        plex, args.station_id, cfg, args.total
+    )
     print_station_lineup(args.station_id, cfg, items, shows, mode)
+    if runtime_blocks:
+        for block in runtime_blocks:
+            print(
+                f'  Block {block["index"]}: {block["duration_minutes"]:.2f} min '
+                f'({block["delta_minutes"]:+.2f} vs target)'
+            )
 
 def cmd_station_refresh(args):
     stations = load_stations()
@@ -3007,7 +3017,9 @@ def cmd_station_refresh(args):
             f'Station "{args.station_id}" is disabled. Use station-enable or --force.'
         )
     plex = connect()
-    items, shows, mode, cursor_updates = station_build_items(plex, args.station_id, cfg, args.total)
+    items, shows, mode, cursor_updates, _runtime_blocks = station_build_items(
+        plex, args.station_id, cfg, args.total
+    )
     print_station_lineup(args.station_id, cfg, items, shows, mode)
     if not items:
         raise SystemExit("No station items were selected.")
@@ -3037,7 +3049,9 @@ def cmd_station_refresh_all(args):
     for sid, cfg in selected:
         print(f"\\n=== {cfg['name']} ({sid}) ===")
         try:
-            items, shows, mode, cursor_updates = station_build_items(plex, sid, cfg)
+            items, shows, mode, cursor_updates, _runtime_blocks = station_build_items(
+                plex, sid, cfg
+            )
             print_station_lineup(sid, cfg, items, shows, mode)
             if items:
                 if getattr(args, "dry_run", False):
@@ -3324,7 +3338,7 @@ def cmd_station_diff(args):
         raise SystemExit(f'Unknown station "{args.station_id}".')
     cfg = normalize_station(args.station_id, stations[args.station_id])
     plex = connect()
-    proposed, _shows, _mode, _cursor_updates = station_build_items(
+    proposed, _shows, _mode, _cursor_updates, _runtime_blocks = station_build_items(
         plex, args.station_id, cfg, args.total
     )
     print_station_diff(plex, args.station_id, cfg, proposed, as_json=args.json)
