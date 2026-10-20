@@ -172,3 +172,60 @@ The API field is `interstitial_sequence`:
 ```
 
 When `interstitial_sequence` is non-empty it takes precedence over `interstitial_count`. When it is empty, the existing weighted behavior is unchanged.
+
+
+## Cyclic break patterns
+
+For a more television-like rhythm, a station can vary both the **distance between breaks** and the **contents of each break**.
+
+Each cyclic rule has:
+
+- `after`: number of program items to play before the break.
+- `sequence`: ordered interstitial types to insert at that break.
+
+The rules repeat forever while the station lineup is being built.
+
+Example:
+
+```json
+{
+  "interstitial_break_pattern": [
+    {
+      "after": 1,
+      "sequence": ["station-id", "bumper"]
+    },
+    {
+      "after": 2,
+      "sequence": ["station-id", "commercial", "commercial", "bumper"]
+    }
+  ]
+}
+```
+
+That produces a rhythm like:
+
+```text
+Episode
+→ Station ID → Bumper
+→ Episode → Episode
+→ Station ID → Commercial → Commercial → Bumper
+→ repeat
+```
+
+Cyclic break patterns take precedence over `interstitial_sequence`, `interstitial_every`, and `interstitial_count`. Existing stations without a cyclic pattern continue to use their current ordered or weighted behavior.
+
+CLI example:
+
+```bash
+./plex-curator station-update retro-kids \
+  --interstitial-break "1|station-id,bumper" \
+  --interstitial-break "2|station-id,commercial,commercial,bumper"
+```
+
+Clear the cycle and fall back to the station's other break settings:
+
+```bash
+./plex-curator station-update retro-kids --clear-interstitial-break-pattern
+```
+
+The macOS station editor includes a **Cyclic pattern** mode and a **Classic Alternating** preset matching the example above.

@@ -35,6 +35,11 @@ struct InterstitialPool: Codable, Hashable, Identifiable {
     let weight: Int
 }
 
+struct InterstitialBreakRule: Codable, Hashable {
+    let after: Int
+    let sequence: [String]
+}
+
 struct Station: Codable, Identifiable, Hashable {
     let id: String
     let name: String
@@ -55,6 +60,7 @@ struct Station: Codable, Identifiable, Hashable {
     let interstitialPlaylists: [String]
     let interstitialPools: [InterstitialPool]
     let interstitialSequence: [String]?
+    let interstitialBreakPattern: [InterstitialBreakRule]?
     let interstitialEvery: Int
     let interstitialCount: Int
     let unwatched: Bool
@@ -496,6 +502,7 @@ struct StationUpdateRequest: Encodable {
     let interstitialPlaylists: [String]
     let interstitialPools: [InterstitialPool]
     let interstitialSequence: [String]
+    let interstitialBreakPattern: [InterstitialBreakRule]
     let interstitialEvery: Int
     let interstitialCount: Int
     let unwatched: Bool
@@ -507,7 +514,7 @@ struct StationUpdateRequest: Encodable {
         case name, description, enabled, playlist, preset
         case yearMin, yearMax, kidsOnly, adult, perShow, total
         case avoidRecent, minShowGap, seasonal, specialEvery
-        case interstitialPlaylists, interstitialPools, interstitialSequence, interstitialEvery, interstitialCount
+        case interstitialPlaylists, interstitialPools, interstitialSequence, interstitialBreakPattern, interstitialEvery, interstitialCount
         case unwatched, syncWatchProgress, includeShows, excludeShows
     }
 
@@ -531,6 +538,7 @@ struct StationUpdateRequest: Encodable {
         try c.encode(interstitialPlaylists, forKey: .interstitialPlaylists)
         try c.encode(interstitialPools, forKey: .interstitialPools)
         try c.encode(interstitialSequence, forKey: .interstitialSequence)
+        try c.encode(interstitialBreakPattern, forKey: .interstitialBreakPattern)
         try c.encode(interstitialEvery, forKey: .interstitialEvery)
         try c.encode(interstitialCount, forKey: .interstitialCount)
         try c.encode(unwatched, forKey: .unwatched)
@@ -1843,8 +1851,9 @@ struct StationEditorView: View {
     @State private var interstitialPlaylists: Set<String>
     @State private var interstitialTypes: [String: String]
     @State private var interstitialWeights: [String: Int]
-    @State private var structuredBreaksEnabled: Bool
+    @State private var breakStyle: String
     @State private var interstitialSequence: [String]
+    @State private var interstitialBreakPattern: [InterstitialBreakRule]
     @State private var interstitialEvery: Int
     @State private var interstitialCount: Int
     @State private var unwatched: Bool
@@ -1888,8 +1897,14 @@ struct StationEditorView: View {
             )
         )
         let savedSequence = station.interstitialSequence ?? []
-        _structuredBreaksEnabled = State(initialValue: !savedSequence.isEmpty)
+        let savedPattern = station.interstitialBreakPattern ?? []
+        _breakStyle = State(
+            initialValue: !savedPattern.isEmpty
+                ? "cycle"
+                : (!savedSequence.isEmpty ? "ordered" : "weighted")
+        )
         _interstitialSequence = State(initialValue: savedSequence)
+        _interstitialBreakPattern = State(initialValue: savedPattern)
         _interstitialEvery = State(initialValue: station.interstitialEvery)
         _interstitialCount = State(initialValue: station.interstitialCount)
         _unwatched = State(initialValue: station.unwatched)
@@ -1961,19 +1976,34 @@ struct StationEditorView: View {
 
     private func interstitialWeightLabel(_ title: String) -> String {
         let weight = max(1, interstitialWeights[title] ?? 1)
-        if structuredBreaksEnabled {
+        if breakStyle != "weighted" {
             return "Weight: \(weight) (within type)"
         }
         return "Weight: \(weight) (~\(mixPercent(title))%)"
     }
 
-    private var structuredBreaksBinding: Binding<Bool> {
+    private var orderedBreaksEnabled: Bool { breakStyle == "ordered" }
+    private var cyclicBreaksEnabled: Bool { breakStyle == "cycle" }
+
+    private var breakStyleBinding: Binding<String> {
         Binding(
-            get: { structuredBreaksEnabled },
-            set: { enabled in
-                structuredBreaksEnabled = enabled
-                if enabled && interstitialSequence.isEmpty {
+            get: { breakStyle },
+            set: { newStyle in
+                breakStyle = newStyle
+                if newStyle == "ordered" && interstitialSequence.isEmpty {
                     interstitialSequence = ["station-id", "commercial", "bumper"]
+                }
+                if newStyle == "cycle" && interstitialBreakPattern.isEmpty {
+                    interstitialBreakPattern = [
+                        InterstitialBreakRule(
+                            after: 1,
+                            sequence: ["station-id", "bumper"]
+                        ),
+                        InterstitialBreakRule(
+                            after: 2,
+                            sequence: ["station-id", "commercial", "commercial", "bumper"]
+                        ),
+                    ]
                 }
             }
         )
@@ -1991,6 +2021,66 @@ struct StationEditorView: View {
         guard interstitialSequence.indices.contains(index),
               interstitialSequence.indices.contains(target) else { return }
         interstitialSequence.swapAt(index, target)
+    }
+
+    private func interstitialBreakAfterBinding(_ index: Int) -> Binding<Int> {
+        Binding(
+            get: { interstitialBreakPattern[index].after },
+            set: { newValue in
+                let rule = interstitialBreakPattern[index]
+                interstitialBreakPattern[index] = InterstitialBreakRule(
+                    after: max(1, newValue),
+                    sequence: rule.sequence
+                )
+            }
+        )
+    }
+
+    private func interstitialBreakStepBinding(_ breakIndex: Int, _ stepIndex: Int) -> Binding<String> {
+        Binding(
+            get: { interstitialBreakPattern[breakIndex].sequence[stepIndex] },
+            set: { newValue in
+                let rule = interstitialBreakPattern[breakIndex]
+                var sequence = rule.sequence
+                sequence[stepIndex] = newValue
+                interstitialBreakPattern[breakIndex] = InterstitialBreakRule(
+                    after: rule.after,
+                    sequence: sequence
+                )
+            }
+        )
+    }
+
+    private func addInterstitialBreakStep(_ breakIndex: Int) {
+        let rule = interstitialBreakPattern[breakIndex]
+        interstitialBreakPattern[breakIndex] = InterstitialBreakRule(
+            after: rule.after,
+            sequence: rule.sequence + ["commercial"]
+        )
+    }
+
+    private func removeInterstitialBreakStep(_ breakIndex: Int, _ stepIndex: Int) {
+        let rule = interstitialBreakPattern[breakIndex]
+        guard rule.sequence.count > 1 else { return }
+        var sequence = rule.sequence
+        sequence.remove(at: stepIndex)
+        interstitialBreakPattern[breakIndex] = InterstitialBreakRule(
+            after: rule.after,
+            sequence: sequence
+        )
+    }
+
+    private func classicAlternatingBreakPattern() {
+        interstitialBreakPattern = [
+            InterstitialBreakRule(
+                after: 1,
+                sequence: ["station-id", "bumper"]
+            ),
+            InterstitialBreakRule(
+                after: 2,
+                sequence: ["station-id", "commercial", "commercial", "bumper"]
+            ),
+        ]
     }
 
     var body: some View {
@@ -2116,20 +2206,90 @@ struct StationEditorView: View {
                         }
                     }
 
-                    Stepper(
-                        interstitialEvery == 0
-                            ? "Break frequency: Off"
-                            : "Break every \(interstitialEvery) program items",
-                        value: $interstitialEvery,
-                        in: 0...1000
-                    )
-                    Picker("Break style", selection: structuredBreaksBinding) {
-                        Text("Weighted mix").tag(false)
-                        Text("Ordered sequence").tag(true)
+                    Picker("Break style", selection: breakStyleBinding) {
+                        Text("Weighted mix").tag("weighted")
+                        Text("Ordered sequence").tag("ordered")
+                        Text("Cyclic pattern").tag("cycle")
                     }
-                    .disabled(interstitialEvery == 0)
 
-                    if structuredBreaksEnabled {
+                    if cyclicBreaksEnabled {
+                        Text("Each rule controls both when the next break happens and which clip types play. The rules repeat as a cycle.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        ForEach(Array(interstitialBreakPattern.indices), id: \.self) { breakIndex in
+                            GroupBox("Break \(breakIndex + 1)") {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Stepper(
+                                        "After \(interstitialBreakPattern[breakIndex].after) program item\(interstitialBreakPattern[breakIndex].after == 1 ? "" : "s")",
+                                        value: interstitialBreakAfterBinding(breakIndex),
+                                        in: 1...1000
+                                    )
+
+                                    ForEach(Array(interstitialBreakPattern[breakIndex].sequence.indices), id: \.self) { stepIndex in
+                                        HStack {
+                                            Text("\(stepIndex + 1).")
+                                                .font(.caption.monospacedDigit())
+                                                .foregroundColor(.secondary)
+                                                .frame(width: 24, alignment: .trailing)
+
+                                            Picker(
+                                                "Clip \(stepIndex + 1)",
+                                                selection: interstitialBreakStepBinding(breakIndex, stepIndex)
+                                            ) {
+                                                ForEach(interstitialTypeOptions, id: \.0) { option in
+                                                    Text(option.1).tag(option.0)
+                                                }
+                                            }
+                                            .labelsHidden()
+
+                                            Button(role: .destructive) {
+                                                removeInterstitialBreakStep(breakIndex, stepIndex)
+                                            } label: {
+                                                Image(systemName: "trash")
+                                            }
+                                            .disabled(interstitialBreakPattern[breakIndex].sequence.count <= 1)
+                                        }
+                                    }
+
+                                    HStack {
+                                        Button("Add Clip") {
+                                            addInterstitialBreakStep(breakIndex)
+                                        }
+                                        Spacer()
+                                        Button("Remove Break", role: .destructive) {
+                                            interstitialBreakPattern.remove(at: breakIndex)
+                                        }
+                                    }
+                                }
+                                .padding(4)
+                            }
+                        }
+
+                        HStack {
+                            Button("Add Break") {
+                                interstitialBreakPattern.append(
+                                    InterstitialBreakRule(
+                                        after: 1,
+                                        sequence: ["commercial"]
+                                    )
+                                )
+                            }
+                            Button("Classic Alternating") {
+                                classicAlternatingBreakPattern()
+                            }
+                        }
+                    } else {
+                        Stepper(
+                            interstitialEvery == 0
+                                ? "Break frequency: Off"
+                                : "Break every \(interstitialEvery) program items",
+                            value: $interstitialEvery,
+                            in: 0...1000
+                        )
+                    }
+
+                    if orderedBreaksEnabled {
                         Text("Each break follows these steps in order. Repeat a type to play more than one clip of that kind.")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -2191,11 +2351,15 @@ struct StationEditorView: View {
                         Text("Select at least one playlist to use interstitials.")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                    } else if interstitialEvery == 0 {
+                    } else if !cyclicBreaksEnabled && interstitialEvery == 0 {
                         Text("Pools are configured, but insertion is disabled until break frequency is above 0.")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                    } else if structuredBreaksEnabled {
+                    } else if cyclicBreaksEnabled {
+                        Text("Cyclic mode ignores the single break-frequency setting. Pool weights only choose between playlists of the same requested type.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else if orderedBreaksEnabled {
                         Text("Ordered mode uses pool weights only when more than one playlist can satisfy the same step type.")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -2277,8 +2441,16 @@ struct StationEditorView: View {
             validationMessage = "Minimum year cannot be greater than maximum year."
             return
         }
-        if structuredBreaksEnabled && interstitialSequence.isEmpty {
+        if orderedBreaksEnabled && interstitialSequence.isEmpty {
             validationMessage = "Ordered breaks need at least one step."
+            return
+        }
+        if cyclicBreaksEnabled && interstitialBreakPattern.isEmpty {
+            validationMessage = "Cyclic breaks need at least one break rule."
+            return
+        }
+        if cyclicBreaksEnabled && interstitialBreakPattern.contains(where: { $0.sequence.isEmpty }) {
+            validationMessage = "Every cyclic break rule needs at least one clip type."
             return
         }
 
@@ -2306,7 +2478,8 @@ struct StationEditorView: View {
                     weight: max(1, interstitialWeights[$0] ?? 1)
                 )
             },
-            interstitialSequence: structuredBreaksEnabled ? interstitialSequence : [],
+            interstitialSequence: orderedBreaksEnabled ? interstitialSequence : [],
+            interstitialBreakPattern: cyclicBreaksEnabled ? interstitialBreakPattern : [],
             interstitialEvery: interstitialEvery,
             interstitialCount: interstitialCount,
             unwatched: unwatched,

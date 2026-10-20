@@ -625,6 +625,95 @@ def test_station_update_request_accepts_ordered_interstitial_sequence():
     assert request.interstitial_sequence == ["station-id", "commercial", "bumper"]
 
 
+def test_cyclic_interstitial_breaks_vary_timing_and_sequence(monkeypatch):
+    programs = [
+        SimpleNamespace(ratingKey=f"ep-{index}", title=f"Episode {index}")
+        for index in range(1, 5)
+    ]
+    station_ids = core.deque([
+        SimpleNamespace(ratingKey="id-1", title="ID 1"),
+        SimpleNamespace(ratingKey="id-2", title="ID 2"),
+    ])
+    commercials = core.deque([
+        SimpleNamespace(ratingKey="ad-1", title="Ad 1"),
+        SimpleNamespace(ratingKey="ad-2", title="Ad 2"),
+    ])
+    bumpers = core.deque([
+        SimpleNamespace(ratingKey="bump-1", title="Bumper 1"),
+        SimpleNamespace(ratingKey="bump-2", title="Bumper 2"),
+    ])
+    states = [
+        {"playlist": "IDs", "type": "station-id", "weight": 1, "items": station_ids},
+        {"playlist": "Ads", "type": "commercial", "weight": 1, "items": commercials},
+        {"playlist": "Bumpers", "type": "bumper", "weight": 1, "items": bumpers},
+    ]
+    monkeypatch.setattr(core.random, "choices", lambda population, weights, k: [population[0]])
+
+    result = core.inject_cyclic_interstitial_breaks(
+        programs,
+        states,
+        pattern=[
+            {"after": 1, "sequence": ["station-id", "bumper"]},
+            {"after": 2, "sequence": ["station-id", "commercial", "commercial", "bumper"]},
+        ],
+    )
+
+    assert [item.ratingKey for item in result] == [
+        "ep-1", "id-1", "bump-1",
+        "ep-2", "ep-3", "id-2", "ad-1", "ad-2", "bump-2",
+        "ep-4",
+    ]
+
+
+def test_station_normalizes_cyclic_interstitial_break_pattern():
+    cfg = core.normalize_station("cycle", {
+        "preset": "all-cartoons",
+        "interstitial_break_pattern": [
+            {"after": "1", "sequence": [" Station-ID ", "bumper"]},
+            {"after": 2, "sequence": ["commercial", "commercial", "BUMPER"]},
+        ],
+    })
+
+    assert cfg["interstitial_break_pattern"] == [
+        {"after": 1, "sequence": ["station-id", "bumper"]},
+        {"after": 2, "sequence": ["commercial", "commercial", "bumper"]},
+    ]
+
+
+def test_station_rejects_invalid_cyclic_break_rule():
+    with pytest.raises(SystemExit):
+        core.normalize_station("cycle", {
+            "preset": "all-cartoons",
+            "interstitial_break_pattern": [
+                {"after": 0, "sequence": ["commercial"]},
+            ],
+        })
+
+
+def test_parse_interstitial_break_spec():
+    rule = core.parse_interstitial_break_spec(
+        "2|station-id,commercial,commercial,bumper"
+    )
+    assert rule == {
+        "after": 2,
+        "sequence": ["station-id", "commercial", "commercial", "bumper"],
+    }
+
+
+def test_station_update_request_accepts_cyclic_break_pattern():
+    request = api.StationUpdateRequest(
+        interstitial_break_pattern=[
+            api.InterstitialBreakRequest(
+                after=2,
+                sequence=["station-id", "commercial", "bumper"],
+            )
+        ],
+    )
+
+    assert request.interstitial_break_pattern[0].after == 2
+    assert request.interstitial_break_pattern[0].sequence[-1] == "bumper"
+
+
 def test_clean_media_title_removes_common_release_noise():
     assert core.clean_media_title("nickelodeon_bumper_1998_1080p_x264.mp4") == "Nickelodeon Bumper 1998"
 

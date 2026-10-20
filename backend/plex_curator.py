@@ -2211,11 +2211,39 @@ def inject_structured_interstitials(items, pool_states, every, sequence):
         since_break = 0
     return out
 
+def inject_cyclic_interstitial_breaks(items, pool_states, pattern):
+    pattern = list(pattern or [])
+    if not pool_states or not pattern:
+        return list(items)
+
+    out = []
+    break_index = 0
+    since_break = 0
+    for item in items:
+        out.append(item)
+        since_break += 1
+
+        rule = pattern[break_index]
+        if since_break < rule["after"]:
+            continue
+
+        for media_type in rule["sequence"]:
+            candidate = choose_weighted_interstitial(
+                pool_states,
+                required_type=media_type,
+            )
+            if candidate is not None:
+                out.append(candidate)
+
+        since_break = 0
+        break_index = (break_index + 1) % len(pattern)
+    return out
+
 def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, avoid_recent,
                   sync_watch_progress, min_show_gap, seasonal, special_every, adult=False,
                   profile_overrides=None, interstitial_playlists=None,
                   interstitial_pools=None, interstitial_every=0, interstitial_count=1,
-                  interstitial_sequence=None):
+                  interstitial_sequence=None, interstitial_break_pattern=None):
     if preset_name not in CHANNEL_PRESETS:
         raise SystemExit(f"Unknown channel preset: {preset_name}")
     cfg = dict(CHANNEL_PRESETS[preset_name])
@@ -2250,7 +2278,7 @@ def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, a
         {"playlist": name, "type": "general", "weight": 1}
         for name in (interstitial_playlists or [])
     ]
-    if effective_pools and interstitial_every > 0:
+    if effective_pools and (interstitial_break_pattern or interstitial_every > 0):
         program_keys = {
             str(getattr(item, "ratingKey", ""))
             for item in items
@@ -2262,7 +2290,13 @@ def build_channel(plex, preset_name, channel_name, per_show, total, unwatched, a
             recent_keys=recent,
             exclude_keys=program_keys,
         )
-        if interstitial_sequence:
+        if interstitial_break_pattern:
+            items = inject_cyclic_interstitial_breaks(
+                items,
+                pool_states,
+                interstitial_break_pattern,
+            )
+        elif interstitial_sequence:
             items = inject_structured_interstitials(
                 items,
                 pool_states,
@@ -2571,6 +2605,7 @@ STATION_UPDATE_FIELDS = {
     "interstitial_playlists": list,
     "interstitial_pools": list,
     "interstitial_sequence": list,
+    "interstitial_break_pattern": list,
 }
 
 def load_stations():
@@ -2667,9 +2702,77 @@ def normalize_interstitial_sequence(station_id, cfg):
         sequence.append(media_type)
     return sequence
 
+def normalize_interstitial_break_pattern(station_id, cfg):
+    raw_pattern = cfg.get("interstitial_break_pattern", []) or []
+    if not isinstance(raw_pattern, list):
+        raise SystemExit(
+            f'Station "{station_id}" has an invalid interstitial break pattern.'
+        )
+    if len(raw_pattern) > 12:
+        raise SystemExit(
+            f'Station "{station_id}" allows at most 12 cyclic break rules.'
+        )
+
+    pattern = []
+    for raw in raw_pattern:
+        if not isinstance(raw, dict):
+            raise SystemExit(
+                f'Station "{station_id}" has an invalid cyclic break rule.'
+            )
+        try:
+            after = int(raw.get("after", 1))
+        except (TypeError, ValueError):
+            raise SystemExit(
+                f'Station "{station_id}" has an invalid cyclic break interval.'
+            )
+        if after < 1 or after > 1000:
+            raise SystemExit(
+                f'Station "{station_id}" requires cyclic break intervals from 1 through 1000.'
+            )
+
+        raw_sequence = raw.get("sequence", []) or []
+        if not isinstance(raw_sequence, list) or not raw_sequence:
+            raise SystemExit(
+                f'Station "{station_id}" cyclic break rules need at least one clip type.'
+            )
+        if len(raw_sequence) > 20:
+            raise SystemExit(
+                f'Station "{station_id}" allows at most 20 clips per cyclic break.'
+            )
+
+        sequence = []
+        for raw_type in raw_sequence:
+            media_type = str(raw_type).strip().casefold()
+            if media_type not in INTERSTITIAL_TYPES:
+                raise SystemExit(
+                    f'Station "{station_id}" has invalid cyclic break type "{media_type}".'
+                )
+            sequence.append(media_type)
+        pattern.append({"after": after, "sequence": sequence})
+    return pattern
+
+def parse_interstitial_break_spec(spec):
+    parts = [part.strip() for part in str(spec).split("|", 1)]
+    if len(parts) != 2:
+        raise SystemExit(
+            f'Invalid interstitial break "{spec}". Expected AFTER|TYPE,TYPE,...'
+        )
+    try:
+        after = int(parts[0])
+    except ValueError:
+        raise SystemExit(
+            f'Invalid interstitial break "{spec}". AFTER must be a number.'
+        )
+    sequence = [part.strip() for part in parts[1].split(",") if part.strip()]
+    return normalize_interstitial_break_pattern(
+        "cli",
+        {"interstitial_break_pattern": [{"after": after, "sequence": sequence}]},
+    )[0]
+
 def normalize_station(station_id, cfg):
     interstitial_pools = normalize_interstitial_pools(station_id, cfg)
     interstitial_sequence = normalize_interstitial_sequence(station_id, cfg)
+    interstitial_break_pattern = normalize_interstitial_break_pattern(station_id, cfg)
     out = {
         "name": cfg.get("name") or station_id.replace("-", " ").title(),
         "description": cfg.get("description", ""),
@@ -2689,6 +2792,7 @@ def normalize_station(station_id, cfg):
         "interstitial_playlists": [pool["playlist"] for pool in interstitial_pools],
         "interstitial_pools": interstitial_pools,
         "interstitial_sequence": interstitial_sequence,
+        "interstitial_break_pattern": interstitial_break_pattern,
         "interstitial_every": int(cfg.get("interstitial_every", 0) or 0),
         "interstitial_count": int(cfg.get("interstitial_count", 1) or 1),
         "unwatched": bool(cfg.get("unwatched", False)),
@@ -2752,6 +2856,7 @@ def station_build_items(plex, station_id, cfg, total_override=None):
         interstitial_every=cfg["interstitial_every"],
         interstitial_count=cfg["interstitial_count"],
         interstitial_sequence=cfg["interstitial_sequence"],
+        interstitial_break_pattern=cfg["interstitial_break_pattern"],
     )
 
 def print_station_lineup(station_id, cfg, items, shows, mode):
@@ -2872,6 +2977,10 @@ def cmd_station_create(args):
         "interstitial_every": args.interstitial_every,
         "interstitial_count": args.interstitial_count,
         "interstitial_sequence": args.interstitial_step or [],
+        "interstitial_break_pattern": [
+            parse_interstitial_break_spec(spec)
+            for spec in (args.interstitial_break or [])
+        ],
         "unwatched": args.unwatched,
         "sync_watch_progress": not args.ignore_watch_progress,
         "include_shows": args.include_show or [],
@@ -2952,6 +3061,14 @@ def cmd_station_update(args):
         cfg["interstitial_sequence"] = []
     elif args.interstitial_step is not None:
         cfg["interstitial_sequence"] = args.interstitial_step
+
+    if args.clear_interstitial_break_pattern:
+        cfg["interstitial_break_pattern"] = []
+    elif args.interstitial_break is not None:
+        cfg["interstitial_break_pattern"] = [
+            parse_interstitial_break_spec(spec)
+            for spec in args.interstitial_break
+        ]
 
     cfg = normalize_station(args.station_id, cfg)
     stations[args.station_id] = cfg
@@ -3548,7 +3665,8 @@ def build_parser():
     p.add_argument("--interstitial-playlist", action="append", help="Legacy Plex video playlist pool; repeat for multiple pools.")
     p.add_argument("--interstitial-pool", action="append", help="Weighted pool as PLAYLIST|TYPE|WEIGHT. Types: general, bumper, station-id, commercial, promo.")
     p.add_argument("--interstitial-step", action="append", choices=sorted(INTERSTITIAL_TYPES), help="Ordered break step type; repeat to build a structured break sequence.")
-    p.add_argument("--interstitial-every", type=int, default=0, help="Insert an interstitial break after this many program items; 0 disables.")
+    p.add_argument("--interstitial-break", action="append", help="Cyclic break rule as AFTER|TYPE,TYPE,...; repeat in cycle order.")
+    p.add_argument("--interstitial-every", type=int, default=0, help="Insert an interstitial break after this many program items; 0 disables non-cyclic modes.")
     p.add_argument("--interstitial-count", type=int, default=1, help="Weighted-mode clips per break; ignored when ordered steps are configured.")
     p.add_argument("--unwatched", action="store_true")
     p.add_argument("--ignore-watch-progress", action="store_true")
@@ -3578,7 +3696,9 @@ def build_parser():
     p.add_argument("--interstitial-pool", action="append", help="Replace weighted pools using PLAYLIST|TYPE|WEIGHT; repeat for multiple pools.")
     p.add_argument("--clear-interstitials", action="store_true")
     p.add_argument("--interstitial-step", action="append", choices=sorted(INTERSTITIAL_TYPES), help="Replace the ordered break sequence; repeat in playback order.")
-    p.add_argument("--clear-interstitial-sequence", action="store_true", help="Return this station to weighted break selection.")
+    p.add_argument("--clear-interstitial-sequence", action="store_true", help="Clear the fixed ordered break sequence.")
+    p.add_argument("--interstitial-break", action="append", help="Replace cyclic break rules using AFTER|TYPE,TYPE,...; repeat in cycle order.")
+    p.add_argument("--clear-interstitial-break-pattern", action="store_true", help="Clear cyclic break rules.")
     p.add_argument("--interstitial-every", type=int)
     p.add_argument("--interstitial-count", type=int)
     p.add_argument("--unwatched", action="store_true", default=None)
