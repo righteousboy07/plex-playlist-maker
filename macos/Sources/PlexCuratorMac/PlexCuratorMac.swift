@@ -364,6 +364,72 @@ struct HistoryItem: Codable, Identifiable {
 
 struct HistoryResponse: Codable { let history: [HistoryItem] }
 
+struct BuildHistoryItem: Codable, Identifiable {
+    var id: String { "\(builtAt)-\(channelName)-\(playlistName)" }
+    let builtAt: String
+    let channelName: String
+    let playlistName: String
+    let itemCount: Int
+
+    var displayDate: String {
+        let isoFractional = ISO8601DateFormatter()
+        isoFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let isoBasic = ISO8601DateFormatter()
+        isoBasic.formatOptions = [.withInternetDateTime]
+
+        guard let date = isoFractional.date(from: builtAt) ?? isoBasic.date(from: builtAt) else {
+            return builtAt.replacingOccurrences(of: "T", with: " ")
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    var displayChannel: String {
+        if channelName.hasPrefix("station:") {
+            return String(channelName.dropFirst("station:".count))
+                .replacingOccurrences(of: "-", with: " ")
+                .capitalized
+        }
+        if channelName.hasPrefix("schedule:") {
+            return String(channelName.dropFirst("schedule:".count))
+                .replacingOccurrences(of: ":", with: " • ")
+                .replacingOccurrences(of: "-", with: " ")
+                .capitalized
+        }
+        return channelName
+    }
+}
+
+struct BuildHistoryResponse: Codable {
+    let builds: [BuildHistoryItem]
+}
+
+struct RefreshAllRequest: Encodable {
+    let dryRun: Bool
+    let includeDisabled: Bool
+}
+
+struct RefreshAllResult: Codable, Identifiable {
+    var id: String { stationId }
+    let stationId: String
+    let ok: Bool
+    let dryRun: Bool?
+    let itemCount: Int?
+    let playlist: String?
+    let error: String?
+    let diff: StationDiff?
+    let runtimeBlocks: [RuntimeBlockSummary]?
+}
+
+struct RefreshAllResponse: Codable {
+    let ok: Bool
+    let dryRun: Bool
+    let results: [RefreshAllResult]
+}
+
 struct LogResponse: Codable {
     let job: String
     let errors: Bool
@@ -1031,9 +1097,34 @@ final class APIClient {
         )
     }
 
-    func history() async throws -> [HistoryItem] {
-        let r: HistoryResponse = try await request("/api/v1/history?limit=150")
+    func history(limit: Int = 150) async throws -> [HistoryItem] {
+        let safeLimit = max(1, min(limit, 1000))
+        let r: HistoryResponse = try await request("/api/v1/history?limit=\(safeLimit)")
         return r.history
+    }
+
+    func buildHistory(limit: Int = 8) async throws -> [BuildHistoryItem] {
+        let safeLimit = max(1, min(limit, 1000))
+        let response: BuildHistoryResponse = try await request(
+            "/api/v1/build-history?limit=\(safeLimit)"
+        )
+        return response.builds
+    }
+
+    func refreshAllStations(dryRun: Bool) async throws -> RefreshAllResponse {
+        let body = try encoder.encode(
+            RefreshAllRequest(
+                dryRun: dryRun,
+                includeDisabled: false
+            )
+        )
+        return try await request(
+            "/api/v1/stations/refresh-all",
+            method: "POST",
+            body: body,
+            authenticated: true,
+            timeout: 300
+        )
     }
 
     func logs(job: String, errors: Bool) async throws -> LogResponse {
@@ -1277,6 +1368,7 @@ final class AppModel: ObservableObject {
     @Published var stations: [Station] = []
     @Published var doctor: DoctorResponse?
     @Published var history: [HistoryItem] = []
+    @Published var buildHistory: [BuildHistoryItem] = []
     @Published var preview: PreviewResponse?
     @Published var diff: DiffResponse?
     @Published var log: LogResponse?
@@ -1306,10 +1398,58 @@ final class AppModel: ObservableObject {
             status = try await s
             stations = try await st
             doctor = try await d
+
+            if let recentBuilds = try? await api.buildHistory(limit: 8) {
+                buildHistory = recentBuilds
+            }
+            if let jobs = try? await api.automationJobs() {
+                automationJobs = jobs
+            }
             error = nil
         } catch {
             status = nil
             self.error = error.localizedDescription
+        }
+    }
+
+    func refreshAllStations(dryRun: Bool) async -> RefreshAllResponse? {
+        loading = true
+        defer { loading = false }
+        do {
+            let response = try await api.refreshAllStations(dryRun: dryRun)
+            let succeeded = response.results.filter(\.ok).count
+            let failed = response.results.count - succeeded
+
+            if dryRun {
+                message = failed == 0
+                    ? "Dry run checked \(succeeded) enabled station\(succeeded == 1 ? "" : "s"). No Plex changes were made."
+                    : "Dry run checked \(succeeded) station\(succeeded == 1 ? "" : "s"); \(failed) need attention."
+            } else {
+                message = failed == 0
+                    ? "Refreshed \(succeeded) enabled station\(succeeded == 1 ? "" : "s")."
+                    : "Refreshed \(succeeded) station\(succeeded == 1 ? "" : "s"); \(failed) failed."
+                NotificationManager.shared.send(
+                    title: "Plex Curator",
+                    body: message ?? "Station refresh completed."
+                )
+            }
+
+            if let recentBuilds = try? await api.buildHistory(limit: 8) {
+                buildHistory = recentBuilds
+            }
+            if failed > 0 {
+                let names = response.results
+                    .filter { !$0.ok }
+                    .map(\.stationId)
+                    .joined(separator: ", ")
+                error = "Station action failed for: \(names)"
+            } else {
+                error = nil
+            }
+            return response
+        } catch {
+            self.error = error.localizedDescription
+            return nil
         }
     }
 
@@ -1715,59 +1855,421 @@ struct StatusBadge: View {
     }
 }
 
+struct DashboardAttentionItem: Identifiable {
+    var id: String { title + detail }
+    let icon: String
+    let title: String
+    let detail: String
+    let critical: Bool
+}
+
 struct DashboardView: View {
     @EnvironmentObject var model: AppModel
+    @State private var confirmRefreshAll = false
+    @State private var lastBulkResult: RefreshAllResponse?
+
+    private let metricColumns = [
+        GridItem(.adaptive(minimum: 180, maximum: 260), spacing: 14)
+    ]
+
+    private var loadedAutomationCount: Int {
+        model.automationJobs.filter(\.loaded).count
+    }
+
+    private var attentionItems: [DashboardAttentionItem] {
+        var items: [DashboardAttentionItem] = []
+
+        if model.status?.plex.connected != true {
+            items.append(
+                DashboardAttentionItem(
+                    icon: "bolt.horizontal.circle.fill",
+                    title: "Plex is offline",
+                    detail: model.status?.plex.error ?? "The backend cannot currently reach Plex.",
+                    critical: true
+                )
+            )
+        }
+
+        if let doctor = model.doctor {
+            if doctor.failures > 0 {
+                items.append(
+                    DashboardAttentionItem(
+                        icon: "cross.circle.fill",
+                        title: "\(doctor.failures) health check\(doctor.failures == 1 ? "" : "s") failing",
+                        detail: doctor.checks
+                            .filter { $0.status.uppercased() == "FAIL" || $0.status.uppercased() == "ERROR" }
+                            .prefix(3)
+                            .map(\.label)
+                            .joined(separator: " • "),
+                        critical: true
+                    )
+                )
+            }
+            if doctor.warnings > 0 {
+                items.append(
+                    DashboardAttentionItem(
+                        icon: "exclamationmark.triangle.fill",
+                        title: "\(doctor.warnings) health warning\(doctor.warnings == 1 ? "" : "s")",
+                        detail: doctor.checks
+                            .filter { $0.status.uppercased() == "WARN" || $0.status.uppercased() == "WARNING" }
+                            .prefix(3)
+                            .map(\.label)
+                            .joined(separator: " • "),
+                        critical: false
+                    )
+                )
+            }
+        }
+
+        let failedJobs = model.automationJobs.filter {
+            ($0.lastExitCode ?? 0) != 0
+        }
+        if !failedJobs.isEmpty {
+            items.append(
+                DashboardAttentionItem(
+                    icon: "clock.badge.exclamationmark.fill",
+                    title: "\(failedJobs.count) automation job\(failedJobs.count == 1 ? "" : "s") reported an error",
+                    detail: failedJobs.prefix(3).map(\.name).joined(separator: " • "),
+                    critical: true
+                )
+            )
+        }
+
+        if let apiServer = model.automationJobs.first(where: { $0.protected && $0.name == "api-server" }),
+           !apiServer.loaded {
+            items.append(
+                DashboardAttentionItem(
+                    icon: "server.rack",
+                    title: "API LaunchAgent is not loaded",
+                    detail: "The app is connected now, but the protected API service is not registered with launchd.",
+                    critical: false
+                )
+            )
+        }
+
+        if let scan = model.mediaOrganizerScanJob, scan.isActive {
+            let detail: String
+            if let total = scan.totalCount, total > 0 {
+                detail = "\(scan.processedCount) of \(total) files analyzed • \(Int(scan.elapsedSeconds))s elapsed"
+            } else {
+                detail = "\(scan.discoveredCount) files discovered • \(Int(scan.elapsedSeconds))s elapsed"
+            }
+            items.append(
+                DashboardAttentionItem(
+                    icon: "folder.badge.gearshape",
+                    title: "Media Organizer scan is \(scan.status)",
+                    detail: detail,
+                    critical: false
+                )
+            )
+        }
+
+        return items
+    }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text("Plex Curator").font(.largeTitle.bold())
-                        Text("Local programming control").foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    StatusBadge(
-                        text: model.status?.plex.connected == true ? "Plex Connected" : "Offline",
-                        good: model.status?.plex.connected == true
-                    )
-                    Button("Refresh") { Task { await model.refreshDashboard() } }
-                }
+            VStack(alignment: .leading, spacing: 20) {
+                header
 
-                if let s = model.status {
-                    infoBox("Plex Server", "\(s.plex.serverName ?? "Unknown") \(s.plex.serverVersion ?? "")")
-                    infoBox("Stations", "\(s.enabledStationCount) enabled / \(s.stationCount) configured")
-                    infoBox("Versions", "Curator \(s.curatorVersion) • API \(s.apiVersion)")
-                    infoBox("Health", model.doctor?.result ?? "Unknown")
+                if let status = model.status {
+                    metrics(status)
+
+                    if !attentionItems.isEmpty {
+                        attentionSection
+                    }
+
+                    quickActions(status)
+
+                    if let lastBulkResult {
+                        bulkResultSection(lastBulkResult)
+                    }
+
+                    recentBuilds
 
                     GroupBox("Libraries") {
-                        VStack(alignment: .leading, spacing: 7) {
-                            ForEach(s.plex.libraries) { lib in
-                                HStack {
-                                    Image(systemName: lib.type == "movie" ? "film" : "tv")
-                                    Text(lib.name)
-                                    Spacer()
-                                    Text(lib.type).foregroundColor(.secondary)
+                        VStack(alignment: .leading, spacing: 8) {
+                            if status.plex.libraries.isEmpty {
+                                Text("No Plex libraries reported.")
+                                    .foregroundColor(.secondary)
+                            } else {
+                                ForEach(status.plex.libraries) { library in
+                                    HStack {
+                                        Image(systemName: library.type == "movie" ? "film" : "tv")
+                                            .frame(width: 20)
+                                        Text(library.name)
+                                        Spacer()
+                                        Text(library.type.capitalized)
+                                            .foregroundColor(.secondary)
+                                    }
                                 }
                             }
-                        }.frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 } else {
                     GroupBox("API unavailable") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Start the local backend API:")
-                            Text("./plex-curator-api serve").font(.system(.body, design: .monospaced))
-                            Text("or install the api-server LaunchAgent.").foregroundColor(.secondary)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
+                            Text("./plex-curator-api serve")
+                                .font(.system(.body, design: .monospaced))
+                            Text("or install the api-server LaunchAgent.")
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-            }.padding(24)
-        }.navigationTitle("Dashboard")
+            }
+            .padding(24)
+        }
+        .navigationTitle("Dashboard")
+        .alert("Refresh every enabled station?", isPresented: $confirmRefreshAll) {
+            Button("Refresh Enabled Stations") {
+                Task {
+                    lastBulkResult = await model.refreshAllStations(dryRun: false)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This rebuilds \(model.status?.enabledStationCount ?? 0) enabled Plex station playlists. Disabled stations are skipped.")
+        }
     }
 
-    private func infoBox(_ title: String, _ value: String) -> some View {
-        GroupBox(title) {
-            Text(value).font(.title3.bold()).frame(maxWidth: .infinity, alignment: .leading)
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Plex Curator")
+                    .font(.largeTitle.bold())
+                Text("Programming control center")
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            StatusBadge(
+                text: model.status?.plex.connected == true ? "Plex Connected" : "Offline",
+                good: model.status?.plex.connected == true
+            )
+            Button {
+                Task { await model.refreshDashboard() }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+            .disabled(model.loading)
+        }
+    }
+
+    private func metrics(_ status: StatusResponse) -> some View {
+        LazyVGrid(columns: metricColumns, alignment: .leading, spacing: 14) {
+            metricCard(
+                title: "Stations",
+                value: "\(status.enabledStationCount) / \(status.stationCount)",
+                detail: "enabled / configured",
+                icon: "tv"
+            )
+            metricCard(
+                title: "Automation",
+                value: "\(loadedAutomationCount) / \(model.automationJobs.count)",
+                detail: "LaunchAgents loaded",
+                icon: "clock.badge.checkmark"
+            )
+            metricCard(
+                title: "Libraries",
+                value: "\(status.plex.libraries.count)",
+                detail: status.plex.serverName ?? "Plex server",
+                icon: "rectangle.stack"
+            )
+            metricCard(
+                title: "Health",
+                value: model.doctor?.result ?? "Unknown",
+                detail: "\(model.doctor?.failures ?? 0) failures • \(model.doctor?.warnings ?? 0) warnings",
+                icon: "heart.text.square"
+            )
+        }
+    }
+
+    private func metricCard(
+        title: String,
+        value: String,
+        detail: String,
+        icon: String
+    ) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Image(systemName: icon)
+                    Text(title)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                }
+                Text(value)
+                    .font(.title2.bold())
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 78, alignment: .leading)
+        }
+    }
+
+    private var attentionSection: some View {
+        GroupBox("Needs Attention") {
+            VStack(spacing: 0) {
+                ForEach(Array(attentionItems.enumerated()), id: \.element.id) { index, item in
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: item.icon)
+                            .foregroundColor(item.critical ? .red : .orange)
+                            .frame(width: 22)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.title)
+                                .font(.headline)
+                            if !item.detail.isEmpty {
+                                Text(item.detail)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+
+                    if index < attentionItems.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func quickActions(_ status: StatusResponse) -> some View {
+        GroupBox("Quick Actions") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Button {
+                        Task {
+                            lastBulkResult = await model.refreshAllStations(dryRun: true)
+                        }
+                    } label: {
+                        Label("Dry Run All", systemImage: "shield.checkered")
+                    }
+                    .disabled(model.loading || status.enabledStationCount == 0)
+
+                    Button {
+                        confirmRefreshAll = true
+                    } label: {
+                        Label("Refresh Enabled Stations", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(model.loading || status.enabledStationCount == 0)
+                }
+
+                HStack(spacing: 14) {
+                    NavigationLink(destination: StationsView()) {
+                        Label("Stations", systemImage: "tv")
+                    }
+                    NavigationLink(destination: AutomationView()) {
+                        Label("Automation", systemImage: "clock.badge.checkmark")
+                    }
+                    NavigationLink(destination: HealthView()) {
+                        Label("Health", systemImage: "heart.text.square")
+                    }
+                    NavigationLink(destination: MediaOrganizerView()) {
+                        Label("Media Organizer", systemImage: "folder.badge.gearshape")
+                    }
+                }
+                .font(.caption)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func bulkResultSection(_ result: RefreshAllResponse) -> some View {
+        let failures = result.results.filter { !$0.ok }
+        let successes = result.results.count - failures.count
+
+        return GroupBox(result.dryRun ? "Last Dry Run" : "Last Bulk Refresh") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label(
+                        "\(successes) succeeded",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .foregroundColor(.green)
+
+                    if !failures.isEmpty {
+                        Label(
+                            "\(failures.count) failed",
+                            systemImage: "xmark.circle.fill"
+                        )
+                        .foregroundColor(.red)
+                    }
+                    Spacer()
+                }
+
+                if result.dryRun {
+                    Text("No Plex playlists were changed.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                ForEach(failures.prefix(5)) { failure in
+                    HStack(alignment: .top) {
+                        Text(failure.stationId)
+                            .font(.caption.bold())
+                        Spacer()
+                        Text(failure.error ?? "Unknown error")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var recentBuilds: some View {
+        GroupBox("Recent Programming") {
+            VStack(spacing: 0) {
+                if model.buildHistory.isEmpty {
+                    Text("No station or schedule builds recorded yet.")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                } else {
+                    ForEach(Array(model.buildHistory.prefix(8).enumerated()), id: \.element.id) { index, build in
+                        HStack(alignment: .center, spacing: 12) {
+                            Image(systemName: build.channelName.hasPrefix("schedule:") ? "calendar" : "tv")
+                                .foregroundColor(.secondary)
+                                .frame(width: 20)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(build.displayChannel)
+                                    .font(.headline)
+                                Text(build.playlistName)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Spacer()
+
+                            VStack(alignment: .trailing, spacing: 2) {
+                                Text("\(build.itemCount) items")
+                                    .font(.caption.bold())
+                                Text(build.displayDate)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 7)
+
+                        if index < min(model.buildHistory.count, 8) - 1 {
+                            Divider()
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

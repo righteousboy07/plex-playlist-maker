@@ -91,12 +91,12 @@ Select the `PlexCuratorMac` executable and Run.
 ## v13 Screens
 
 ### Dashboard
-- Plex connection
-- server version
-- station counts
-- backend versions
-- Doctor health
-- libraries
+- Plex connection and server/library status
+- station, automation, library, and Doctor health metrics
+- attention cards for Plex/Doctor/automation problems and active Media Organizer scans
+- recent station/schedule build history
+- Dry Run All and confirmed Refresh Enabled Stations actions
+- quick links to Stations, Automation, Health, and Media Organizer
 
 ### Stations
 - list configured stations
