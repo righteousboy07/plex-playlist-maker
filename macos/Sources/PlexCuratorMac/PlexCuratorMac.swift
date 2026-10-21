@@ -1412,6 +1412,19 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func refreshHealth() async {
+        do {
+            async let statusRequest = api.status()
+            async let doctorRequest = api.doctor()
+            status = try await statusRequest
+            doctor = try await doctorRequest
+            error = nil
+            message = "Diagnostics refreshed."
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     func refreshAllStations(dryRun: Bool) async -> RefreshAllResponse? {
         loading = true
         defer { loading = false }
