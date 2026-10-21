@@ -6065,26 +6065,139 @@ struct LogsView: View {
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
 
+    private let apiAddress = "http://127.0.0.1:8765"
+
+    private var apiKeyExists: Bool {
+        FileManager.default.fileExists(atPath: model.api.apiKeyPath)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Local API").font(.title2.bold())
-            setting("Address", "http://127.0.0.1:8765")
-            setting("API key", model.api.apiKeyPath)
-            setting("Exposure", "localhost only")
-            setting("CORS", "disabled")
-            Divider()
-            Text("Backend").font(.title2.bold())
-            setting("Curator", model.status.map { "v\($0.curatorVersion)" } ?? "Unavailable")
-            setting("API", model.status.map { "v\($0.apiVersion)" } ?? "Unavailable")
-            Spacer()
-        }.padding(24).navigationTitle("Settings")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                GroupBox("Connection") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            StatusBadge(
+                                text: model.status == nil ? "API Unavailable" : "API Connected",
+                                good: model.status != nil
+                            )
+                            StatusBadge(
+                                text: model.status?.plex.connected == true ? "Plex Connected" : "Plex Offline",
+                                good: model.status?.plex.connected == true
+                            )
+                            Spacer()
+                        }
+
+                        setting("API address", apiAddress)
+                        setting("Exposure", "localhost only")
+                        setting("CORS", "disabled")
+
+                        HStack(spacing: 10) {
+                            Button("Copy API Address") {
+                                copyToPasteboard(apiAddress)
+                                model.message = "Copied local API address."
+                            }
+
+                            Button("Refresh Connection") {
+                                Task { await model.refreshHealth() }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("API Key") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        setting("Path", model.api.apiKeyPath)
+                        setting("Status", apiKeyExists ? "Present" : "Missing")
+
+                        HStack(spacing: 10) {
+                            Button("Copy Key Path") {
+                                copyToPasteboard(model.api.apiKeyPath)
+                                model.message = "Copied API key path."
+                            }
+
+                            Button("Reveal in Finder") {
+                                revealAPIKey()
+                            }
+                            .disabled(!apiKeyExists)
+                        }
+
+                        Text("The app never displays the API key value here; it only uses the local file for authenticated write actions.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("Backend") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        setting("Curator", model.status.map { "v\($0.curatorVersion)" } ?? "Unavailable")
+                        setting("API", model.status.map { "v\($0.apiVersion)" } ?? "Unavailable")
+                        setting("Stations", "\(model.status?.stationCount ?? model.stations.count)")
+                        setting("Enabled", "\(model.status?.enabledStationCount ?? model.stations.filter(\.enabled).count)")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("Plex Server") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        setting("Server", model.status?.plex.serverName ?? "Unavailable")
+                        setting("Version", model.status?.plex.serverVersion ?? "Unknown")
+                        setting("Libraries", "\(model.status?.plex.libraries.count ?? 0)")
+
+                        if let error = model.status?.plex.error, !error.isEmpty {
+                            Label(error, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("Recovery") {
+                    HStack(spacing: 14) {
+                        NavigationLink(destination: HealthView()) {
+                            Label("Health", systemImage: "heart.text.square")
+                        }
+                        NavigationLink(destination: AutomationView()) {
+                            Label("Automation", systemImage: "clock.badge.checkmark")
+                        }
+                        NavigationLink(destination: LogsView()) {
+                            Label("Logs", systemImage: "doc.text.magnifyingglass")
+                        }
+                        Spacer()
+                        Button("Run Diagnostics") {
+                            Task { await model.refreshHealth() }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(24)
+        }
+        .navigationTitle("Settings")
     }
 
     private func setting(_ label: String, _ value: String) -> some View {
         HStack(alignment: .top) {
-            Text(label).foregroundColor(.secondary).frame(width: 100, alignment: .leading)
-            Text(value).textSelection(.enabled)
+            Text(label)
+                .foregroundColor(.secondary)
+                .frame(width: 110, alignment: .leading)
+            Text(value)
+                .textSelection(.enabled)
             Spacer()
         }
+    }
+
+    private func copyToPasteboard(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
+    private func revealAPIKey() {
+        let url = URL(fileURLWithPath: model.api.apiKeyPath)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 }
