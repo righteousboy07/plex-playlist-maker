@@ -5033,7 +5033,11 @@ struct PlaylistDetailView: View {
             grouping: items.filter { !$0.ratingKey.isEmpty },
             by: \.ratingKey
         )
-        return Set(groups.filter { $0.value.count > 1 }.map(\.key))
+        return Set(
+            groups
+                .filter { $0.value.count > 1 }
+                .map { $0.key }
+        )
     }
 
     private var duplicateExtraCount: Int {
@@ -5066,7 +5070,7 @@ struct PlaylistDetailView: View {
 
     private var mediaTypeSummary: String {
         let counts = Dictionary(grouping: items, by: { ($0.type ?? "unknown").lowercased() })
-            .mapValues(\.count)
+            .mapValues { $0.count }
 
         return counts.keys.sorted().map { type in
             "\(counts[type] ?? 0) \(type)\((counts[type] ?? 0) == 1 ? "" : "s")"
@@ -5152,7 +5156,7 @@ struct PlaylistDetailView: View {
                         }
 
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
-                            ForEach(filteredItems) { item in
+                            ForEach(Array(filteredItems.enumerated()), id: \.offset) { _, item in
                                 PlaylistMediaCard(item: item)
                             }
                         }
