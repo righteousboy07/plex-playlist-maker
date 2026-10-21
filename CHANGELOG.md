@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Improved diagnostics and recovery UX: Health now has summary metrics, issue/pass filtering, search, rerun controls, and links to Automation/Logs; Settings now shows live API/Plex state, API-key file status, safe copy/reveal utilities, and recovery shortcuts.
 - Upgraded the macOS Playlist browser with managed/interstitial/smart/empty filters, sorting, usage badges, update dates, and playlist diagnostics for runtime, watched state, media mix, year range, and duplicate entries.
 - Made Dashboard attention cards actionable with direct navigation to Health, Automation, Media Organizer, or Settings, and added a New Station quick action.
 - Rebuilt the macOS Dashboard into an operational control center with health/attention cards, automation and library metrics, recent programming history, quick navigation, Dry Run All, and confirmed refresh-all controls.
