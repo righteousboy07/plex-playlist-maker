@@ -5777,17 +5777,160 @@ struct HistoryView: View {
 
 struct HealthView: View {
     @EnvironmentObject var model: AppModel
+    @State private var filterMode = 1
+    @State private var searchText = ""
+
+    private var checks: [DoctorCheck] {
+        model.doctor?.checks ?? []
+    }
+
+    private var filteredChecks: [DoctorCheck] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        return checks.filter { check in
+            let normalized = check.status.uppercased()
+            let matchesFilter: Bool
+            switch filterMode {
+            case 1:
+                matchesFilter = normalized != "PASS"
+            case 2:
+                matchesFilter = normalized == "PASS"
+            default:
+                matchesFilter = true
+            }
+
+            guard matchesFilter else { return false }
+            guard !query.isEmpty else { return true }
+
+            return [check.label, check.detail, check.status]
+                .joined(separator: " ")
+                .lowercased()
+                .contains(query)
+        }
+    }
+
+    private var passedCount: Int {
+        checks.filter { $0.status.uppercased() == "PASS" }.count
+    }
+
     var body: some View {
-        List(model.doctor?.checks ?? []) { check in
-            HStack(alignment: .top) {
-                Image(systemName: check.status == "PASS" ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundColor(check.status == "PASS" ? .green : .orange)
-                VStack(alignment: .leading) {
-                    Text(check.label)
-                    Text(check.detail).font(.caption).foregroundColor(.secondary)
+        VStack(spacing: 0) {
+            HStack(spacing: 18) {
+                healthMetric("RESULT", model.doctor?.result ?? "Unknown")
+                healthMetric("PASSED", "\(passedCount)")
+                healthMetric("WARNINGS", "\(model.doctor?.warnings ?? 0)")
+                healthMetric("FAILURES", "\(model.doctor?.failures ?? 0)")
+                Spacer()
+                StatusBadge(
+                    text: model.status?.plex.connected == true ? "Plex Connected" : "Plex Offline",
+                    good: model.status?.plex.connected == true
+                )
+            }
+            .padding()
+
+            Divider()
+
+            if checks.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "stethoscope")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text("No diagnostic results loaded.")
+                        .font(.headline)
+                    Button("Run Diagnostics") {
+                        Task { await model.refreshHealth() }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(filteredChecks) { check in
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: healthIcon(check.status))
+                            .foregroundColor(healthColor(check.status))
+                            .frame(width: 22)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(check.label)
+                                    .font(.headline)
+                                Text(check.status.uppercased())
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.12))
+                                    .clipShape(Capsule())
+                            }
+
+                            Text(check.detail)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                        }
+
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
                 }
             }
-        }.navigationTitle("Health")
+        }
+        .navigationTitle("Health")
+        .searchable(text: $searchText, prompt: "Search diagnostics")
+        .toolbar {
+            Picker("Show", selection: $filterMode) {
+                Text("All").tag(0)
+                Text("Issues").tag(1)
+                Text("Passed").tag(2)
+            }
+            .frame(width: 120)
+
+            NavigationLink(destination: AutomationView()) {
+                Label("Automation", systemImage: "clock.badge.checkmark")
+            }
+
+            NavigationLink(destination: LogsView()) {
+                Label("Logs", systemImage: "doc.text.magnifyingglass")
+            }
+
+            Button {
+                Task { await model.refreshHealth() }
+            } label: {
+                Label("Run Diagnostics", systemImage: "arrow.clockwise")
+            }
+        }
+    }
+
+    private func healthMetric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.title3.bold())
+                .lineLimit(1)
+        }
+        .frame(minWidth: 80, alignment: .leading)
+    }
+
+    private func healthIcon(_ status: String) -> String {
+        switch status.uppercased() {
+        case "PASS":
+            return "checkmark.circle.fill"
+        case "FAIL", "ERROR":
+            return "xmark.octagon.fill"
+        default:
+            return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func healthColor(_ status: String) -> Color {
+        switch status.uppercased() {
+        case "PASS":
+            return .green
+        case "FAIL", "ERROR":
+            return .red
+        default:
+            return .orange
+        }
     }
 }
 
