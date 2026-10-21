@@ -4789,52 +4789,229 @@ struct ScheduleTimelineRow: View {
 struct PlaylistsView: View {
     @EnvironmentObject var model: AppModel
     @State private var searchText = ""
+    @State private var filterMode = 0
+    @State private var sortMode = 0
+
+    private var stationOutputNames: Set<String> {
+        Set(model.stations.map(\.playlist))
+    }
+
+    private var scheduleOutputNames: Set<String> {
+        Set(model.schedules.map(\.playlist))
+    }
+
+    private var interstitialPoolNames: Set<String> {
+        Set(
+            model.stations.flatMap { station in
+                station.interstitialPools.map(\.playlist)
+                    + station.interstitialPlaylists
+            }
+        )
+    }
+
+    private var managedOutputNames: Set<String> {
+        stationOutputNames.union(scheduleOutputNames)
+    }
+
+    private var emptyCount: Int {
+        model.playlists.filter { ($0.itemCount ?? 0) == 0 }.count
+    }
+
+    private var smartCount: Int {
+        model.playlists.filter(\.smart).count
+    }
 
     private var filteredPlaylists: [PlaylistSummary] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return model.playlists }
-        return model.playlists.filter {
-            $0.title.lowercased().contains(query)
-            || ($0.playlistType ?? "").lowercased().contains(query)
+
+        var result = model.playlists.filter { playlist in
+            let matchesFilter: Bool
+            switch filterMode {
+            case 1:
+                matchesFilter = managedOutputNames.contains(playlist.title)
+            case 2:
+                matchesFilter = interstitialPoolNames.contains(playlist.title)
+            case 3:
+                matchesFilter = playlist.smart
+            case 4:
+                matchesFilter = (playlist.itemCount ?? 0) == 0
+            default:
+                matchesFilter = true
+            }
+
+            guard matchesFilter else { return false }
+            guard !query.isEmpty else { return true }
+
+            return [
+                playlist.title,
+                playlist.playlistType ?? "",
+                managedOutputNames.contains(playlist.title) ? "managed station schedule" : "",
+                interstitialPoolNames.contains(playlist.title) ? "interstitial bumper commercial promo" : "",
+                playlist.smart ? "smart" : "",
+                (playlist.itemCount ?? 0) == 0 ? "empty" : ""
+            ]
+            .joined(separator: " ")
+            .lowercased()
+            .contains(query)
         }
+
+        switch sortMode {
+        case 1:
+            result.sort {
+                let lhs = $0.itemCount ?? 0
+                let rhs = $1.itemCount ?? 0
+                if lhs == rhs {
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                return lhs > rhs
+            }
+        case 2:
+            result.sort {
+                let lhs = $0.updatedAt ?? ""
+                let rhs = $1.updatedAt ?? ""
+                if lhs == rhs {
+                    return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+                }
+                return lhs > rhs
+            }
+        default:
+            result.sort {
+                $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+        }
+
+        return result
     }
 
     var body: some View {
-        List(filteredPlaylists) { playlist in
-            NavigationLink(destination: PlaylistDetailView(playlist: playlist)) {
-                HStack(spacing: 12) {
-                    Image(systemName: playlist.smart ? "sparkles.rectangle.stack" : "rectangle.stack")
-                        .font(.title2)
-                        .frame(width: 28)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(playlist.title).font(.headline)
-                        HStack(spacing: 8) {
-                            Text("\(playlist.itemCount ?? 0) items")
-                            if let type = playlist.playlistType {
-                                Text(type.capitalized)
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                playlistMetric("TOTAL", model.playlists.count)
+                playlistMetric("MANAGED", model.playlists.filter { managedOutputNames.contains($0.title) }.count)
+                playlistMetric("INTERSTITIAL", model.playlists.filter { interstitialPoolNames.contains($0.title) }.count)
+                playlistMetric("EMPTY", emptyCount)
+                playlistMetric("SMART", smartCount)
+                Spacer()
+            }
+            .padding()
+
+            Divider()
+
+            List(filteredPlaylists) { playlist in
+                NavigationLink(destination: PlaylistDetailView(playlist: playlist)) {
+                    HStack(spacing: 12) {
+                        Image(systemName: playlist.smart ? "sparkles.rectangle.stack" : "rectangle.stack")
+                            .font(.title2)
+                            .frame(width: 28)
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(playlist.title)
+                                .font(.headline)
+
+                            HStack(spacing: 8) {
+                                Text("\(playlist.itemCount ?? 0) items")
+                                if let type = playlist.playlistType {
+                                    Text(type.capitalized)
+                                }
+                                if let updated = formattedUpdatedAt(playlist.updatedAt) {
+                                    Text("Updated \(updated)")
+                                }
                             }
-                            if playlist.smart {
-                                Text("Smart")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                            HStack(spacing: 6) {
+                                if stationOutputNames.contains(playlist.title) {
+                                    playlistBadge("Station")
+                                }
+                                if scheduleOutputNames.contains(playlist.title) {
+                                    playlistBadge("Schedule")
+                                }
+                                if interstitialPoolNames.contains(playlist.title) {
+                                    playlistBadge("Interstitial")
+                                }
+                                if playlist.smart {
+                                    playlistBadge("Smart")
+                                }
+                                if (playlist.itemCount ?? 0) == 0 {
+                                    playlistBadge("Empty")
+                                }
                             }
                         }
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+
+                        Spacer()
                     }
-                    Spacer()
+                    .padding(.vertical, 5)
                 }
-                .padding(.vertical, 4)
             }
         }
         .navigationTitle("Playlists")
         .searchable(text: $searchText, prompt: "Search playlists")
         .toolbar {
-            Button("Reload") { Task { await model.loadPlaylists() } }
+            Picker("Filter", selection: $filterMode) {
+                Text("All").tag(0)
+                Text("Managed").tag(1)
+                Text("Interstitial").tag(2)
+                Text("Smart").tag(3)
+                Text("Empty").tag(4)
+            }
+            .frame(width: 140)
+
+            Picker("Sort", selection: $sortMode) {
+                Text("Name").tag(0)
+                Text("Most Items").tag(1)
+                Text("Recently Updated").tag(2)
+            }
+            .frame(width: 150)
+
+            Button("Reload") {
+                Task {
+                    await model.loadPlaylists()
+                    await model.loadSchedules()
+                }
+            }
         }
         .task {
             if model.playlists.isEmpty {
                 await model.loadPlaylists()
             }
+            if model.schedules.isEmpty {
+                await model.loadSchedules()
+            }
         }
+    }
+
+    private func playlistMetric(_ label: String, _ value: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text("\(value)")
+                .font(.title3.bold())
+        }
+        .frame(minWidth: 70, alignment: .leading)
+    }
+
+    private func playlistBadge(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.secondary.opacity(0.12))
+            .clipShape(Capsule())
+    }
+
+    private func formattedUpdatedAt(_ value: String?) -> String? {
+        guard let value,
+              let date = ISO8601DateFormatter().date(from: value)
+        else {
+            return nil
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
     }
 }
 
@@ -4844,19 +5021,85 @@ struct PlaylistDetailView: View {
 
     @State private var detail: PlaylistDetailResponse?
     @State private var searchText = ""
+    @State private var itemFilter = 0
     @State private var isLoading = false
 
+    private var items: [MediaItem] {
+        detail?.items ?? []
+    }
+
+    private var duplicateRatingKeys: Set<String> {
+        let groups = Dictionary(
+            grouping: items.filter { !$0.ratingKey.isEmpty },
+            by: \.ratingKey
+        )
+        return Set(groups.filter { $0.value.count > 1 }.map(\.key))
+    }
+
+    private var duplicateExtraCount: Int {
+        let groups = Dictionary(
+            grouping: items.filter { !$0.ratingKey.isEmpty },
+            by: \.ratingKey
+        )
+        return groups.values.reduce(0) { partial, group in
+            partial + max(0, group.count - 1)
+        }
+    }
+
+    private var totalRuntimeMinutes: Int {
+        items.compactMap(\.durationMinutes).reduce(0, +)
+    }
+
+    private var watchedCount: Int {
+        items.filter(\.watched).count
+    }
+
+    private var yearRange: String {
+        let years = items.compactMap(\.year)
+        guard let minimum = years.min(),
+              let maximum = years.max()
+        else {
+            return "Unknown"
+        }
+        return minimum == maximum ? "\(minimum)" : "\(minimum)–\(maximum)"
+    }
+
+    private var mediaTypeSummary: String {
+        let counts = Dictionary(grouping: items, by: { ($0.type ?? "unknown").lowercased() })
+            .mapValues(\.count)
+
+        return counts.keys.sorted().map { type in
+            "\(counts[type] ?? 0) \(type)\((counts[type] ?? 0) == 1 ? "" : "s")"
+        }
+        .joined(separator: " • ")
+    }
+
     private var filteredItems: [MediaItem] {
-        guard let items = detail?.items else { return [] }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else { return items }
+
         return items.filter { item in
-            [
+            let matchesFilter: Bool
+            switch itemFilter {
+            case 1:
+                matchesFilter = !item.watched
+            case 2:
+                matchesFilter = item.watched
+            case 3:
+                matchesFilter = duplicateRatingKeys.contains(item.ratingKey)
+            default:
+                matchesFilter = true
+            }
+
+            guard matchesFilter else { return false }
+            guard !query.isEmpty else { return true }
+
+            return [
                 item.title ?? "",
                 item.showTitle ?? "",
                 item.summary ?? "",
                 item.contentRating ?? "",
-                item.year.map(String.init) ?? ""
+                item.year.map(String.init) ?? "",
+                item.type ?? ""
             ]
             .joined(separator: " ")
             .lowercased()
@@ -4868,6 +5111,10 @@ struct PlaylistDetailView: View {
         GridItem(.adaptive(minimum: 190, maximum: 240), spacing: 18)
     ]
 
+    private let summaryColumns = [
+        GridItem(.adaptive(minimum: 130, maximum: 190), spacing: 12)
+    ]
+
     var body: some View {
         Group {
             if isLoading && detail == nil {
@@ -4875,16 +5122,57 @@ struct PlaylistDetailView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let detail {
                 ScrollView {
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
-                        ForEach(filteredItems) { item in
-                            PlaylistMediaCard(item: item)
+                    VStack(alignment: .leading, spacing: 18) {
+                        GroupBox("Playlist Summary") {
+                            VStack(alignment: .leading, spacing: 12) {
+                                LazyVGrid(columns: summaryColumns, alignment: .leading, spacing: 12) {
+                                    detailMetric("ITEMS", "\(detail.itemCount)")
+                                    detailMetric("RUNTIME", formattedRuntime(totalRuntimeMinutes))
+                                    detailMetric("WATCHED", "\(watchedCount) / \(detail.itemCount)")
+                                    detailMetric("YEARS", yearRange)
+                                    detailMetric("DUPLICATES", "\(duplicateExtraCount)")
+                                }
+
+                                if !mediaTypeSummary.isEmpty {
+                                    Text(mediaTypeSummary)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                if duplicateExtraCount > 0 {
+                                    Label(
+                                        "\(duplicateExtraCount) duplicate entr\(duplicateExtraCount == 1 ? "y" : "ies") detected by Plex rating key.",
+                                        systemImage: "exclamationmark.triangle"
+                                    )
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
+                            ForEach(filteredItems) { item in
+                                PlaylistMediaCard(item: item)
+                            }
                         }
                     }
                     .padding(20)
                 }
                 .searchable(text: $searchText, prompt: "Search this playlist")
+                .toolbar {
+                    Picker("Items", selection: $itemFilter) {
+                        Text("All").tag(0)
+                        Text("Unwatched").tag(1)
+                        Text("Watched").tag(2)
+                        Text("Duplicates").tag(3)
+                    }
+                    .frame(width: 130)
+
+                    Button("Reload") { Task { await load() } }
+                }
                 .overlay(alignment: .topTrailing) {
-                    Text("\(detail.itemCount) items")
+                    Text("\(filteredItems.count) shown")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(12)
@@ -4898,10 +5186,27 @@ struct PlaylistDetailView: View {
             }
         }
         .navigationTitle(playlist.title)
-        .toolbar {
-            Button("Reload") { Task { await load() } }
-        }
         .task { await load() }
+    }
+
+    private func detailMetric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.headline)
+        }
+    }
+
+    private func formattedRuntime(_ minutes: Int) -> String {
+        guard minutes > 0 else { return "Unknown" }
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        if hours == 0 {
+            return "\(remainder)m"
+        }
+        return "\(hours)h \(remainder)m"
     }
 
     private func load() async {
