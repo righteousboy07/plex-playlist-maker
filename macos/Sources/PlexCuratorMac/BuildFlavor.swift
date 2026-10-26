@@ -46,6 +46,10 @@ struct BuildFlavor {
         "http://127.0.0.1:\(apiPort)"
     }
 
+    var supportsAutomationManagement: Bool {
+        supportsLaunchAgentManagement || isAppStore
+    }
+
     var onboardingDescription: String {
         switch channel {
         case .direct:
