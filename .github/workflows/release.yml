@@ -94,9 +94,29 @@ jobs:
           name: installer-${{ matrix.name }}-release
           path: dist/installer/*.pkg
 
+  universal-installer:
+    runs-on: macos-15
+    needs: [installer]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "installer-*-release"
+          path: dist/installer
+          merge-multiple: true
+
+      - name: Build universal no-Terminal DMG
+        run: bash scripts/build-universal-installer-dmg.sh dist/installer dist/universal-installer
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: universal-installer-release
+          path: dist/universal-installer/*.dmg
+
   release:
     runs-on: ubuntu-latest
-    needs: [backend, macos, installer]
+    needs: [backend, macos, installer, universal-installer]
     steps:
       - uses: actions/checkout@v4
 
@@ -131,7 +151,7 @@ jobs:
         run: |
           cd release
           : > SHA256SUMS.txt
-          for file in *.tar.gz *.zip *.pkg; do
+          for file in *.tar.gz *.zip *.pkg *.dmg; do
             [[ -e "$file" ]] || continue
             sha256sum "$file" >> SHA256SUMS.txt
           done
@@ -150,6 +170,10 @@ jobs:
           **Intel Mac — download:** `$INTEL_PKG`
 
           Use this version for Macs with an Intel processor, including the 2013 Mac Pro and other pre-Apple-Silicon Macs.
+
+          **Easiest option — Universal Installer DMG:** `Plex-Curator-${GITHUB_REF_NAME#v}-macOS-Universal-Installer.dmg`
+
+          This DMG contains both installers with clear labels and requires no Terminal.
 
           **Apple Silicon — download:** `$APPLE_PKG`
 
