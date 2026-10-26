@@ -1,0 +1,51 @@
+name: Auto tag version release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/plex_curator.py"
+      - ".github/workflows/auto-release-tag.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read application version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(sed -n 's/^APP_VERSION = "\([^"]*\)"/\1/p' backend/plex_curator.py | head -1)"
+          if [[ -z "$VERSION" ]]; then
+            echo "APP_VERSION could not be read." >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create release tag when missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          git fetch --tags --force
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists; no tag change needed."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Plex Curator $TAG"
+          git push origin "$TAG"
+          echo "Created $TAG at $GITHUB_SHA."
