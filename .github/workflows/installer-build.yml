@@ -1,0 +1,47 @@
+name: Installer build
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - "macos/**"
+      - "scripts/build-installer.sh"
+      - "scripts/package/**"
+      - ".github/workflows/installer-build.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "macos/**"
+      - "scripts/build-installer.sh"
+      - "scripts/package/**"
+      - ".github/workflows/installer-build.yml"
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: intel
+            runner: macos-15-intel
+          - name: apple-silicon
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner architecture
+        run: uname -m
+
+      - name: Build one-click installer
+        run: bash scripts/build-installer.sh
+
+      - name: Inspect installer
+        run: |
+          pkgutil --check-signature dist/installer/*.pkg || true
+          pkgutil --payload-files dist/installer/*.pkg | head -100
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plex-curator-installer-${{ matrix.name }}
+          path: dist/installer/*.pkg
