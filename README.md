@@ -11,7 +11,7 @@ Download the installer that matches the Mac from the GitHub Release:
 - **Intel Mac** — use `Plex-Curator-<version>-macOS-intel.pkg`. This is the correct package for Intel Macs such as the 2013 Mac Pro.
 - **Apple Silicon** — use `Plex-Curator-<version>-macOS-apple-silicon.pkg` for M-series Macs.
 
-Double-click the `.pkg` and follow the macOS Installer screens.
+Double-click the `.pkg` and follow the branded Plex Curator Welcome, installation-details, and completion screens in macOS Installer.
 
 The package installs:
 
@@ -35,12 +35,15 @@ The packaged backend is self-contained. **Python, pip, a virtual environment, Xc
 
 ### First launch
 
-Open **Plex Curator → Settings → Plex Connection**.
+A fresh install opens a built-in setup wizard automatically.
 
-1. Enter the Plex server URL. For a Plex server on the same Mac, start with `http://127.0.0.1:32400`.
-2. Paste the Plex token.
-3. Choose **Save & Test Plex**.
-4. Return to Dashboard when Plex shows connected.
+1. Choose **Continue** on the welcome screen.
+2. Enter the Plex server URL. For a Plex server on the same Mac, start with `http://127.0.0.1:32400`.
+3. Paste the Plex token.
+4. Choose **Save & Test Plex**.
+5. When the connection verifies, choose **Open Dashboard**.
+
+Existing installations that already have a saved Plex token bypass the wizard automatically. Plex connection details can always be changed later under **Settings → Plex Connection**.
 
 The app stores the Plex token in:
 
@@ -92,6 +95,7 @@ The native macOS app now includes:
 - searchable History with station filtering and copy/export support
 - searchable Logs with job selection, stdout/stderr selection, severity highlighting, line limits, copy, and Finder reveal
 - Health diagnostics and recovery tools
+- first-run onboarding wizard with Plex connection verification
 - in-app Plex connection configuration
 - 30-day log cleanup by default
 
