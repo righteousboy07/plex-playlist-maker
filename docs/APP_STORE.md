@@ -184,11 +184,13 @@ Implemented:
 - Store scheduler stops when Plex Curator exits
 - no root escalation and no external plist installation
 
-Current limitation:
+Current behavior:
 
-The scheduler runs while the main Plex Curator application is active. Launch-at-login makes that practical after restarts, but this is not yet a fully headless background agent if the user explicitly quits the app.
+The scheduler remains active when the main Plex Curator window is closed because the macOS app process continues running. Choosing **Quit Plex Curator** intentionally stops the scheduler; Launch at Login restores it after the next sign-in or app launch.
 
-Before submission, decide whether the active-app model is sufficient for the Store edition or add a dedicated bundled login-item helper using ServiceManagement so scheduled jobs can continue without a visible main window. The Direct edition continues to use its current LaunchAgent manager.
+A second login-item helper is not currently planned. It would require shared-container/App Group plumbing for configuration, API credentials, and state, while offering little benefit over the normal macOS model where closing the window does not terminate the application. Revisit a separate helper only if App Review or real-world testing shows a need for automation to continue after the user explicitly quits Plex Curator.
+
+The Automation screen now lists Store jobs, their schedule and last successful run date, and provides Run Now controls for validation. The Direct edition continues to use its current LaunchAgent manager.
 
 ### Phase 6 — App Store Connect submission
 
