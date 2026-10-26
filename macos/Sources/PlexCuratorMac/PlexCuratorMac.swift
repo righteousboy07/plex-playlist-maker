@@ -4069,13 +4069,21 @@ struct MediaOrganizerView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         TextField("Source folder", text: $sourcePath)
+                            .disabled(BuildFlavor.current.isAppStore)
                         Button("Browse…") { chooseFolder { sourcePath = $0 } }
                     }
 
                     HStack {
                         TextField("Destination folder (optional)", text: $destinationPath)
+                            .disabled(BuildFlavor.current.isAppStore)
                         Button("Browse…") { chooseFolder { destinationPath = $0 } }
                         Button("Use Source") { destinationPath = "" }
+                    }
+
+                    if BuildFlavor.current.isAppStore {
+                        Text("App Store builds use folders you explicitly authorize with Browse. Permission is retained securely for future launches.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
 
                     Toggle("Scan subfolders recursively", isOn: $recursive)
@@ -4424,6 +4432,7 @@ struct MediaOrganizerView: View {
             Button("Cancel", role: .cancel) {}
             Button("Move & Rename", role: .destructive) {
                 Task {
+                    guard authorizedForStoreOperation() else { return }
                     let ok = await model.applyMediaOrganizer(
                         path: sourcePath,
                         destination: normalizedDestination,
@@ -4492,6 +4501,8 @@ struct MediaOrganizerView: View {
     }
 
     private func scan() async {
+        guard authorizedForStoreOperation() else { return }
+
         reviewedSources.removeAll()
         reviewedTitles.removeAll()
         reviewedTypes.removeAll()
@@ -4505,6 +4516,26 @@ struct MediaOrganizerView: View {
         )
     }
 
+    private func authorizedForStoreOperation() -> Bool {
+        guard BuildFlavor.current.isAppStore else { return true }
+
+        let source = sourcePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty,
+              SecurityScopedMediaAccess.shared.isAuthorized(path: source)
+        else {
+            model.error = "Choose the source folder with Browse so Plex Curator can access it in the App Store sandbox."
+            return false
+        }
+
+        if let destination = normalizedDestination,
+           !SecurityScopedMediaAccess.shared.isAuthorized(path: destination) {
+            model.error = "Choose the destination folder with Browse so Plex Curator can access it in the App Store sandbox."
+            return false
+        }
+
+        return true
+    }
+
     private func chooseFolder(_ completion: (String) -> Void) {
         let panel = NSOpenPanel()
         panel.title = "Choose Media Folder"
@@ -4513,8 +4544,25 @@ struct MediaOrganizerView: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
-        if panel.runModal() == .OK, let url = panel.url {
-            completion(url.path)
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let path = try SecurityScopedMediaAccess.shared.authorize(url)
+            completion(path)
+            model.error = nil
+
+            if BuildFlavor.current.isAppStore {
+                Task {
+                    do {
+                        try await AppStoreBackendRuntime.shared.reloadMediaFolderAccess()
+                    } catch {
+                        model.error = error.localizedDescription
+                    }
+                }
+            }
+        } catch {
+            model.error = error.localizedDescription
         }
     }
 
