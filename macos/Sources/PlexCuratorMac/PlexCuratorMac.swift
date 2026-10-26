@@ -28,6 +28,21 @@ struct StatusResponse: Codable {
     let enabledStationCount: Int
 }
 
+struct PlexConfigStatus: Codable {
+    let url: String
+    let tokenPresent: Bool
+    let configFile: String
+    let connected: Bool?
+    let serverName: String?
+    let serverVersion: String?
+    let error: String?
+}
+
+struct PlexConfigRequest: Encodable {
+    let url: String
+    let token: String?
+}
+
 struct InterstitialPool: Codable, Hashable, Identifiable {
     var id: String { playlist }
     let playlist: String
@@ -766,6 +781,20 @@ final class APIClient {
         try await request("/api/v1/status")
     }
 
+    func plexConfig() async throws -> PlexConfigStatus {
+        try await request("/api/v1/config/plex")
+    }
+
+    func savePlexConfig(url: String, token: String?) async throws -> PlexConfigStatus {
+        let body = try encoder.encode(PlexConfigRequest(url: url, token: token))
+        return try await request(
+            "/api/v1/config/plex",
+            method: "PUT",
+            body: body,
+            authenticated: true
+        )
+    }
+
     func stations() async throws -> [Station] {
         let r: StationsResponse = try await request("/api/v1/stations")
         return r.stations
@@ -1374,6 +1403,7 @@ final class NotificationManager {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var status: StatusResponse?
+    @Published var plexConfig: PlexConfigStatus?
     @Published var stations: [Station] = []
     @Published var doctor: DoctorResponse?
     @Published var history: [HistoryItem] = []
@@ -1418,6 +1448,31 @@ final class AppModel: ObservableObject {
         } catch {
             status = nil
             self.error = error.localizedDescription
+        }
+    }
+
+    func loadPlexConfig() async {
+        do {
+            plexConfig = try await api.plexConfig()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func savePlexConfig(url: String, token: String?) async -> Bool {
+        do {
+            let result = try await api.savePlexConfig(url: url, token: token)
+            plexConfig = result
+            message = result.connected == true
+                ? "Plex connection saved and verified."
+                : "Plex settings saved. Connection still needs attention."
+            error = result.error
+            await refreshHealth()
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
         }
     }
 
@@ -6373,6 +6428,10 @@ struct LogsView: View {
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
 
+    @State private var plexURL = "http://127.0.0.1:32400"
+    @State private var plexToken = ""
+    @State private var savingPlex = false
+
     private let apiAddress = "http://127.0.0.1:8765"
 
     private var apiKeyExists: Bool {
@@ -6382,16 +6441,71 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                GroupBox("Connection") {
+                GroupBox("Plex Connection") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            StatusBadge(
+                                text: model.status?.plex.connected == true
+                                    ? "Plex Connected"
+                                    : "Plex Setup Needed",
+                                good: model.status?.plex.connected == true
+                            )
+                            if model.plexConfig?.tokenPresent == true {
+                                StatusBadge(text: "Token Saved", good: true)
+                            }
+                            Spacer()
+                        }
+
+                        TextField("Plex server URL", text: $plexURL)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                        SecureField(
+                            model.plexConfig?.tokenPresent == true
+                                ? "Plex token (leave blank to keep the saved token)"
+                                : "Plex token",
+                            text: $plexToken
+                        )
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                        Text("For a local Plex server, the default URL is usually http://127.0.0.1:32400. The token is stored only in ~/.config/plex-curator/.env and is never displayed back in the app.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        HStack(spacing: 10) {
+                            Button(savingPlex ? "Saving…" : "Save & Test Plex") {
+                                Task { await savePlex() }
+                            }
+                            .disabled(
+                                savingPlex
+                                || plexURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            )
+
+                            Button("Reload Saved Settings") {
+                                Task { await loadPlexSettings() }
+                            }
+
+                            Spacer()
+                        }
+
+                        if let error = model.plexConfig?.error, !error.isEmpty {
+                            Label(error, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .textSelection(.enabled)
+                        } else if let server = model.plexConfig?.serverName {
+                            setting("Server", server)
+                            setting("Version", model.plexConfig?.serverVersion ?? "Unknown")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                GroupBox("Local API") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
                             StatusBadge(
                                 text: model.status == nil ? "API Unavailable" : "API Connected",
                                 good: model.status != nil
-                            )
-                            StatusBadge(
-                                text: model.status?.plex.connected == true ? "Plex Connected" : "Plex Offline",
-                                good: model.status?.plex.connected == true
                             )
                             Spacer()
                         }
@@ -6444,22 +6558,7 @@ struct SettingsView: View {
                         setting("API", model.status.map { "v\($0.apiVersion)" } ?? "Unavailable")
                         setting("Stations", "\(model.status?.stationCount ?? model.stations.count)")
                         setting("Enabled", "\(model.status?.enabledStationCount ?? model.stations.filter(\.enabled).count)")
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                GroupBox("Plex Server") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        setting("Server", model.status?.plex.serverName ?? "Unavailable")
-                        setting("Version", model.status?.plex.serverVersion ?? "Unknown")
                         setting("Libraries", "\(model.status?.plex.libraries.count ?? 0)")
-
-                        if let error = model.status?.plex.error, !error.isEmpty {
-                            Label(error, systemImage: "exclamationmark.triangle.fill")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                                .textSelection(.enabled)
-                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -6486,6 +6585,31 @@ struct SettingsView: View {
             .padding(24)
         }
         .navigationTitle("Settings")
+        .task {
+            await loadPlexSettings()
+        }
+    }
+
+    private func loadPlexSettings() async {
+        await model.loadPlexConfig()
+        if let saved = model.plexConfig {
+            plexURL = saved.url
+        }
+        plexToken = ""
+    }
+
+    private func savePlex() async {
+        savingPlex = true
+        defer { savingPlex = false }
+
+        let token = plexToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let saved = await model.savePlexConfig(
+            url: plexURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            token: token.isEmpty ? nil : token
+        )
+        if saved {
+            plexToken = ""
+        }
     }
 
     private func setting(_ label: String, _ value: String) -> some View {
