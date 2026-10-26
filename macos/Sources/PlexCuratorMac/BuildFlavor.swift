@@ -48,6 +48,24 @@ struct BuildFlavor {
         }
     }
 
+    var tokenStorageDescription: String {
+        switch channel {
+        case .direct:
+            return "The token is written to ~/.config/plex-curator/.env with private file permissions and is never displayed back in the app."
+        case .appStore:
+            return "The token will be stored inside Plex Curator's App Sandbox container and is never displayed back in the app."
+        }
+    }
+
+    var stateStorageDescription: String {
+        switch channel {
+        case .direct:
+            return "~/.config/plex-curator/"
+        case .appStore:
+            return "App Sandbox container / Application Support / Plex Curator"
+        }
+    }
+
     var automationUnavailableMessage: String {
         "The Mac App Store edition does not install external LaunchAgents. Background services for this edition will use Apple-approved bundled service APIs."
     }
