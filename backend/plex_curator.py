@@ -3826,12 +3826,17 @@ def cmd_doctor(args):
         if (APP_DIR / "plex-curator-launchd").exists()
         else APP_DIR / "launchd-manager.py"
     )
-    runtime_checks = [
-        (APP_DIR / "plex-curator", "CLI program"),
-        (APP_DIR / "plex-curator-api", "API program"),
-    ]
-    if LAUNCHD_ENABLED:
-        runtime_checks.append((launchd_manager, "launchd manager"))
+    if DISTRIBUTION == "app-store":
+        runtime_checks = [
+            (APP_DIR / "plex-curator-api", "Bundled API helper"),
+        ]
+    else:
+        runtime_checks = [
+            (APP_DIR / "plex-curator", "CLI program"),
+            (APP_DIR / "plex-curator-api", "API program"),
+        ]
+        if LAUNCHD_ENABLED:
+            runtime_checks.append((launchd_manager, "launchd manager"))
     if not getattr(sys, "frozen", False):
         runtime_checks.append((APP_DIR / "plex_curator.py", "Core program"))
 
