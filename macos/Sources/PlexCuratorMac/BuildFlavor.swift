@@ -12,6 +12,7 @@ struct BuildFlavor {
     let supportsLaunchAgentManagement: Bool
     let supportsExternalLogFiles: Bool
     let usesAppSandbox: Bool
+    let apiPort: Int
 
     static let current: BuildFlavor = {
 #if APP_STORE
@@ -21,7 +22,8 @@ struct BuildFlavor {
             supportsExternalInstaller: false,
             supportsLaunchAgentManagement: false,
             supportsExternalLogFiles: false,
-            usesAppSandbox: true
+            usesAppSandbox: true,
+            apiPort: 8766
         )
 #else
         return BuildFlavor(
@@ -30,13 +32,18 @@ struct BuildFlavor {
             supportsExternalInstaller: true,
             supportsLaunchAgentManagement: true,
             supportsExternalLogFiles: true,
-            usesAppSandbox: false
+            usesAppSandbox: false,
+            apiPort: 8765
         )
 #endif
     }()
 
     var isAppStore: Bool {
         channel == .appStore
+    }
+
+    var apiAddress: String {
+        "http://127.0.0.1:\(apiPort)"
     }
 
     var onboardingDescription: String {
