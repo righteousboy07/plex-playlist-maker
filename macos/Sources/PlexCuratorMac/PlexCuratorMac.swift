@@ -1441,7 +1441,7 @@ final class AppModel: ObservableObject {
             if let recentBuilds = try? await api.buildHistory(limit: 8) {
                 buildHistory = recentBuilds
             }
-            if BuildFlavor.current.supportsLaunchAgentManagement,
+            if BuildFlavor.current.supportsAutomationManagement,
                let jobs = try? await api.automationJobs() {
                 automationJobs = jobs
             }
@@ -1921,7 +1921,7 @@ struct RootView: View {
                     NavigationLink(destination: KidsScaryWishlistView()) { Label("Kids Scary Wishlist", systemImage: "checklist") }
                     NavigationLink(destination: HistoryView()) { Label("History", systemImage: "clock.arrow.circlepath") }
                     NavigationLink(destination: HealthView()) { Label("Health", systemImage: "heart.text.square") }
-                    if BuildFlavor.current.supportsLaunchAgentManagement {
+                    if BuildFlavor.current.supportsAutomationManagement {
                         NavigationLink(destination: AutomationView()) { Label("Automation", systemImage: "clock.badge.checkmark") }
                     }
                     if BuildFlavor.current.supportsExternalLogFiles {
@@ -2539,7 +2539,7 @@ struct DashboardView: View {
                 Label(title, systemImage: "arrow.right.circle")
             }
         case .some(.automation):
-            if BuildFlavor.current.supportsLaunchAgentManagement {
+            if BuildFlavor.current.supportsAutomationManagement {
                 NavigationLink(destination: AutomationView()) {
                     Label(title, systemImage: "arrow.right.circle")
                 }
@@ -2587,7 +2587,7 @@ struct DashboardView: View {
                     NavigationLink(destination: StationsView()) {
                         Label("Stations", systemImage: "tv")
                     }
-                    if BuildFlavor.current.supportsLaunchAgentManagement {
+                    if BuildFlavor.current.supportsAutomationManagement {
                         NavigationLink(destination: AutomationView()) {
                             Label("Automation", systemImage: "clock.badge.checkmark")
                         }
@@ -6427,7 +6427,7 @@ struct HealthView: View {
             }
             .frame(width: 120)
 
-            if BuildFlavor.current.supportsLaunchAgentManagement {
+            if BuildFlavor.current.supportsAutomationManagement {
                 NavigationLink(destination: AutomationView()) {
                     Label("Automation", systemImage: "clock.badge.checkmark")
                 }
@@ -6484,10 +6484,137 @@ struct HealthView: View {
 
 struct AutomationView: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var storeAutomation = StoreAutomationManager.shared
     @State private var confirmJob: AutomationJob?
     @State private var confirmAction: String?
+    @State private var changingStoreAutomation = false
 
     var body: some View {
+        Group {
+            if BuildFlavor.current.isAppStore {
+                storeAutomationView
+            } else {
+                directAutomationView
+            }
+        }
+        .navigationTitle("Automation")
+    }
+
+    private var storeAutomationView: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Automation").font(.title.bold())
+                    Text("App Store-safe background startup")
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button("Refresh") {
+                    storeAutomation.refresh()
+                }
+            }
+            .padding()
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    GroupBox("Background Automation") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Launch Plex Curator at login")
+                                        .font(.headline)
+                                    Text("Uses Apple's ServiceManagement framework. No external plist files or LaunchAgents are installed.")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Spacer()
+
+                                Toggle(
+                                    "",
+                                    isOn: Binding(
+                                        get: { storeAutomation.enabled },
+                                        set: { value in
+                                            Task {
+                                                changingStoreAutomation = true
+                                                await storeAutomation.setEnabled(value)
+                                                changingStoreAutomation = false
+                                            }
+                                        }
+                                    )
+                                )
+                                .labelsHidden()
+                                .disabled(changingStoreAutomation)
+                            }
+
+                            Divider()
+
+                            HStack {
+                                Text("Status")
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Text(storeAutomation.statusText)
+                                    .fontWeight(.medium)
+                            }
+
+                            if storeAutomation.requiresApproval {
+                                Label(
+                                    "macOS requires approval before Plex Curator may launch automatically.",
+                                    systemImage: "exclamationmark.triangle.fill"
+                                )
+                                .font(.caption)
+                                .foregroundColor(.orange)
+
+                                Button("Open Login Items Settings") {
+                                    storeAutomation.openLoginItemsSettings()
+                                }
+                            }
+
+                            if let error = storeAutomation.lastError, !error.isEmpty {
+                                Label(error, systemImage: "xmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        .padding(4)
+                    }
+
+                    GroupBox("Store Automation Model") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label(
+                                "The bundled localhost API runs only while Plex Curator is active.",
+                                systemImage: "app.badge.checkmark"
+                            )
+                            Label(
+                                "Launch at login keeps scheduled Curator work available after a Mac restart without writing to ~/Library/LaunchAgents.",
+                                systemImage: "power"
+                            )
+                            Label(
+                                "The next Store milestone is a dedicated bundled background service for headless scheduled jobs when the main window is closed.",
+                                systemImage: "clock.arrow.2.circlepath"
+                            )
+
+                            Text("The Direct Download edition continues to use its existing LaunchAgents and is not changed by this setting.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(4)
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+        }
+        .task {
+            storeAutomation.refresh()
+        }
+    }
+
+    private var directAutomationView: some View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
@@ -6560,7 +6687,6 @@ struct AutomationView: View {
                 .padding(.vertical, 5)
             }
         }
-        .navigationTitle("Automation")
         .task { await model.loadAutomation() }
         .alert(item: $confirmJob) { job in
             let action = confirmAction ?? ""
@@ -6906,7 +7032,7 @@ struct SettingsView: View {
                         NavigationLink(destination: HealthView()) {
                             Label("Health", systemImage: "heart.text.square")
                         }
-                        if BuildFlavor.current.supportsLaunchAgentManagement {
+                        if BuildFlavor.current.supportsAutomationManagement {
                             NavigationLink(destination: AutomationView()) {
                                 Label("Automation", systemImage: "clock.badge.checkmark")
                             }
