@@ -24,14 +24,21 @@ jobs:
         include:
           - name: intel
             runner: macos-15-intel
+            python_arch: x64
           - name: apple-silicon
             runner: macos-15
+            python_arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Runner architecture
         run: uname -m
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.python_arch }}
 
       - name: Build one-click installer
         run: bash scripts/build-installer.sh
