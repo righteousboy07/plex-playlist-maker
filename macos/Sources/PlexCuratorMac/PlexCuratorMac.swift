@@ -6529,6 +6529,7 @@ struct HealthView: View {
 struct AutomationView: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var storeAutomation = StoreAutomationManager.shared
+    @ObservedObject private var storeScheduler = StoreAutomationScheduler.shared
     @State private var confirmJob: AutomationJob?
     @State private var confirmAction: String?
     @State private var changingStoreAutomation = false
@@ -6549,12 +6550,15 @@ struct AutomationView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Automation").font(.title.bold())
-                    Text("App Store-safe background startup")
+                    Text("App Store-safe scheduled jobs")
                         .foregroundColor(.secondary)
                 }
                 Spacer()
                 Button("Refresh") {
-                    storeAutomation.refresh()
+                    Task {
+                        storeAutomation.refresh()
+                        await storeScheduler.reload(api: model.api)
+                    }
                 }
             }
             .padding()
@@ -6622,26 +6626,104 @@ struct AutomationView: View {
                                     .foregroundColor(.red)
                                     .textSelection(.enabled)
                             }
+
+                            Text("Closing the Plex Curator window does not stop scheduled work. Choosing Quit Plex Curator stops the scheduler until the app launches again.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
                         .padding(4)
                     }
 
-                    GroupBox("Store Automation Model") {
+                    GroupBox("Scheduled Jobs") {
+                        VStack(spacing: 0) {
+                            if storeScheduler.jobs.isEmpty {
+                                HStack {
+                                    if storeScheduler.lastSchedulerError == nil {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                        Text("Loading Store automation jobs…")
+                                            .foregroundColor(.secondary)
+                                    } else {
+                                        Text("Automation jobs could not be loaded.")
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, 8)
+                            } else {
+                                ForEach(Array(storeScheduler.jobs.enumerated()), id: \.element.id) { index, job in
+                                    HStack(alignment: .center, spacing: 12) {
+                                        Image(systemName: storeScheduler.runningJob == job.name
+                                              ? "arrow.triangle.2.circlepath"
+                                              : "clock.badge.checkmark")
+                                            .foregroundColor(.secondary)
+                                            .frame(width: 24)
+
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(job.name)
+                                                .font(.headline)
+                                            Text(job.description)
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                            HStack(spacing: 12) {
+                                                Text(storeScheduler.scheduleText(for: job))
+                                                Text("Last run: \(storeScheduler.lastRunText(for: job))")
+                                            }
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                        }
+
+                                        Spacer()
+
+                                        Button(storeScheduler.runningJob == job.name ? "Running…" : "Run Now") {
+                                            Task {
+                                                let ok = await storeScheduler.runNow(job, api: model.api)
+                                                model.message = ok
+                                                    ? "Ran \(job.name)."
+                                                    : nil
+                                                if !ok, let error = storeScheduler.lastSchedulerError {
+                                                    model.error = error
+                                                }
+                                            }
+                                        }
+                                        .disabled(storeScheduler.runningJob != nil)
+                                    }
+                                    .padding(.vertical, 9)
+
+                                    if index < storeScheduler.jobs.count - 1 {
+                                        Divider()
+                                    }
+                                }
+                            }
+
+                            if let error = storeScheduler.lastSchedulerError, !error.isEmpty {
+                                Divider()
+                                Label(error, systemImage: "exclamationmark.triangle.fill")
+                                    .font(.caption)
+                                    .foregroundColor(.orange)
+                                    .textSelection(.enabled)
+                                    .padding(.top, 10)
+                            }
+                        }
+                        .padding(4)
+                    }
+
+                    GroupBox("How Store Automation Works") {
                         VStack(alignment: .leading, spacing: 10) {
                             Label(
-                                "The bundled localhost API runs only while Plex Curator is active.",
-                                systemImage: "app.badge.checkmark"
+                                "The scheduler remains active when the main window is closed.",
+                                systemImage: "rectangle.on.rectangle"
                             )
                             Label(
-                                "Launch at login keeps scheduled Curator work available after a Mac restart without writing to ~/Library/LaunchAgents.",
+                                "Launch at login restores automation after a Mac restart or sign-in.",
                                 systemImage: "power"
                             )
                             Label(
-                                "The next Store milestone is a dedicated bundled background service for headless scheduled jobs when the main window is closed.",
-                                systemImage: "clock.arrow.2.circlepath"
+                                "Jobs execute inside the bundled sandboxed backend and successful daily runs are protected from duplicates.",
+                                systemImage: "checkmark.shield"
                             )
 
-                            Text("The Direct Download edition continues to use its existing LaunchAgents and is not changed by this setting.")
+                            Text("The Direct Download edition continues to use its existing LaunchAgents and is not changed by these Store settings.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -6655,6 +6737,7 @@ struct AutomationView: View {
         }
         .task {
             storeAutomation.refresh()
+            await storeScheduler.reload(api: model.api)
         }
     }
 
