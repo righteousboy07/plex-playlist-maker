@@ -3905,7 +3905,7 @@ def cmd_doctor(args):
     else:
         report("WARN", "Plex connection", "skipped because URL/token is incomplete")
 
-    manager = APP_DIR / "launchd-manager.py"
+    manager = launchd_manager
     if manager.exists():
         report("PASS", "launchd manager", str(manager))
         if args.verbose:
