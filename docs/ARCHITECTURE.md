@@ -44,3 +44,40 @@ Runtime state lives under:
 ```
 
 Application source can therefore be upgraded independently of credentials and station history.
+
+
+## Distribution architecture
+
+Plex Curator uses one shared application codebase with compile-time distribution capabilities.
+
+### Direct Download
+
+```text
+Plex Curator.app
+        ↓ localhost
+/Applications/PlexCurator/plex-curator-api
+        ↓
+Python Curator engine
+        ↓
+Plex
+```
+
+The Direct edition may use external LaunchAgents, external logs, and `~/.config/plex-curator/` state.
+
+### Mac App Store
+
+```text
+Sandboxed Plex Curator.app
+        ↓
+Bundled/signed helper runtime (planned Phase 2)
+        ↓
+Shared Curator engine
+        ↓
+Plex
+```
+
+The Store edition is compiled with `-DAPP_STORE` and capabilities are exposed through `BuildFlavor.current`.
+
+It must not install executables in shared locations or manage external LaunchAgent plist files. App-owned state belongs inside the App Sandbox container, and user media directories require explicit user selection plus security-scoped access.
+
+See [APP_STORE.md](APP_STORE.md).
