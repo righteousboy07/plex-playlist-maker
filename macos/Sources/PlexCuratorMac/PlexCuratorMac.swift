@@ -1891,6 +1891,8 @@ struct PlexCuratorMacApp: App {
 
 struct RootView: View {
     @EnvironmentObject var model: AppModel
+    @AppStorage("plexCurator.onboarding.complete") private var onboardingComplete = false
+    @State private var showOnboarding = false
 
     var body: some View {
         NavigationView {
@@ -1922,6 +1924,27 @@ struct RootView: View {
                 notice(icon: "checkmark.circle.fill", text: message) { model.message = nil }
             }
         }
+        .sheet(isPresented: $showOnboarding) {
+            OnboardingView(
+                isPresented: $showOnboarding,
+                onboardingComplete: $onboardingComplete
+            )
+            .environmentObject(model)
+        }
+        .task {
+            await checkOnboarding()
+        }
+    }
+
+    private func checkOnboarding() async {
+        await model.loadPlexConfig()
+        if model.plexConfig?.tokenPresent == true {
+            onboardingComplete = true
+            return
+        }
+        if !onboardingComplete {
+            showOnboarding = true
+        }
     }
 
     private func notice(icon: String, text: String, dismiss: @escaping () -> Void) -> some View {
@@ -1933,6 +1956,228 @@ struct RootView: View {
         }
         .padding(10)
         .background(.ultraThickMaterial)
+    }
+}
+
+struct OnboardingView: View {
+    @EnvironmentObject var model: AppModel
+    @Binding var isPresented: Bool
+    @Binding var onboardingComplete: Bool
+
+    @State private var step = 0
+    @State private var plexURL = "http://127.0.0.1:32400"
+    @State private var plexToken = ""
+    @State private var saving = false
+    @State private var connectionMessage: String?
+
+    private let totalSteps = 3
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            footer
+        }
+        .frame(width: 640, height: 500)
+        .task {
+            await model.loadPlexConfig()
+            if let saved = model.plexConfig {
+                plexURL = saved.url
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Plex Curator")
+                    .font(.title.bold())
+                Text("First-time setup")
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Text("Step \(step + 1) of \(totalSteps)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(24)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch step {
+        case 0:
+            welcomeStep
+        case 1:
+            connectionStep
+        default:
+            completeStep
+        }
+    }
+
+    private var welcomeStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "tv.and.mediabox")
+                .font(.system(size: 64))
+                .foregroundColor(.accentColor)
+
+            Text("Welcome to Plex Curator")
+                .font(.largeTitle.bold())
+
+            Text("The installer has already set up the local API, background service, automation manager, and 30-day log retention. The only thing left is connecting Plex Curator to your Plex server.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: 500)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Label("No Terminal setup required", systemImage: "checkmark.circle.fill")
+                Label("Your Plex token stays on this Mac", systemImage: "lock.fill")
+                Label("Existing stations and state are preserved on upgrades", systemImage: "externaldrive.fill.badge.checkmark")
+            }
+            .frame(maxWidth: 460, alignment: .leading)
+        }
+        .padding(32)
+    }
+
+    private var connectionStep: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Connect to Plex")
+                .font(.title.bold())
+
+            Text("Enter the address of your Plex Media Server and your Plex token. If Plex runs on this Mac, the default address below is usually correct.")
+                .foregroundColor(.secondary)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Plex server URL")
+                    .font(.headline)
+                TextField("http://127.0.0.1:32400", text: $plexURL)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Plex token")
+                    .font(.headline)
+                SecureField("Paste your Plex token", text: $plexToken)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            }
+
+            Text("The token is written to ~/.config/plex-curator/.env with private file permissions and is never displayed back in the app.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if let connectionMessage {
+                Label(
+                    connectionMessage,
+                    systemImage: model.plexConfig?.connected == true
+                        ? "checkmark.circle.fill"
+                        : "exclamationmark.triangle.fill"
+                )
+                .foregroundColor(model.plexConfig?.connected == true ? .green : .orange)
+                .textSelection(.enabled)
+            }
+
+            Spacer()
+        }
+        .padding(32)
+    }
+
+    private var completeStep: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 68))
+                .foregroundColor(.green)
+
+            Text("Plex Curator is ready")
+                .font(.largeTitle.bold())
+
+            if let server = model.plexConfig?.serverName {
+                Text("Connected to \(server).")
+                    .font(.title3)
+            }
+
+            Text("You can now build stations, curate playlists, organize media, manage automation, and monitor Health and Logs from the app.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: 500)
+
+            Text("You can change Plex connection details later in Settings → Plex Connection.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(32)
+    }
+
+    private var footer: some View {
+        HStack {
+            if step == 0 {
+                Button("Set Up Later") {
+                    isPresented = false
+                }
+            } else if step == 1 {
+                Button("Back") {
+                    step = 0
+                    connectionMessage = nil
+                }
+            }
+
+            Spacer()
+
+            if step == 0 {
+                Button("Continue") {
+                    step = 1
+                }
+                .keyboardShortcut(.defaultAction)
+            } else if step == 1 {
+                Button(saving ? "Testing…" : "Save & Test Plex") {
+                    Task { await saveAndTest() }
+                }
+                .disabled(
+                    saving
+                    || plexURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || (model.plexConfig?.tokenPresent != true
+                        && plexToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                )
+                .keyboardShortcut(.defaultAction)
+            } else {
+                Button("Open Dashboard") {
+                    onboardingComplete = true
+                    isPresented = false
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+    }
+
+    private func saveAndTest() async {
+        saving = true
+        connectionMessage = nil
+        defer { saving = false }
+
+        let token = plexToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let saved = await model.savePlexConfig(
+            url: plexURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            token: token.isEmpty ? nil : token
+        )
+
+        guard saved else {
+            connectionMessage = model.error ?? "Could not save Plex settings."
+            return
+        }
+
+        if model.plexConfig?.connected == true {
+            connectionMessage = "Connection verified."
+            plexToken = ""
+            step = 2
+        } else {
+            connectionMessage = model.plexConfig?.error
+                ?? "Settings were saved, but Plex could not be reached."
+        }
     }
 }
 
