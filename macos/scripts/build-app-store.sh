@@ -71,7 +71,12 @@ SMOKE_API="$BACKEND_DIST/plex-curator-api/plex-curator-api"
   exit 1
 }
 
-echo "Smoke-testing bundled API with sandbox-style storage..."
+echo "Removing Python packaging metadata that is invalid inside Contents/Helpers..."
+/usr/bin/find "$BACKEND_DIST/plex-curator-api" -type d \
+  \( -name "*.dist-info" -o -name "*.egg-info" -o -name "__pycache__" \) \
+  -prune -exec /bin/rm -rf {} +
+
+echo "Smoke-testing pruned bundled API with sandbox-style storage..."
 PLEX_CURATOR_DISTRIBUTION="app-store" \
 PLEX_CURATOR_CONFIG_DIR="$SMOKE_CONFIG" \
 PLEX_CURATOR_LOG_DIR="$SMOKE_LOGS" \
