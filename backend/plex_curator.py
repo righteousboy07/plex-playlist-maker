@@ -24,7 +24,11 @@ from dotenv import load_dotenv
 from plexapi.exceptions import NotFound
 from plexapi.server import PlexServer
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent
+)
 HOME = Path.home()
 CONFIG_DIR = HOME / ".config" / "plex-curator"
 CONFIG_FILE = CONFIG_DIR / ".env"
@@ -38,7 +42,7 @@ BACKUP_DIR = CONFIG_DIR / "backups"
 REVIEW_FRAMES_DIR = CONFIG_DIR / "review-frames"
 LOG_DIR = HOME / "Library" / "Logs" / "PlexCurator"
 DEFAULT_LOG_RETENTION_DAYS = 30
-APP_VERSION = "13.2.4"
+APP_VERSION = "13.2.5"
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".mpg", ".mpeg", ".ts"
@@ -403,7 +407,7 @@ def init_db():
 
 def load_env():
     ensure_config()
-    load_dotenv(CONFIG_FILE)
+    load_dotenv(CONFIG_FILE, override=True)
 
 def connect() -> PlexServer:
     load_env()
@@ -1520,6 +1524,74 @@ def cmd_setup(args):
         os.chmod(CONFIG_FILE, 0o600)
         print(f"Created {CONFIG_FILE}")
         print("Add the Plex token once; future versions reuse this file.")
+
+def plex_config_status():
+    ensure_config()
+    load_dotenv(CONFIG_FILE, override=True)
+    return {
+        "url": os.getenv("PLEX_URL", "http://127.0.0.1:32400").strip()
+            or "http://127.0.0.1:32400",
+        "token_present": bool(os.getenv("PLEX_TOKEN", "").strip()),
+        "config_file": str(CONFIG_FILE),
+    }
+
+
+def save_plex_config(url, token=None):
+    ensure_config()
+    url = str(url or "").strip()
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        raise SystemExit("Plex URL must start with http:// or https://.")
+
+    existing_lines = []
+    if CONFIG_FILE.exists():
+        existing_lines = CONFIG_FILE.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines()
+
+    current = {}
+    for line in existing_lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        current[key.strip()] = value.strip()
+
+    resolved_token = current.get("PLEX_TOKEN", "").strip()
+    if token is not None:
+        candidate = str(token).strip()
+        if not candidate:
+            raise SystemExit("Plex token cannot be blank when replacing it.")
+        resolved_token = candidate
+
+    output = []
+    seen = set()
+    for line in existing_lines:
+        stripped = line.strip()
+        if stripped.startswith("PLEX_URL="):
+            output.append(f"PLEX_URL={url}")
+            seen.add("PLEX_URL")
+        elif stripped.startswith("PLEX_TOKEN="):
+            output.append(f"PLEX_TOKEN={resolved_token}")
+            seen.add("PLEX_TOKEN")
+        else:
+            output.append(line)
+
+    if "PLEX_URL" not in seen:
+        output.append(f"PLEX_URL={url}")
+    if "PLEX_TOKEN" not in seen:
+        output.append(f"PLEX_TOKEN={resolved_token}")
+
+    temp_path = CONFIG_FILE.with_suffix(".tmp")
+    temp_path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+    os.chmod(temp_path, 0o600)
+    temp_path.replace(CONFIG_FILE)
+    os.chmod(CONFIG_FILE, 0o600)
+
+    os.environ["PLEX_URL"] = url
+    os.environ["PLEX_TOKEN"] = resolved_token
+    return plex_config_status()
+
 
 def cmd_config(_args):
     ensure_config()
@@ -3734,12 +3806,20 @@ def cmd_doctor(args):
         except Exception as exc:
             report("FAIL", label, str(exc))
 
-    for path, label in [
-        (APP_DIR / "plex-curator", "CLI wrapper"),
-        (APP_DIR / "plex-curator-api", "API wrapper"),
-        (APP_DIR / "plex_curator.py", "Core program"),
-        (APP_DIR / "launchd-manager.py", "launchd manager"),
-    ]:
+    launchd_manager = (
+        APP_DIR / "plex-curator-launchd"
+        if (APP_DIR / "plex-curator-launchd").exists()
+        else APP_DIR / "launchd-manager.py"
+    )
+    runtime_checks = [
+        (APP_DIR / "plex-curator", "CLI program"),
+        (APP_DIR / "plex-curator-api", "API program"),
+        (launchd_manager, "launchd manager"),
+    ]
+    if not getattr(sys, "frozen", False):
+        runtime_checks.append((APP_DIR / "plex_curator.py", "Core program"))
+
+    for path, label in runtime_checks:
         report("PASS" if path.exists() else "FAIL", label, str(path))
 
     if args.fix:
