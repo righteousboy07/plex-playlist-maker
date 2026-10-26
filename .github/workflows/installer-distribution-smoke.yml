@@ -1,0 +1,55 @@
+name: Installer distribution smoke
+
+on:
+  push:
+    paths:
+      - "scripts/package/**"
+      - "scripts/build-installer.sh"
+      - ".github/workflows/installer-distribution-smoke.yml"
+  pull_request:
+    paths:
+      - "scripts/package/**"
+      - "scripts/build-installer.sh"
+      - ".github/workflows/installer-distribution-smoke.yml"
+
+concurrency:
+  group: installer-distribution-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build distribution smoke package
+        run: |
+          ROOT="$RUNNER_TEMP/root"
+          SCRIPTS="$RUNNER_TEMP/scripts"
+          COMPONENTS="$RUNNER_TEMP/components"
+          EXPANDED="$RUNNER_TEMP/expanded"
+          mkdir -p "$ROOT/Applications/PlexCurator" "$SCRIPTS" "$COMPONENTS"
+          printf 'installer distribution probe\n' > "$ROOT/Applications/PlexCurator/.distribution-probe"
+          cp scripts/package/preinstall "$SCRIPTS/preinstall"
+          cp scripts/package/postinstall "$SCRIPTS/postinstall"
+          chmod 755 "$SCRIPTS/preinstall" "$SCRIPTS/postinstall"
+
+          pkgbuild \
+            --root "$ROOT" \
+            --scripts "$SCRIPTS" \
+            --identifier com.ry.plexcurator.component \
+            --version 13.2.6 \
+            --install-location / \
+            "$COMPONENTS/PlexCurator.pkg"
+
+          productbuild \
+            --distribution scripts/package/Distribution.xml \
+            --package-path "$COMPONENTS" \
+            --resources scripts/package/resources \
+            "$RUNNER_TEMP/Plex-Curator-smoke.pkg"
+
+          pkgutil --expand-full "$RUNNER_TEMP/Plex-Curator-smoke.pkg" "$EXPANDED"
+          test -f "$EXPANDED/Distribution"
+          find "$EXPANDED" -name .distribution-probe -print -quit | grep -q .
+          grep -q "welcome.html" "$EXPANDED/Distribution"
+          grep -q "macOS 12" scripts/package/resources/readme.html || true
