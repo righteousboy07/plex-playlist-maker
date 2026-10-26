@@ -42,7 +42,7 @@ BACKUP_DIR = CONFIG_DIR / "backups"
 REVIEW_FRAMES_DIR = CONFIG_DIR / "review-frames"
 LOG_DIR = HOME / "Library" / "Logs" / "PlexCurator"
 DEFAULT_LOG_RETENTION_DAYS = 30
-APP_VERSION = "13.2.5"
+APP_VERSION = "13.2.6"
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".mpg", ".mpeg", ".ts"
