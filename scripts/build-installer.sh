@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 VERSION="${PLEX_CURATOR_VERSION:-$(sed -n 's/^APP_VERSION = "\([^"]*\)"/\1/p' "$ROOT/backend/plex_curator.py" | head -1)}"
 ARCH="$(uname -m)"
 
@@ -83,6 +84,13 @@ echo "Smoke-testing frozen backend executables..."
 "$BACKEND_DIST/plex-curator" --help >/dev/null
 "$BACKEND_DIST/plex-curator-api" --help >/dev/null
 "$BACKEND_DIST/plex-curator-launchd" list >/dev/null
+
+echo "Frozen binary architectures:"
+/usr/bin/file "$BACKEND_DIST/plex-curator" "$BACKEND_DIST/plex-curator-api" "$BACKEND_DIST/plex-curator-launchd"
+echo "Frozen binary build metadata:"
+/usr/bin/vtool -show-build "$BACKEND_DIST/plex-curator" || true
+/usr/bin/vtool -show-build "$BACKEND_DIST/plex-curator-api" || true
+/usr/bin/vtool -show-build "$BACKEND_DIST/plex-curator-launchd" || true
 
 echo "Assembling package payload..."
 /usr/bin/ditto "$ROOT/macos/dist/Plex Curator.app" "$PKGROOT/Applications/Plex Curator.app"
