@@ -17,7 +17,7 @@ esac
   exit 1
 }
 
-for command in python3 swift pkgbuild codesign; do
+for command in python3 swift pkgbuild productbuild codesign; do
   command -v "$command" >/dev/null 2>&1 || {
     echo "Missing required build tool: $command" >&2
     exit 1
@@ -34,11 +34,24 @@ PYENV="$WORK/pyenv"
 BACKEND_DIST="$WORK/backend-dist"
 PKGROOT="$WORK/pkgroot"
 PKGSCRIPTS="$WORK/pkg-scripts"
+COMPONENT_DIR="$WORK/component"
+COMPONENT_PKG="$COMPONENT_DIR/PlexCurator.pkg"
+RESOURCES="$ROOT/scripts/package/resources"
+DISTRIBUTION="$ROOT/scripts/package/Distribution.xml"
 OUTDIR="$ROOT/dist/installer"
 PKG="$OUTDIR/Plex-Curator-$VERSION-macOS-$ARCH_LABEL.pkg"
 
 rm -rf "$WORK"
-mkdir -p "$WORK" "$BACKEND_DIST" "$PKGROOT/Applications/PlexCurator" "$PKGSCRIPTS" "$OUTDIR"
+mkdir -p "$WORK" "$BACKEND_DIST" "$PKGROOT/Applications/PlexCurator" "$PKGSCRIPTS" "$COMPONENT_DIR" "$OUTDIR"
+
+[[ -f "$DISTRIBUTION" ]] || {
+  echo "Missing installer distribution: $DISTRIBUTION" >&2
+  exit 1
+}
+[[ -d "$RESOURCES" ]] || {
+  echo "Missing installer resources: $RESOURCES" >&2
+  exit 1
+}
 
 echo "Building SwiftUI app..."
 PLEX_CURATOR_VERSION="$VERSION" bash "$ROOT/macos/scripts/build-app.sh"
@@ -118,20 +131,27 @@ fi
 /bin/cp "$ROOT/scripts/package/postinstall" "$PKGSCRIPTS/postinstall"
 /bin/chmod 755 "$PKGSCRIPTS/preinstall" "$PKGSCRIPTS/postinstall"
 
-echo "Building installer package..."
-PKGBUILD_ARGS=(
-  --root "$PKGROOT"
-  --scripts "$PKGSCRIPTS"
-  --identifier "com.ry.plexcurator"
-  --version "$VERSION"
-  --install-location /
+echo "Building component package..."
+/usr/bin/pkgbuild \
+  --root "$PKGROOT" \
+  --scripts "$PKGSCRIPTS" \
+  --identifier "com.ry.plexcurator.component" \
+  --version "$VERSION" \
+  --install-location / \
+  "$COMPONENT_PKG"
+
+echo "Building branded distribution package..."
+PRODUCTBUILD_ARGS=(
+  --distribution "$DISTRIBUTION"
+  --package-path "$COMPONENT_DIR"
+  --resources "$RESOURCES"
 )
 
 if [[ -n "${PKG_SIGN_IDENTITY:-}" ]]; then
-  PKGBUILD_ARGS+=(--sign "$PKG_SIGN_IDENTITY")
+  PRODUCTBUILD_ARGS+=(--sign "$PKG_SIGN_IDENTITY")
 fi
 
-/usr/bin/pkgbuild "${PKGBUILD_ARGS[@]}" "$PKG"
+/usr/bin/productbuild "${PRODUCTBUILD_ARGS[@]}" "$PKG"
 
 if [[ -n "${APPLE_NOTARY_PROFILE:-}" ]]; then
   echo "Submitting installer for notarization..."
