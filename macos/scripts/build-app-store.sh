@@ -171,5 +171,6 @@ echo "Built App Store flavor with bundled backend:"
 echo "  $APP"
 echo "  helper: $API_BIN"
 echo
-echo "Remaining App Store work: security-scoped Media Organizer folders and"
-echo "optional user-enabled background automation through ServiceManagement."
+echo "Current App Store milestones: bundled backend, sandbox storage,"
+echo "security-scoped Media Organizer folders, and ServiceManagement startup."
+echo "Remaining validation: clean-account folder access and final background automation model."
