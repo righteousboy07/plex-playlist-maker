@@ -19,16 +19,19 @@ The installer places:
 
 No Python runtime or virtual environment is required on the destination Mac.
 
-The post-install script:
+The branded Installer package presents Welcome, installation-details, and completion screens. Its post-install script:
 
 1. finds the currently logged-in macOS user;
 2. preserves/initializes `~/.config/plex-curator/`;
 3. initializes 30-day log retention;
 4. installs and starts the `api-server` LaunchAgent;
 5. installs the `log-cleanup` LaunchAgent;
-6. opens Plex Curator.
+6. waits briefly for the local API to answer;
+7. opens Plex Curator.
 
-First-time Plex URL/token setup is completed in **Plex Curator → Settings → Plex Connection**.
+The distribution requires macOS 12 or later and asks the user to close Plex Curator before replacing an existing app.
+
+On a fresh install, Plex Curator opens a first-run wizard for the Plex URL/token and verifies the connection before handing off to Dashboard. Existing configured users bypass the wizard automatically. Connection settings remain editable under **Settings → Plex Connection**.
 
 ## Persistent state
 
@@ -60,7 +63,7 @@ On macOS:
 bash scripts/build-installer.sh
 ```
 
-The build creates a temporary Python build environment, installs PyInstaller, builds standalone backend/API/LaunchAgent binaries, builds the SwiftUI release app, assembles the package payload, and emits one architecture-specific `.pkg`.
+The build creates a temporary Python build environment, installs PyInstaller, builds and smoke-tests standalone backend/API/LaunchAgent binaries, builds the SwiftUI release app, creates a component package, and wraps it with `productbuild` into a branded distribution package using the Installer resources under `scripts/package/resources/`.
 
 Output:
 
