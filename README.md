@@ -2,6 +2,17 @@
 
 Plex Curator is a local Plex playlist, channel-programming, media-organization, and automation toolkit. It combines a self-contained backend, a localhost-only REST API, and a native SwiftUI macOS client.
 
+## Two macOS editions
+
+Plex Curator now maintains two distribution channels from the **same codebase**:
+
+- **Direct Download** — the full-power signed/notarized `.pkg`, with external LaunchAgent automation, external log access, and the current self-contained backend installation.
+- **Mac App Store** — a sandboxed build flavor that shares the programming/UI logic but replaces installer, filesystem, and background-service behavior with App Store-safe equivalents.
+
+The Direct edition remains the production build today. The App Store edition has its build flavor and sandbox entitlements in place; bundled-helper, sandbox-storage, and security-scoped-folder work must be completed before submission.
+
+See [docs/APP_STORE.md](docs/APP_STORE.md) for the App Store roadmap and channel-by-channel capability rules.
+
 ## Recommended install: one macOS installer, no Terminal
 
 End users no longer need to clone the repository, create a Python environment, or run setup commands.
