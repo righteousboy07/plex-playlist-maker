@@ -83,7 +83,7 @@ SMOKE_PID=$!
 cleanup_smoke() {
   if /bin/kill -0 "$SMOKE_PID" >/dev/null 2>&1; then
     /bin/kill "$SMOKE_PID" >/dev/null 2>&1 || true
-    /usr/bin/wait "$SMOKE_PID" 2>/dev/null || true
+    wait "$SMOKE_PID" 2>/dev/null || true
   fi
 }
 trap cleanup_smoke EXIT
