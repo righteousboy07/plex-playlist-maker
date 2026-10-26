@@ -42,6 +42,26 @@ def test_runtime_path_honors_environment_override(tmp_path, monkeypatch):
     ) == override
 
 
+def test_app_store_doctor_runs_in_process(monkeypatch):
+    monkeypatch.setattr(core, "DISTRIBUTION", "app-store")
+
+    def fake_doctor(args):
+        assert args.json is True
+        print(json.dumps({
+            "result": "HEALTHY",
+            "failures": 0,
+            "warnings": 0,
+            "checks": [],
+        }))
+
+    monkeypatch.setattr(core, "cmd_doctor", fake_doctor)
+
+    result = api.doctor()
+
+    assert result["result"] == "HEALTHY"
+    assert result["failures"] == 0
+
+
 def test_app_store_automation_is_disabled(monkeypatch):
     monkeypatch.setattr(core, "LAUNCHD_ENABLED", False)
 
