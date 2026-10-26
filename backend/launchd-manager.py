@@ -59,6 +59,12 @@ JOBS = {
         "args": ["station-refresh-all"],
         "description": "Daily at 3:30 AM; refresh every enabled station profile",
     },
+    "log-cleanup": {
+        "label": "com.ry.plexcurator.logcleanup",
+        "calendar": {"Hour": 2, "Minute": 45},
+        "args": ["logs-cleanup"],
+        "description": "Daily retention check; clears Plex Curator logs every 30 days",
+    },
     "api-server": {
         "label": "com.ry.plexcurator.api",
         "program": str(APP_DIR / "plex-curator-api"),
