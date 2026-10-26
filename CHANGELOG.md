@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Added a shared Direct/App Store distribution architecture: compile-time build flavors, App Sandbox entitlements, direct-only UI capability gating, a sandboxed App Store build/CI target, and an explicit App Store migration roadmap without forking the product codebase.
 - Added a native first-run onboarding wizard that walks fresh installs through Plex connection and verification, while existing configured users bypass it automatically.
 - Upgraded the macOS package to a branded distribution installer with Welcome, installation-details, and completion screens, plus a startup wait so slower Macs do not open the app before the local API is ready.
 - Added self-contained one-click macOS installer packaging for Intel and Apple Silicon, including standalone backend/API/LaunchAgent executables, automatic API/log-retention setup, and in-app first-time Plex URL/token configuration.
