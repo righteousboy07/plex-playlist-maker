@@ -59,7 +59,7 @@ jobs:
           mkdir -p release
           /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
             "macos/dist/Plex Curator.app" \
-            "release/Plex-Curator-macOS-${GITHUB_REF_NAME}.zip"
+            "release/Plex-Curator-macOS-Apple-Silicon-Standalone-App-${GITHUB_REF_NAME}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -106,6 +106,27 @@ jobs:
           path: release
           merge-multiple: true
 
+      - name: Verify both user installer architectures
+        run: |
+          cd release
+          INTEL_PKG="$(find . -maxdepth 1 -type f -name 'Plex-Curator-*-macOS-intel.pkg' -print -quit)"
+          APPLE_PKG="$(find . -maxdepth 1 -type f -name 'Plex-Curator-*-macOS-apple-silicon.pkg' -print -quit)"
+
+          if [[ -z "$INTEL_PKG" ]]; then
+            echo "ERROR: Intel installer is missing from the release." >&2
+            ls -la
+            exit 1
+          fi
+
+          if [[ -z "$APPLE_PKG" ]]; then
+            echo "ERROR: Apple Silicon installer is missing from the release." >&2
+            ls -la
+            exit 1
+          fi
+
+          echo "Intel installer: ${INTEL_PKG#./}"
+          echo "Apple Silicon installer: ${APPLE_PKG#./}"
+
       - name: Generate checksums
         run: |
           cd release
@@ -120,7 +141,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          INTEL_PKG="$(basename "$(find release -maxdepth 1 -type f -name 'Plex-Curator-*-macOS-intel.pkg' -print -quit)")"
+          APPLE_PKG="$(basename "$(find release -maxdepth 1 -type f -name 'Plex-Curator-*-macOS-apple-silicon.pkg' -print -quit)")"
+
+          cat > "$RUNNER_TEMP/download-guide.md" <<EOF
+          ## Download the correct macOS installer
+
+          **Intel Mac — download:** `$INTEL_PKG`
+
+          Use this version for Macs with an Intel processor, including the 2013 Mac Pro and other pre-Apple-Silicon Macs.
+
+          **Apple Silicon — download:** `$APPLE_PKG`
+
+          Use this version for Macs with an Apple M-series chip (M1, M2, M3, M4, M5, or newer).
+
+          Not sure which Mac you have? Choose **Apple menu → About This Mac** and look for **Chip** or **Processor**.
+
+          > For normal installation, use one of the two `.pkg` files above. Other release files are for development, source distribution, or verification.
+
+          ---
+          EOF
+
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            OLD_BODY="$(gh release view "$GITHUB_REF_NAME" --json body --jq .body)"
             gh release upload "$GITHUB_REF_NAME" release/* --clobber
           else
             gh release create "$GITHUB_REF_NAME" \
@@ -128,8 +171,16 @@ jobs:
               --verify-tag \
               --generate-notes \
               --title "Plex Curator $GITHUB_REF_NAME"
+            OLD_BODY="$(gh release view "$GITHUB_REF_NAME" --json body --jq .body)"
           fi
 
+          {
+            cat "$RUNNER_TEMP/download-guide.md"
+            printf '\n'
+            printf '%s\n' "$OLD_BODY"
+          } > "$RUNNER_TEMP/release-body.md"
+
           gh release edit "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/release-body.md" \
             --prerelease=false \
             --latest
