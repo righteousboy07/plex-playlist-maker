@@ -103,7 +103,7 @@ For a future App Store submission, provide the appropriate Apple distribution si
 
 ## Submission-readiness roadmap
 
-The App Store flavor currently validates the **UI/build/sandbox split**. It is intentionally not labeled submission-ready yet.
+The App Store flavor now validates the **UI/build/sandbox split plus a self-contained bundled backend runtime**. It is still intentionally not labeled submission-ready until Media Organizer folder authorization and Store-safe background automation are complete.
 
 ### Phase 1 — Complete
 
@@ -114,30 +114,39 @@ The App Store flavor currently validates the **UI/build/sandbox split**. It is i
 - sandbox build CI
 - explicit dual-distribution documentation
 
-### Phase 2 — Bundled backend/helper
+### Phase 2 — Bundled backend/helper — Complete
 
-The current backend must move inside `Plex Curator.app` for the Store build.
+The Store build now embeds a signed `PlexCuratorBackend.app` helper inside `Plex Curator.app`.
 
-Requirements:
+Implemented:
 
 - no dependency on `/Applications/PlexCurator/`
-- no external installer
+- no external installer for the Store edition
 - no runtime download of executable code
-- helper executables signed as nested code
-- local API/helper lifecycle managed from the app bundle
-- user consent before persistent background behavior
+- PyInstaller directory runtime packaged as a proper nested helper app
+- helper startup is smoke-tested during CI
+- nested helper and outer app signatures/entitlements are verified in CI
+- helper lifecycle is owned by the foreground Plex Curator app
+- Store API uses localhost port `8766`, while Direct remains on `8765`
 
-For macOS 13+, use Apple's ServiceManagement APIs such as `SMAppService` for any approved bundled background helper rather than writing plist files into `~/Library/LaunchAgents`.
+Persistent/background operation is intentionally not enabled yet. For macOS 13+, future background automation will use Apple's ServiceManagement APIs such as `SMAppService` rather than writing plist files into `~/Library/LaunchAgents`.
 
-### Phase 3 — Sandbox storage
+### Phase 3 — Sandbox storage — Core complete
 
-Replace direct-path assumptions in the Store backend with container-aware storage.
+The backend now accepts distribution-specific runtime paths. The Store app launches the bundled API with container-scoped Application Support and Logs directories, while Direct retains the existing `~/.config/plex-curator/` and `~/Library/Logs/PlexCurator/` locations.
 
-App-owned state should use Foundation-provided Application Support locations inside the sandbox rather than hard-coded `~/.config/plex-curator/` paths.
+Implemented:
 
-The direct edition keeps its existing paths.
+- sandbox Application Support path for config, database, stations, schedules, presets, backups and API key
+- sandbox Logs path
+- bundled examples/resource path override
+- Store-specific Doctor behavior with LaunchAgent checks disabled
+- independent Direct and Store API ports
 
-A one-time import path can be offered for users moving from Direct to the Store edition, but the Store app must request user authorization before reading external Direct-edition state.
+Still pending:
+
+- optional one-time import from a Direct-edition installation into the Store sandbox
+- security-scoped authorization for user media folders
 
 ### Phase 4 — Media Organizer folder authorization
 
