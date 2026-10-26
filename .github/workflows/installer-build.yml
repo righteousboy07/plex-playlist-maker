@@ -46,7 +46,14 @@ jobs:
       - name: Inspect installer
         run: |
           pkgutil --check-signature dist/installer/*.pkg || true
-          pkgutil --payload-files dist/installer/*.pkg | head -100
+          EXPANDED="$RUNNER_TEMP/plex-curator-expanded"
+          rm -rf "$EXPANDED"
+          pkgutil --expand-full dist/installer/*.pkg "$EXPANDED"
+          test -f "$EXPANDED/Distribution"
+          find "$EXPANDED" -path "*Applications/Plex Curator.app/Contents/MacOS/PlexCuratorMac" -print -quit | grep -q .
+          find "$EXPANDED" -path "*/Applications/PlexCurator/plex-curator" -type f -print -quit | grep -q .
+          find "$EXPANDED" -path "*/Applications/PlexCurator/plex-curator-api" -type f -print -quit | grep -q .
+          find "$EXPANDED" -path "*/Applications/PlexCurator/plex-curator-launchd" -type f -print -quit | grep -q .
 
       - uses: actions/upload-artifact@v4
         with:
