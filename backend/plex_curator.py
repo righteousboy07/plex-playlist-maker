@@ -30,7 +30,18 @@ APP_DIR = (
     else Path(__file__).resolve().parent
 )
 HOME = Path.home()
-CONFIG_DIR = HOME / ".config" / "plex-curator"
+
+
+def runtime_path(env_name, default):
+    value = os.getenv(env_name, "").strip()
+    if value:
+        return Path(value).expanduser()
+    return Path(default).expanduser()
+
+
+DISTRIBUTION = os.getenv("PLEX_CURATOR_DISTRIBUTION", "direct").strip().lower() or "direct"
+LAUNCHD_ENABLED = DISTRIBUTION != "app-store"
+CONFIG_DIR = runtime_path("PLEX_CURATOR_CONFIG_DIR", HOME / ".config" / "plex-curator")
 CONFIG_FILE = CONFIG_DIR / ".env"
 STATE_DB = CONFIG_DIR / "state.sqlite3"
 PRESETS_FILE = CONFIG_DIR / "presets.json"
@@ -40,9 +51,13 @@ MEDIA_ORGANIZER_PRESETS_FILE = CONFIG_DIR / "media-organizer-presets.json"
 EXPORT_DIR = CONFIG_DIR / "exports"
 BACKUP_DIR = CONFIG_DIR / "backups"
 REVIEW_FRAMES_DIR = CONFIG_DIR / "review-frames"
-LOG_DIR = HOME / "Library" / "Logs" / "PlexCurator"
+LOG_DIR = runtime_path(
+    "PLEX_CURATOR_LOG_DIR",
+    HOME / "Library" / "Logs" / "PlexCurator",
+)
+EXAMPLES_DIR = runtime_path("PLEX_CURATOR_EXAMPLES_DIR", APP_DIR / "examples")
 DEFAULT_LOG_RETENTION_DAYS = 30
-APP_VERSION = "13.2.6"
+APP_VERSION = "13.2.7"
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".mpg", ".mpeg", ".ts"
@@ -3814,8 +3829,9 @@ def cmd_doctor(args):
     runtime_checks = [
         (APP_DIR / "plex-curator", "CLI program"),
         (APP_DIR / "plex-curator-api", "API program"),
-        (launchd_manager, "launchd manager"),
     ]
+    if LAUNCHD_ENABLED:
+        runtime_checks.append((launchd_manager, "launchd manager"))
     if not getattr(sys, "frozen", False):
         runtime_checks.append((APP_DIR / "plex_curator.py", "Core program"))
 
@@ -3905,24 +3921,27 @@ def cmd_doctor(args):
     else:
         report("WARN", "Plex connection", "skipped because URL/token is incomplete")
 
-    manager = launchd_manager
-    if manager.exists():
-        report("PASS", "launchd manager", str(manager))
-        if args.verbose:
-            launch_agents = HOME / "Library" / "LaunchAgents"
-            plists = sorted(launch_agents.glob("com.ry.plexcurator.*.plist")) if launch_agents.exists() else []
-            if plists:
-                for plist in plists:
-                    label = plist.stem
-                    try:
-                        res = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{label}"], capture_output=True, text=True)
-                        report("PASS" if res.returncode == 0 else "WARN", f"launchd {label}", "loaded" if res.returncode == 0 else "plist exists, job not loaded")
-                    except Exception as exc:
-                        report("WARN", f"launchd {label}", str(exc))
-            else:
-                report("WARN", "launchd jobs", "none installed (optional)")
+    if LAUNCHD_ENABLED:
+        manager = launchd_manager
+        if manager.exists():
+            report("PASS", "launchd manager", str(manager))
+            if args.verbose:
+                launch_agents = HOME / "Library" / "LaunchAgents"
+                plists = sorted(launch_agents.glob("com.ry.plexcurator.*.plist")) if launch_agents.exists() else []
+                if plists:
+                    for plist in plists:
+                        label = plist.stem
+                        try:
+                            res = subprocess.run(["launchctl", "print", f"gui/{os.getuid()}/{label}"], capture_output=True, text=True)
+                            report("PASS" if res.returncode == 0 else "WARN", f"launchd {label}", "loaded" if res.returncode == 0 else "plist exists, job not loaded")
+                        except Exception as exc:
+                            report("WARN", f"launchd {label}", str(exc))
+                else:
+                    report("WARN", "launchd jobs", "none installed (optional)")
+        else:
+            report("WARN", "launchd manager", "not found")
     else:
-        report("WARN", "launchd manager", "not found")
+        report("PASS", "Background automation", "external LaunchAgents disabled for App Store distribution")
 
     overall = "NEEDS ATTENTION" if failures else ("HEALTHY WITH WARNINGS" if warnings else "HEALTHY")
     if getattr(args, "json", False):
