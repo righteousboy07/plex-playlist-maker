@@ -32,6 +32,27 @@ def test_expected_reliability_commands_exist():
     assert expected <= commands
 
 
+def test_runtime_path_honors_environment_override(tmp_path, monkeypatch):
+    override = tmp_path / "sandbox" / "Application Support" / "Plex Curator"
+    monkeypatch.setenv("PLEX_CURATOR_CONFIG_DIR", str(override))
+
+    assert core.runtime_path(
+        "PLEX_CURATOR_CONFIG_DIR",
+        tmp_path / "fallback",
+    ) == override
+
+
+def test_app_store_automation_is_disabled(monkeypatch):
+    monkeypatch.setattr(core, "LAUNCHD_ENABLED", False)
+
+    assert api.automation_jobs() == {"jobs": [], "available": False}
+
+    with pytest.raises(api.HTTPException) as exc:
+        api.run_launchd_manager("list-json")
+
+    assert exc.value.status_code == 501
+
+
 def test_log_cleanup_preserves_logs_before_retention_is_due(tmp_path, monkeypatch):
     log_dir = tmp_path / "logs"
     config_dir = tmp_path / "config"
