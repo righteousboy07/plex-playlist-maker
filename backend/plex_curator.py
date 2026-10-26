@@ -37,7 +37,8 @@ EXPORT_DIR = CONFIG_DIR / "exports"
 BACKUP_DIR = CONFIG_DIR / "backups"
 REVIEW_FRAMES_DIR = CONFIG_DIR / "review-frames"
 LOG_DIR = HOME / "Library" / "Logs" / "PlexCurator"
-APP_VERSION = "13.2.3"
+DEFAULT_LOG_RETENTION_DAYS = 30
+APP_VERSION = "13.2.4"
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".mpg", ".mpeg", ".ts"
@@ -3419,6 +3420,149 @@ def tail_lines(path, count):
     except FileNotFoundError:
         return []
 
+
+def log_retention_state_path():
+    return CONFIG_DIR / "log-retention.json"
+
+
+def _parse_retention_timestamp(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _managed_log_paths():
+    if not LOG_DIR.exists():
+        return []
+    paths = set(LOG_DIR.glob("*.out.log"))
+    paths.update(LOG_DIR.glob("*.err.log"))
+    return sorted(path for path in paths if path.is_file())
+
+
+def _initial_log_cycle_start(now):
+    timestamps = []
+    for path in _managed_log_paths():
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        timestamp = getattr(stat, "st_birthtime", stat.st_mtime)
+        try:
+            timestamps.append(datetime.fromtimestamp(timestamp, timezone.utc))
+        except (OSError, OverflowError, ValueError):
+            continue
+    return min(timestamps) if timestamps else now
+
+
+def cleanup_logs(retention_days=DEFAULT_LOG_RETENTION_DAYS, force=False, now=None):
+    try:
+        retention_days = int(retention_days)
+    except (TypeError, ValueError):
+        raise SystemExit("Log retention days must be a whole number.")
+    if retention_days < 1 or retention_days > 3650:
+        raise SystemExit("Log retention days must be between 1 and 3650.")
+
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    state_path = log_retention_state_path()
+
+    state = {}
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            state = {}
+
+    cycle_started = _parse_retention_timestamp(state.get("cycle_started_at"))
+    initialized = cycle_started is None
+    if cycle_started is None:
+        cycle_started = _initial_log_cycle_start(now)
+
+    elapsed_seconds = max(0.0, (now - cycle_started).total_seconds())
+    retention_seconds = retention_days * 86400
+    due = bool(force or elapsed_seconds >= retention_seconds)
+
+    cleared_files = []
+    bytes_freed = 0
+    if due:
+        for path in _managed_log_paths():
+            try:
+                size = path.stat().st_size
+                with path.open("w", encoding="utf-8"):
+                    pass
+            except OSError:
+                continue
+            bytes_freed += size
+            cleared_files.append(path.name)
+        cycle_started = now
+
+    last_cleared_at = state.get("last_cleared_at")
+    if due:
+        last_cleared_at = now.isoformat()
+
+    state_payload = {
+        "retention_days": retention_days,
+        "cycle_started_at": cycle_started.isoformat(),
+        "last_checked_at": now.isoformat(),
+        "last_cleared_at": last_cleared_at,
+    }
+    temp_path = state_path.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(state_payload, indent=2) + "\n", encoding="utf-8")
+    temp_path.replace(state_path)
+
+    cycle_age_days = max(0.0, (now - cycle_started).total_seconds() / 86400)
+    days_until_cleanup = max(0.0, retention_days - cycle_age_days)
+    return {
+        "retention_days": retention_days,
+        "initialized": initialized,
+        "cleared": due,
+        "cleared_file_count": len(cleared_files),
+        "cleared_files": cleared_files,
+        "bytes_freed": bytes_freed,
+        "cycle_started_at": cycle_started.isoformat(),
+        "last_cleared_at": last_cleared_at,
+        "days_until_cleanup": round(days_until_cleanup, 2),
+        "state_path": str(state_path),
+    }
+
+
+def cmd_logs_cleanup(args):
+    result = cleanup_logs(
+        retention_days=args.retention_days,
+        force=args.force,
+    )
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return
+
+    if result["cleared"]:
+        print(
+            f'Cleared {result["cleared_file_count"]} log file(s); '
+            f'freed {result["bytes_freed"]} bytes.'
+        )
+    elif result["initialized"]:
+        print(
+            f'Initialized {result["retention_days"]}-day log retention; '
+            f'next cleanup in {result["days_until_cleanup"]:.1f} days.'
+        )
+    else:
+        print(
+            f'Log retention healthy: {result["retention_days"]} days; '
+            f'next cleanup in {result["days_until_cleanup"]:.1f} days.'
+        )
+
+
 def cmd_logs(args):
     if not LOG_DIR.exists():
         raise SystemExit(f"Log directory not found: {LOG_DIR}")
@@ -3992,6 +4136,17 @@ def build_parser():
     p.add_argument("--lines", type=int, default=100)
     p.add_argument("--follow", action="store_true")
     p.set_defaults(func=cmd_logs)
+
+    p = sp.add_parser("logs-cleanup", help="Apply the launchd log retention policy.")
+    p.add_argument(
+        "--retention-days",
+        type=int,
+        default=DEFAULT_LOG_RETENTION_DAYS,
+        help=f"Days between log truncation cycles (default: {DEFAULT_LOG_RETENTION_DAYS}).",
+    )
+    p.add_argument("--force", action="store_true", help="Clear managed log files immediately.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_logs_cleanup)
 
     return ap
 
