@@ -21,9 +21,13 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.11"
+API_VERSION = "1.12"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
-LAUNCHD_MANAGER = core.APP_DIR / "launchd-manager.py"
+LAUNCHD_MANAGER = (
+    core.APP_DIR / "plex-curator-launchd"
+    if (core.APP_DIR / "plex-curator-launchd").exists()
+    else core.APP_DIR / "launchd-manager.py"
+)
 KIDS_SCARY_WISHLIST = core.APP_DIR / "examples" / "kids-scary-missing-wishlist.txt"
 TITLE_ALIASES_FILE = core.APP_DIR / "examples" / "title-aliases.json"
 
@@ -37,6 +41,10 @@ MEDIA_SCAN_JOB_LIMIT = 20
 _media_scan_jobs = {}
 _media_scan_cancel_events = {}
 _media_scan_jobs_lock = threading.Lock()
+
+class PlexConfigRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    token: Optional[str] = Field(default=None, max_length=4096)
 
 class PreviewRequest(BaseModel):
     total: Optional[int] = Field(default=None, ge=1, le=1000)
@@ -418,8 +426,13 @@ def playlist_diff_payload(plex, cfg, proposed_items):
     return core.calculate_playlist_diff(current_items, proposed_items)
 
 def run_launchd_manager(*args):
+    command = (
+        [sys.executable, str(LAUNCHD_MANAGER), *args]
+        if LAUNCHD_MANAGER.suffix == ".py"
+        else [str(LAUNCHD_MANAGER), *args]
+    )
     result = subprocess.run(
-        [sys.executable, str(LAUNCHD_MANAGER), *args],
+        command,
         cwd=str(core.APP_DIR),
         capture_output=True,
         text=True,
@@ -488,6 +501,37 @@ def ping():
         "curator_version": getattr(core, "APP_VERSION", "unknown"),
         "time": datetime.now(timezone.utc).isoformat(),
     }
+
+@app.get("/api/v1/config/plex")
+def plex_config():
+    return core.plex_config_status()
+
+@app.put("/api/v1/config/plex")
+def plex_config_update(
+    request: PlexConfigRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        payload = core.save_plex_config(request.url, token=request.token)
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    try:
+        plex = core.connect()
+        payload.update({
+            "connected": True,
+            "server_name": plex.friendlyName,
+            "server_version": plex.version,
+            "error": None,
+        })
+    except Exception as exc:
+        payload.update({
+            "connected": False,
+            "server_name": None,
+            "server_version": None,
+            "error": str(exc),
+        })
+    return payload
 
 @app.get("/api/v1/status")
 def status():
