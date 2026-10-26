@@ -703,7 +703,8 @@ enum APIClientError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .missingKey(let path): return "API key missing at \(path). Start the v12 API once or run ./plex-curator-api key."
+        case .missingKey(let path):
+            return "API key missing at \(path). The local Plex Curator API may still be starting."
         case .server(let code, let message): return "API \(code): \(message)"
         case .invalidResponse: return "Invalid API response."
         case .transport(let message): return message
@@ -727,8 +728,7 @@ final class APIClient {
     }
 
     var apiKeyPath: String {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/plex-curator/api.key").path
+        PlexCuratorRuntimePaths.apiKeyURL.path
     }
 
     private func apiKey() throws -> String {
@@ -1876,6 +1876,9 @@ final class AppModel: ObservableObject {
 
 @main
 struct PlexCuratorMacApp: App {
+    @NSApplicationDelegateAdaptor(PlexCuratorApplicationDelegate.self)
+    private var applicationDelegate
+
     @StateObject private var model = AppModel()
 
     var body: some Scene {
@@ -1883,7 +1886,17 @@ struct PlexCuratorMacApp: App {
             RootView()
                 .environmentObject(model)
                 .frame(minWidth: 980, minHeight: 650)
-                .task { await model.bootstrap() }
+                .task {
+                    if BuildFlavor.current.isAppStore {
+                        do {
+                            try await AppStoreBackendRuntime.shared.ensureRunning()
+                        } catch {
+                            model.error = error.localizedDescription
+                            return
+                        }
+                    }
+                    await model.bootstrap()
+                }
         }
     }
 }
