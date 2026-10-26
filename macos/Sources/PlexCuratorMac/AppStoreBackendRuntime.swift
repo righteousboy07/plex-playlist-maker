@@ -174,6 +174,7 @@ final class AppStoreBackendRuntime {
 @MainActor
 final class PlexCuratorApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
+        StoreAutomationScheduler.shared.stop()
         AppStoreBackendRuntime.shared.stop()
         SecurityScopedMediaAccess.shared.stopAll()
     }
