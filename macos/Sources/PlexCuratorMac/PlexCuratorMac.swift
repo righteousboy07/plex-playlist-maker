@@ -1935,6 +1935,11 @@ struct PlexCuratorMacApp: App {
                         }
                     }
                     await model.bootstrap()
+
+                    if BuildFlavor.current.isAppStore {
+                        StoreAutomationManager.shared.refresh()
+                        StoreAutomationScheduler.shared.start(api: model.api)
+                    }
                 }
         }
     }
