@@ -1572,6 +1572,15 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func loadStations() async {
+        do {
+            stations = try await api.stations()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     func loadSchedules() async {
         do {
             schedules = try await api.schedules()
