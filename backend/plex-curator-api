@@ -7,7 +7,11 @@ import os
 import sys
 from pathlib import Path
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent
+)
 VENV_PYTHON = APP_DIR / ".venv" / "bin" / "python"
 
 if VENV_PYTHON.exists():
@@ -28,8 +32,9 @@ DEFAULT_PORT = 8765
 def cmd_serve(args):
     ensure_api_key()
     import uvicorn
+    from plex_curator_api import app
     uvicorn.run(
-        "plex_curator_api:app",
+        app,
         host="127.0.0.1",
         port=args.port,
         reload=False,
