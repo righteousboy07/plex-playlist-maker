@@ -66,9 +66,30 @@ jobs:
           name: macos-release
           path: release/*
 
+  installer:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: intel
+            runner: macos-15-intel
+          - name: apple-silicon
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build one-click installer
+        run: bash scripts/build-installer.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.name }}-release
+          path: dist/installer/*.pkg
+
   release:
     runs-on: ubuntu-latest
-    needs: [backend, macos]
+    needs: [backend, macos, installer]
     steps:
       - uses: actions/checkout@v4
 
@@ -81,7 +102,11 @@ jobs:
       - name: Generate checksums
         run: |
           cd release
-          sha256sum *.tar.gz *.zip > SHA256SUMS.txt
+          : > SHA256SUMS.txt
+          for file in *.tar.gz *.zip *.pkg; do
+            [[ -e "$file" ]] || continue
+            sha256sum "$file" >> SHA256SUMS.txt
+          done
           cat SHA256SUMS.txt
 
       - name: Publish or update GitHub Release
