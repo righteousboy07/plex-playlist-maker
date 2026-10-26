@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- App Store Phase 2/3: embedded a signed sandbox-inheriting backend helper inside the Store app, added container-aware backend/config/log paths, separated Direct (8765) and Store (8766) localhost APIs for side-by-side installs, disabled external LaunchAgent behavior in Store mode, and added CI startup/signing verification for the bundled runtime.
 - Added a shared Direct/App Store distribution architecture: compile-time build flavors, App Sandbox entitlements, direct-only UI capability gating, a sandboxed App Store build/CI target, and an explicit App Store migration roadmap without forking the product codebase.
 - Added a native first-run onboarding wizard that walks fresh installs through Plex connection and verification, while existing configured users bypass it automatically.
 - Upgraded the macOS package to a branded distribution installer with Welcome, installation-details, and completion screens, plus a startup wait so slower Macs do not open the app before the local API is ready.
