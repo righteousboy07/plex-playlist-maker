@@ -21,15 +21,15 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.12"
+API_VERSION = "1.13"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = (
     core.APP_DIR / "plex-curator-launchd"
     if (core.APP_DIR / "plex-curator-launchd").exists()
     else core.APP_DIR / "launchd-manager.py"
 )
-KIDS_SCARY_WISHLIST = core.APP_DIR / "examples" / "kids-scary-missing-wishlist.txt"
-TITLE_ALIASES_FILE = core.APP_DIR / "examples" / "title-aliases.json"
+KIDS_SCARY_WISHLIST = core.EXAMPLES_DIR / "kids-scary-missing-wishlist.txt"
+TITLE_ALIASES_FILE = core.EXAMPLES_DIR / "title-aliases.json"
 
 app = FastAPI(
     title="Plex Curator Local API",
@@ -426,6 +426,12 @@ def playlist_diff_payload(plex, cfg, proposed_items):
     return core.calculate_playlist_diff(current_items, proposed_items)
 
 def run_launchd_manager(*args):
+    if not core.LAUNCHD_ENABLED:
+        raise HTTPException(
+            status_code=501,
+            detail="External LaunchAgent automation is unavailable in the App Store edition.",
+        )
+
     command = (
         [sys.executable, str(LAUNCHD_MANAGER), *args]
         if LAUNCHD_MANAGER.suffix == ".py"
@@ -569,6 +575,7 @@ def status():
     return {
         "api_version": API_VERSION,
         "curator_version": getattr(core, "APP_VERSION", "unknown"),
+        "distribution": getattr(core, "DISTRIBUTION", "direct"),
         "plex": plex_status,
         "station_count": len(stations),
         "enabled_station_count": enabled,
@@ -1126,6 +1133,8 @@ def media_organizer_apply(
 
 @app.get("/api/v1/automation")
 def automation_jobs():
+    if not core.LAUNCHD_ENABLED:
+        return {"jobs": [], "available": False}
     return launchd_jobs_payload()
 
 @app.post("/api/v1/automation/{job_name}/install")
