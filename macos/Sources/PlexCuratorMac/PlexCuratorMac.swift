@@ -1097,9 +1097,15 @@ final class APIClient {
         )
     }
 
-    func history(limit: Int = 150) async throws -> [HistoryItem] {
+    func history(stationID: String? = nil, limit: Int = 150) async throws -> [HistoryItem] {
         let safeLimit = max(1, min(limit, 1000))
-        let r: HistoryResponse = try await request("/api/v1/history?limit=\(safeLimit)")
+        var path = "/api/v1/history?limit=\(safeLimit)"
+        if let stationID, !stationID.isEmpty {
+            let escaped = stationID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
+                ?? stationID
+            path += "&station_id=\(escaped)"
+        }
+        let r: HistoryResponse = try await request(path)
         return r.history
     }
 
@@ -1127,9 +1133,12 @@ final class APIClient {
         )
     }
 
-    func logs(job: String, errors: Bool) async throws -> LogResponse {
+    func logs(job: String, errors: Bool, lines: Int = 250) async throws -> LogResponse {
         let escaped = job.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? job
-        return try await request("/api/v1/logs/\(escaped)?errors=\(errors ? "true" : "false")&lines=250")
+        let safeLines = max(1, min(lines, 5000))
+        return try await request(
+            "/api/v1/logs/\(escaped)?errors=\(errors ? "true" : "false")&lines=\(safeLines)"
+        )
     }
 
     func automationJobs() async throws -> [AutomationJob] {
@@ -1751,14 +1760,22 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func loadHistory() async {
-        do { history = try await api.history(); error = nil }
-        catch { self.error = error.localizedDescription }
+    func loadHistory(stationID: String? = nil, limit: Int = 150) async {
+        do {
+            history = try await api.history(stationID: stationID, limit: limit)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
-    func loadLogs(job: String, errors: Bool) async {
-        do { log = try await api.logs(job: job, errors: errors); error = nil }
-        catch { self.error = error.localizedDescription }
+    func loadLogs(job: String, errors: Bool, lines: Int = 250) async {
+        do {
+            log = try await api.logs(job: job, errors: errors, lines: lines)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 
     func loadAutomation() async {
@@ -5735,10 +5752,13 @@ struct WishlistRow: View {
 struct HistoryView: View {
     @EnvironmentObject var model: AppModel
     @State private var searchText = ""
+    @State private var stationID = ""
+    @State private var limit = 150
 
     private var filteredHistory: [HistoryItem] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !query.isEmpty else { return model.history }
+
         return model.history.filter { item in
             [
                 item.showTitle,
@@ -5752,26 +5772,145 @@ struct HistoryView: View {
         }
     }
 
+    private var uniqueShowCount: Int {
+        Set(model.history.map(\.showTitle)).count
+    }
+
+    private var uniqueChannelCount: Int {
+        Set(model.history.map(\.channelName)).count
+    }
+
     var body: some View {
-        List(filteredHistory) { item in
-            HStack {
-                VStack(alignment: .leading) {
-                    Text("\(item.showTitle) S\(String(format: "%02d", item.seasonNumber))E\(String(format: "%02d", item.episodeNumber)) — \(item.episodeTitle)")
-                    Text(item.channelName).font(.caption).foregroundColor(.secondary)
-                }
+        VStack(spacing: 0) {
+            HStack(spacing: 18) {
+                historyMetric("LOADED", model.history.count)
+                historyMetric("SHOWN", filteredHistory.count)
+                historyMetric("SHOWS", uniqueShowCount)
+                historyMetric("CHANNELS", uniqueChannelCount)
                 Spacer()
-                Text(item.displayDate)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
             }
-            .padding(.vertical, 3)
+            .padding()
+
+            Divider()
+
+            if filteredHistory.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text(model.history.isEmpty ? "No history loaded." : "No history matches the current search.")
+                        .font(.headline)
+                    if model.history.isEmpty {
+                        Button("Load History") {
+                            Task { await reload() }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(filteredHistory) { item in
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(
+                                "\(item.showTitle) "
+                                + "S\(String(format: "%02d", item.seasonNumber))"
+                                + "E\(String(format: "%02d", item.episodeNumber))"
+                                + " — \(item.episodeTitle)"
+                            )
+                            .font(.headline)
+
+                            Text(displayChannel(item.channelName))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Spacer()
+
+                        Text(item.displayDate)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
         }
         .navigationTitle("History")
         .searchable(text: $searchText, prompt: "Search show, episode, or station")
         .toolbar {
-            Button("Reload") { Task { await model.loadHistory() } }
+            Picker("Station", selection: $stationID) {
+                Text("All Stations").tag("")
+                ForEach(model.stations.sorted {
+                    $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                }) { station in
+                    Text(station.name).tag(station.id)
+                }
+            }
+            .frame(width: 170)
+
+            Picker("Limit", selection: $limit) {
+                Text("150").tag(150)
+                Text("500").tag(500)
+                Text("1000").tag(1000)
+            }
+            .frame(width: 90)
+
+            Button("Copy Visible") {
+                copyVisibleHistory()
+            }
+            .disabled(filteredHistory.isEmpty)
+
+            Button("Reload") {
+                Task { await reload() }
+            }
         }
-        .task { await model.loadHistory() }
+        .task {
+            if model.stations.isEmpty {
+                await model.loadStations()
+            }
+            await reload()
+        }
+    }
+
+    private func reload() async {
+        await model.loadHistory(
+            stationID: stationID.isEmpty ? nil : stationID,
+            limit: limit
+        )
+    }
+
+    private func historyMetric(_ label: String, _ value: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text("\(value)")
+                .font(.title3.bold())
+        }
+        .frame(minWidth: 70, alignment: .leading)
+    }
+
+    private func displayChannel(_ value: String) -> String {
+        if value.hasPrefix("station:") {
+            let stationID = String(value.dropFirst("station:".count))
+            return model.stations.first(where: { $0.id == stationID })?.name
+                ?? stationID.replacingOccurrences(of: "-", with: " ").capitalized
+        }
+        return value
+    }
+
+    private func copyVisibleHistory() {
+        let text = filteredHistory.map { item in
+            "\(item.displayDate)\t\(displayChannel(item.channelName))\t"
+            + "\(item.showTitle)\t"
+            + "S\(String(format: "%02d", item.seasonNumber))"
+            + "E\(String(format: "%02d", item.episodeNumber))\t"
+            + item.episodeTitle
+        }
+        .joined(separator: "\n")
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        model.message = "Copied \(filteredHistory.count) visible history entries."
     }
 }
 
@@ -5986,6 +6125,10 @@ struct AutomationView: View {
 
                     Spacer()
 
+                    NavigationLink(destination: LogsView(initialJob: job.name)) {
+                        Label("Logs", systemImage: "doc.text")
+                    }
+
                     Button("Run Now") {
                         confirmAction = "run-now"
                         confirmJob = job
@@ -6039,26 +6182,156 @@ struct AutomationView: View {
 
 struct LogsView: View {
     @EnvironmentObject var model: AppModel
-    @State private var job = "api-server"
+    @State private var job: String
     @State private var errors = false
+    @State private var lineLimit = 250
+    @State private var searchText = ""
+
+    init(initialJob: String = "api-server") {
+        _job = State(initialValue: initialJob)
+    }
+
+    private var filteredLines: [String] {
+        let lines = model.log?.lines ?? []
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return lines }
+        return lines.filter { $0.lowercased().contains(query) }
+    }
+
+    private var availableJobNames: [String] {
+        var names = model.automationJobs.map(\.name)
+        if !job.isEmpty && !names.contains(job) {
+            names.append(job)
+        }
+        return Array(Set(names)).sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                TextField("Job", text: $job).textFieldStyle(RoundedBorderTextFieldStyle()).frame(width: 220)
-                Toggle("Errors", isOn: $errors)
-                Button("Load") { Task { await model.loadLogs(job: job, errors: errors) } }
+            HStack(spacing: 12) {
+                Picker("Job", selection: $job) {
+                    ForEach(availableJobNames, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
+                .frame(width: 190)
+
+                Picker("Stream", selection: $errors) {
+                    Text("Output").tag(false)
+                    Text("Errors").tag(true)
+                }
+                .frame(width: 110)
+
+                Picker("Lines", selection: $lineLimit) {
+                    Text("100").tag(100)
+                    Text("250").tag(250)
+                    Text("1000").tag(1000)
+                    Text("5000").tag(5000)
+                }
+                .frame(width: 95)
+
+                Button("Load") {
+                    Task { await load() }
+                }
+
+                Button("Copy Visible") {
+                    copyLines(filteredLines)
+                }
+                .disabled(filteredLines.isEmpty)
+
+                if let path = model.log?.path, !path.isEmpty {
+                    Button("Reveal Log") {
+                        NSWorkspace.shared.activateFileViewerSelecting([
+                            URL(fileURLWithPath: path)
+                        ])
+                    }
+                }
+
                 Spacer()
-            }.padding()
-            Divider()
-            ScrollView([.vertical, .horizontal]) {
-                Text(model.log?.lines.joined(separator: "\n") ?? "No log loaded.")
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding()
+
+                if let log = model.log {
+                    Text("\(filteredLines.count) / \(log.lines.count) lines")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
             }
-        }.navigationTitle("Logs")
+            .padding()
+
+            Divider()
+
+            if model.log == nil {
+                VStack(spacing: 10) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text("Choose a job and load its log.")
+                        .font(.headline)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if filteredLines.isEmpty {
+                Text("No log lines match the current search.")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView([.vertical, .horizontal]) {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(filteredLines.enumerated()), id: \.offset) { index, line in
+                            HStack(alignment: .top, spacing: 10) {
+                                Text("\(index + 1)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 42, alignment: .trailing)
+
+                                Text(line)
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundColor(logColor(line))
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+            }
+        }
+        .navigationTitle("Logs")
+        .searchable(text: $searchText, prompt: "Search loaded log")
+        .task {
+            if model.automationJobs.isEmpty {
+                await model.loadAutomation()
+            }
+            if availableJobNames.contains(job) {
+                await load()
+            }
+        }
+    }
+
+    private func load() async {
+        guard !job.isEmpty else { return }
+        await model.loadLogs(job: job, errors: errors, lines: lineLimit)
+    }
+
+    private func copyLines(_ lines: [String]) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+        model.message = "Copied \(lines.count) log lines."
+    }
+
+    private func logColor(_ line: String) -> Color {
+        let lower = line.lowercased()
+        if lower.contains("error")
+            || lower.contains("exception")
+            || lower.contains("traceback")
+            || lower.contains("fatal")
+            || lower.contains("failed") {
+            return .red
+        }
+        if lower.contains("warn") {
+            return .orange
+        }
+        return .primary
     }
 }
 
