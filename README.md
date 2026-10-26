@@ -9,7 +9,7 @@ Plex Curator now maintains two distribution channels from the **same codebase**:
 - **Direct Download** — the full-power signed/notarized `.pkg`, with external LaunchAgent automation, external log access, and the current self-contained backend installation.
 - **Mac App Store** — a sandboxed build flavor that shares the programming/UI logic but replaces installer, filesystem, and background-service behavior with App Store-safe equivalents.
 
-The Direct edition remains the production build today. The App Store edition now has its own sandboxed, bundled backend runtime and container-scoped state. Security-scoped Media Organizer folder access and Store-safe background automation remain before App Store submission.
+The Direct edition remains the production build today. The App Store edition now has its own sandboxed, bundled backend runtime, container-scoped state, security-scoped Media Organizer folder access, and Store-safe automation controls.
 
 See [docs/APP_STORE.md](docs/APP_STORE.md) for the App Store roadmap and channel-by-channel capability rules.
 
@@ -17,10 +17,12 @@ See [docs/APP_STORE.md](docs/APP_STORE.md) for the App Store roadmap and channel
 
 End users no longer need to clone the repository, create a Python environment, or run setup commands.
 
-Download the installer that matches the Mac from the GitHub Release:
+Download the installer that matches the Mac from the GitHub Release. Every user release must contain both clearly labeled installer packages:
 
 - **Intel Mac** — use `Plex-Curator-<version>-macOS-intel.pkg`. This is the correct package for Intel Macs such as the 2013 Mac Pro.
 - **Apple Silicon** — use `Plex-Curator-<version>-macOS-apple-silicon.pkg` for M-series Macs.
+
+If you are not sure which Mac you have, choose **Apple menu → About This Mac** and look for **Chip** or **Processor**. The GitHub Release workflow fails instead of publishing if either architecture-specific installer is missing.
 
 Double-click the `.pkg` and follow the branded Plex Curator Welcome, installation-details, and completion screens in macOS Installer.
 
