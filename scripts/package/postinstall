@@ -1,0 +1,43 @@
+#!/bin/bash
+set -u
+
+INSTALL_DIR="/Applications/PlexCurator"
+APP_PATH="/Applications/Plex Curator.app"
+CONSOLE_USER="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
+
+if [[ -z "$CONSOLE_USER" || "$CONSOLE_USER" == "root" || "$CONSOLE_USER" == "loginwindow" ]]; then
+  exit 0
+fi
+
+USER_UID="$(/usr/bin/id -u "$CONSOLE_USER" 2>/dev/null || true)"
+USER_HOME="$(/usr/bin/dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | /usr/bin/awk '{print $2}')"
+
+if [[ -z "$USER_UID" || -z "$USER_HOME" ]]; then
+  exit 0
+fi
+
+run_as_user() {
+  /bin/launchctl asuser "$USER_UID" /usr/bin/sudo -u "$CONSOLE_USER" -H "$@"
+}
+
+CONFIG_DIR="$USER_HOME/.config/plex-curator"
+LOG_DIR="$USER_HOME/Library/Logs/PlexCurator"
+
+/bin/mkdir -p "$CONFIG_DIR" "$LOG_DIR"
+/usr/sbin/chown -R "$CONSOLE_USER":staff "$CONFIG_DIR" "$LOG_DIR" 2>/dev/null || true
+/bin/chmod 700 "$CONFIG_DIR" 2>/dev/null || true
+
+run_as_user "$INSTALL_DIR/plex-curator" setup >/dev/null 2>&1 || true
+run_as_user "$INSTALL_DIR/plex-curator" logs-cleanup >/dev/null 2>&1 || true
+
+run_as_user "$INSTALL_DIR/plex-curator-launchd" install api-server >/dev/null 2>&1 || true
+run_as_user "$INSTALL_DIR/plex-curator-launchd" install log-cleanup >/dev/null 2>&1 || true
+
+/bin/sleep 2
+run_as_user "$INSTALL_DIR/plex-curator-api" ping >/dev/null 2>&1 || true
+
+if [[ -d "$APP_PATH" ]]; then
+  /bin/launchctl asuser "$USER_UID" /usr/bin/sudo -u "$CONSOLE_USER" -H /usr/bin/open "$APP_PATH" >/dev/null 2>&1 || true
+fi
+
+exit 0
