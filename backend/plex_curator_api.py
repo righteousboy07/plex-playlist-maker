@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import re
 import secrets
@@ -591,6 +593,25 @@ def status():
 
 @app.get("/api/v1/doctor")
 def doctor():
+    if getattr(core, "DISTRIBUTION", "direct") == "app-store":
+        args = type(
+            "DoctorArgs",
+            (),
+            {"json": True, "fix": False, "verbose": False},
+        )()
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                core.cmd_doctor(args)
+            return json.loads(output.getvalue())
+        except BaseException as exc:
+            return {
+                "result": "ERROR",
+                "return_code": 1,
+                "stdout": output.getvalue(),
+                "stderr": str(exc),
+            }
+
     result = subprocess.run(
         [str(core.APP_DIR / "plex-curator"), "doctor", "--json"],
         cwd=str(core.APP_DIR),
