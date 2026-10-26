@@ -1,8 +1,12 @@
 import Foundation
 
 @MainActor
-final class StoreAutomationScheduler {
+final class StoreAutomationScheduler: ObservableObject {
     static let shared = StoreAutomationScheduler()
+
+    @Published private(set) var jobs: [StoreAutomationJob] = []
+    @Published private(set) var runningJob: String?
+    @Published private(set) var lastSchedulerError: String?
 
     private var task: Task<Void, Never>?
     private let defaults = UserDefaults.standard
@@ -16,6 +20,8 @@ final class StoreAutomationScheduler {
 
         task = Task { [weak self] in
             guard let self else { return }
+
+            await self.reload(api: api)
 
             while !Task.isCancelled {
                 await self.runDueJobs(api: api)
@@ -32,6 +38,85 @@ final class StoreAutomationScheduler {
     func stop() {
         task?.cancel()
         task = nil
+        runningJob = nil
+    }
+
+    func reload(api: APIClient) async {
+        guard BuildFlavor.current.isAppStore else { return }
+
+        do {
+            jobs = try await api.storeAutomationJobs()
+            lastSchedulerError = nil
+        } catch {
+            lastSchedulerError = error.localizedDescription
+        }
+    }
+
+    func runNow(_ job: StoreAutomationJob, api: APIClient) async -> Bool {
+        guard BuildFlavor.current.isAppStore else { return false }
+        guard runningJob == nil else { return false }
+
+        runningJob = job.name
+        defer { runningJob = nil }
+
+        do {
+            _ = try await api.runStoreAutomationJob(job.name)
+            defaults.set(
+                runKey(for: job, at: Date(), calendar: Calendar.current),
+                forKey: lastRunPrefix + job.name
+            )
+            lastSchedulerError = nil
+            return true
+        } catch {
+            lastSchedulerError = error.localizedDescription
+            return false
+        }
+    }
+
+    func lastRunText(for job: StoreAutomationJob) -> String {
+        guard let raw = defaults.string(forKey: lastRunPrefix + job.name) else {
+            return "Never"
+        }
+
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+
+        if let date = formatter.date(from: raw) {
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .none
+            return formatter.string(from: date)
+        }
+
+        return raw
+    }
+
+    func scheduleText(for job: StoreAutomationJob) -> String {
+        var pieces: [String] = []
+
+        if let month = job.calendar.month {
+            let symbols = Calendar.current.monthSymbols
+            if (1...symbols.count).contains(month) {
+                pieces.append(symbols[month - 1])
+            }
+        }
+
+        if let weekday = job.calendar.weekday {
+            let symbols = Calendar.current.weekdaySymbols
+            if (1...symbols.count).contains(weekday) {
+                pieces.append(symbols[weekday - 1])
+            }
+        }
+
+        let time = Calendar.current.date(
+            from: DateComponents(hour: job.calendar.hour, minute: job.calendar.minute)
+        )
+        if let time {
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            pieces.append(formatter.string(from: time))
+        }
+
+        return pieces.isEmpty ? "Scheduled" : pieces.joined(separator: " • ")
     }
 
     private func runDueJobs(api: APIClient) async {
@@ -39,7 +124,10 @@ final class StoreAutomationScheduler {
         guard StoreAutomationManager.shared.enabled else { return }
 
         do {
-            let jobs = try await api.storeAutomationJobs()
+            if jobs.isEmpty {
+                jobs = try await api.storeAutomationJobs()
+            }
+
             let now = Date()
             let calendar = Calendar.current
 
@@ -49,16 +137,18 @@ final class StoreAutomationScheduler {
                     continue
                 }
 
+                runningJob = job.name
                 do {
                     _ = try await api.runStoreAutomationJob(job.name)
                     defaults.set(key, forKey: lastRunPrefix + job.name)
+                    lastSchedulerError = nil
                 } catch {
-                    // Leave the job eligible so a later scheduler pass can retry.
+                    lastSchedulerError = error.localizedDescription
                 }
+                runningJob = nil
             }
         } catch {
-            // The bundled backend may still be starting or Plex may be unavailable.
-            // The next scheduler pass will retry without surfacing repeated UI errors.
+            lastSchedulerError = error.localizedDescription
         }
     }
 
