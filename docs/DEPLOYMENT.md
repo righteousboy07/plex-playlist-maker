@@ -1,146 +1,115 @@
 # Deployment and Releases
 
-GitHub is the source of truth for Plex Curator. The live backend remains installed at:
+## Normal user installation
+
+Plex Curator now ships as a self-contained macOS installer. Users should download the architecture-specific `.pkg` from the GitHub Release:
+
+- Intel: `Plex-Curator-<version>-macOS-intel.pkg`
+- Apple Silicon: `Plex-Curator-<version>-macOS-apple-silicon.pkg`
+
+The installer places:
 
 ```text
-/Applications/PlexCurator
+/Applications/Plex Curator.app
+/Applications/PlexCurator/plex-curator
+/Applications/PlexCurator/plex-curator-api
+/Applications/PlexCurator/plex-curator-launchd
+/Applications/PlexCurator/examples/
 ```
 
-Persistent runtime data remains outside the repository:
+No Python runtime or virtual environment is required on the destination Mac.
+
+The post-install script:
+
+1. finds the currently logged-in macOS user;
+2. preserves/initializes `~/.config/plex-curator/`;
+3. initializes 30-day log retention;
+4. installs and starts the `api-server` LaunchAgent;
+5. installs the `log-cleanup` LaunchAgent;
+6. opens Plex Curator.
+
+First-time Plex URL/token setup is completed in **Plex Curator → Settings → Plex Connection**.
+
+## Persistent state
+
+Installer payloads do not replace the user's configuration directory:
 
 ```text
 ~/.config/plex-curator/
 ```
 
-The deployment scripts never replace that configuration directory.
-
-## First deployment from a clone
-
-```bash
-git clone https://github.com/righteousboy07/plex-playlist-maker.git
-cd plex-playlist-maker
-
-./scripts/install-backend.sh
-./scripts/install-macos-app.sh
-```
-
-Or install both:
-
-```bash
-./scripts/install-all.sh
-```
-
-Preview the deployment without changing anything:
-
-```bash
-./scripts/install-all.sh --dry-run
-```
-
-## Backend safety behavior
-
-Before updating `/Applications/PlexCurator`, the installer:
-
-1. creates a timestamped copy of the current live application;
-2. asks the existing Curator installation to create its own config/state backup when available;
-3. preserves the existing backend `.venv/`;
-4. copies the repository `backend/` tree into the live location;
-5. installs/updates Python dependencies;
-6. runs `./plex-curator doctor` when the permanent `.env` exists;
-7. reloads the `api-server` LaunchAgent when it was already installed;
-8. pings the localhost API after reload.
-
-Deployment backups are stored at:
+Important files include:
 
 ```text
-~/.config/plex-curator/deployment-backups/
+.env
+api.key
+stations.json
+schedules.json
+state.sqlite3
+media-organizer-presets.json
+backups/
+deployment-backups/
+exports/
 ```
 
-The following are not overwritten by deployment:
+## Building the installer
+
+On macOS:
+
+```bash
+bash scripts/build-installer.sh
+```
+
+The build creates a temporary Python build environment, installs PyInstaller, builds standalone backend/API/LaunchAgent binaries, builds the SwiftUI release app, assembles the package payload, and emits one architecture-specific `.pkg`.
+
+Output:
 
 ```text
-~/.config/plex-curator/.env
-~/.config/plex-curator/api.key
-~/.config/plex-curator/stations.json
-~/.config/plex-curator/schedules.json
-~/.config/plex-curator/state.sqlite3
-~/.config/plex-curator/backups/
+dist/installer/Plex-Curator-<version>-macOS-<architecture>.pkg
 ```
 
-## Updating an existing Git clone
+## Signing and notarization
 
-From a clean working tree:
+Unsigned development packages can be built without credentials.
+
+For distribution:
 
 ```bash
-./scripts/update-from-git.sh
+APP_SIGN_IDENTITY="Developer ID Application: ..." \
+PKG_SIGN_IDENTITY="Developer ID Installer: ..." \
+bash scripts/build-installer.sh
 ```
 
-That performs:
+If `APPLE_NOTARY_PROFILE` is set to a configured `notarytool` keychain profile, the package is submitted for notarization and stapled.
 
-```text
-git pull --ff-only
-backend deployment
-macOS app build/install
-```
+## GitHub Releases
 
-To update without automatically opening the GUI:
+Tagged releases (`v*`) build:
+
+- backend source archive;
+- compiled macOS app ZIP;
+- Intel installer package;
+- Apple Silicon installer package;
+- SHA-256 checksums.
+
+## Legacy source deployment
+
+The old source-deployment path remains useful for development:
 
 ```bash
-./scripts/update-from-git.sh --no-open
+bash scripts/install-all.sh --dry-run
+bash scripts/install-all.sh
+bash scripts/update-from-git.sh
 ```
 
-## Backend only
-
-```bash
-./scripts/install-backend.sh
-```
-
-Custom target for testing:
-
-```bash
-./scripts/install-backend.sh --target "$HOME/Applications/PlexCurator-Test"
-```
-
-Do not point launchd production jobs at the test target.
-
-## macOS app only
-
-```bash
-./scripts/install-macos-app.sh
-```
-
-Default destination:
-
-```text
-~/Applications/Plex Curator.app
-```
+The live source backend target remains `/Applications/PlexCurator`, and runtime configuration remains under `~/.config/plex-curator/`.
 
 ## Rollback
 
-Every backend deployment snapshots the previous live application.
-
-To roll back code manually:
-
-1. stop or reload the `api-server` LaunchAgent;
-2. move the current `/Applications/PlexCurator` aside;
-3. restore the desired timestamped `PlexCurator` directory from `deployment-backups`;
-4. run `./install.sh`;
-5. run `./plex-curator doctor`;
-6. reinstall/reload `api-server`.
-
-Persistent state/config backups created by the Curator backup command remain under:
+Persistent config/state backups remain under:
 
 ```text
 ~/.config/plex-curator/backups/
 ```
 
-## Tagged releases
-
-Tags matching `v*` run the Release Artifacts workflow.
-
-The workflow builds:
-
-- a backend source archive;
-- a compiled macOS `.app` ZIP;
-- a GitHub Release with generated release notes.
-
-Before tagging a release, make sure backend tests and macOS build CI are green.
+The package pre-install script also asks an existing Plex Curator installation to create a safety backup when possible before files are replaced.
