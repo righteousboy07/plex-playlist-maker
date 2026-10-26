@@ -17,10 +17,19 @@ See [docs/APP_STORE.md](docs/APP_STORE.md) for the App Store roadmap and channel
 
 End users no longer need to clone the repository, create a Python environment, or run setup commands.
 
-Download the installer that matches the Mac from the GitHub Release. Every user release must contain both clearly labeled installer packages:
+For the easiest install, download:
 
-- **Intel Mac** — use `Plex-Curator-<version>-macOS-intel.pkg`. This is the correct package for Intel Macs such as the 2013 Mac Pro.
-- **Apple Silicon** — use `Plex-Curator-<version>-macOS-apple-silicon.pkg` for M-series Macs.
+- **Universal Installer DMG** — `Plex-Curator-<version>-macOS-Universal-Installer.dmg`
+
+Open the DMG and double-click the installer for your Mac. No Terminal commands are required. The DMG contains both clearly labeled packages:
+
+- **Intel Mac** — `Install Plex Curator - Intel Mac.pkg`
+- **Apple Silicon Mac** — `Install Plex Curator - Apple Silicon Mac.pkg`
+
+The same two architecture-specific `.pkg` files are also published separately:
+
+- `Plex-Curator-<version>-macOS-intel.pkg`
+- `Plex-Curator-<version>-macOS-apple-silicon.pkg`
 
 If you are not sure which Mac you have, choose **Apple menu → About This Mac** and look for **Chip** or **Processor**. The GitHub Release workflow fails instead of publishing if either architecture-specific installer is missing.
 
