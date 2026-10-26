@@ -148,18 +148,23 @@ Still pending:
 - optional one-time import from a Direct-edition installation into the Store sandbox
 - security-scoped authorization for user media folders
 
-### Phase 4 — Media Organizer folder authorization
+### Phase 4 — Media Organizer folder authorization — Implemented, device validation pending
 
-The Store edition cannot crawl arbitrary folders by path alone.
+The Store edition no longer accepts arbitrary typed Media Organizer paths.
 
-Use:
+Implemented:
 
-1. `NSOpenPanel` to let the user select a media root;
-2. security-scoped bookmarks for persistent permission;
-3. `startAccessingSecurityScopedResource()` only while the folder is being used;
-4. matching stop-access calls afterward.
+- `NSOpenPanel` selection for source and destination folders
+- app-scoped security-scoped bookmarks persisted in the Store container
+- stale bookmark refresh on later launches
+- active security-scoped access restored before the bundled backend starts
+- backend restart after a newly authorized folder is selected, so the inherited sandbox launches under the active folder grants
+- Store-only validation that blocks scan/apply operations when source or destination is not covered by an authorized bookmark
+- Direct edition path entry remains unchanged
 
-Media Organizer presets should refer to authorized bookmark identities rather than unrestricted filesystem roots.
+Before marking this phase complete, validate on a clean macOS account that the nested helper can recursively scan, move and rename files beneath an authorized folder after both an immediate selection and an app relaunch.
+
+Future preset work may store bookmark identities alongside organizer presets when presets begin owning media-root selections.
 
 ### Phase 5 — Store automation
 
@@ -198,7 +203,7 @@ If App Review cannot access a normal Plex server, prepare either:
 - clear reviewer setup instructions and a reachable review Plex environment, or
 - a review/demo mode that exercises the UI without modifying a real media library.
 
-Do not submit the App Store flavor until the bundled-helper, sandbox-storage, and security-scoped-folder phases are complete.
+Do not submit the App Store flavor until the bundled-helper and sandbox-storage phases are complete and the security-scoped-folder flow has passed clean-account device validation.
 
 ## Release discipline
 
