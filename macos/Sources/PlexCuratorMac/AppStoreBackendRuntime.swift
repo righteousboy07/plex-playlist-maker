@@ -84,7 +84,15 @@ final class AppStoreBackendRuntime {
         process = nil
     }
 
+    func reloadMediaFolderAccess() async throws {
+        guard BuildFlavor.current.isAppStore else { return }
+        stop()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        try await ensureRunning()
+    }
+
     private func launch() throws {
+        SecurityScopedMediaAccess.shared.restoreAccess()
         let helpers = Bundle.main.bundleURL
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("Helpers", isDirectory: true)
@@ -167,5 +175,6 @@ final class AppStoreBackendRuntime {
 final class PlexCuratorApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         AppStoreBackendRuntime.shared.stop()
+        SecurityScopedMediaAccess.shared.stopAll()
     }
 }
