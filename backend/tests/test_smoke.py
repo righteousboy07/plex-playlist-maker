@@ -105,6 +105,48 @@ def test_log_cleanup_truncates_managed_logs_when_retention_is_due(tmp_path, monk
     assert result["days_until_cleanup"] == 30.0
 
 
+def test_save_plex_config_preserves_other_settings(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_file = config_dir / ".env"
+    config_file.write_text(
+        "PLEX_URL=http://old:32400\n"
+        "PLEX_TOKEN=old-token\n"
+        "CUSTOM_SETTING=keep-me\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(core, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(core, "CONFIG_FILE", config_file)
+    monkeypatch.setenv("PLEX_URL", "http://stale:32400")
+    monkeypatch.setenv("PLEX_TOKEN", "stale-token")
+
+    status = core.save_plex_config("http://new-server:32400", token=None)
+
+    saved = config_file.read_text(encoding="utf-8")
+    assert "PLEX_URL=http://new-server:32400" in saved
+    assert "PLEX_TOKEN=old-token" in saved
+    assert "CUSTOM_SETTING=keep-me" in saved
+    assert status["url"] == "http://new-server:32400"
+    assert status["token_present"] is True
+
+
+def test_save_plex_config_replaces_token(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_file = config_dir / ".env"
+    config_file.write_text(
+        "PLEX_URL=http://127.0.0.1:32400\nPLEX_TOKEN=old\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(core, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(core, "CONFIG_FILE", config_file)
+
+    core.save_plex_config("http://127.0.0.1:32400", token="new-token")
+
+    assert "PLEX_TOKEN=new-token" in config_file.read_text(encoding="utf-8")
+
+
 def test_default_station_profiles_validate():
     assert core.DEFAULT_STATIONS
     for station_id, raw in core.DEFAULT_STATIONS.items():
@@ -127,6 +169,7 @@ def test_api_routes_are_registered():
     paths = {route.path for route in api.app.routes}
     assert "/api/v1/ping" in paths
     assert "/api/v1/status" in paths
+    assert "/api/v1/config/plex" in paths
     assert "/api/v1/stations" in paths
     assert "/api/v1/stations/{station_id}" in paths
     assert "/api/v1/stations/{station_id}/clone" in paths
