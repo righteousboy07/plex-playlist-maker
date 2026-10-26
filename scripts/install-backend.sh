@@ -62,6 +62,8 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   fi
   echo "Would rsync backend source into target, preserving target/.venv/"
   echo "Would run target/install.sh"
+  echo "Would initialize 30-day log retention"
+  echo "Would install/reload the log-cleanup LaunchAgent"
   echo "Would run Doctor when $CONFIG_DIR/.env exists"
   if [[ "$RESTART_API" -eq 1 ]]; then
     echo "Would reload api-server LaunchAgent if its plist already exists"
@@ -118,6 +120,11 @@ chmod +x   "$TARGET/install.sh"   "$TARGET/plex-curator"   "$TARGET/plex-curator
 echo
 echo "Installing Python dependencies..."
 "$TARGET/install.sh"
+
+echo
+echo "Configuring 30-day log retention..."
+"$TARGET/plex-curator" logs-cleanup
+"$TARGET/.venv/bin/python" "$TARGET/launchd-manager.py" install log-cleanup
 
 if [[ -f "$CONFIG_DIR/.env" ]]; then
   echo
