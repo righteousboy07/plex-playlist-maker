@@ -9,7 +9,7 @@ Plex Curator now maintains two distribution channels from the **same codebase**:
 - **Direct Download** — the full-power signed/notarized `.pkg`, with external LaunchAgent automation, external log access, and the current self-contained backend installation.
 - **Mac App Store** — a sandboxed build flavor that shares the programming/UI logic but replaces installer, filesystem, and background-service behavior with App Store-safe equivalents.
 
-The Direct edition remains the production build today. The App Store edition has its build flavor and sandbox entitlements in place; bundled-helper, sandbox-storage, and security-scoped-folder work must be completed before submission.
+The Direct edition remains the production build today. The App Store edition now has its own sandboxed, bundled backend runtime and container-scoped state. Security-scoped Media Organizer folder access and Store-safe background automation remain before App Store submission.
 
 See [docs/APP_STORE.md](docs/APP_STORE.md) for the App Store roadmap and channel-by-channel capability rules.
 
@@ -73,7 +73,9 @@ Plex Media Server
        ↑
 Plex Curator Engine
        ↑
-Local REST API (127.0.0.1:8765)
+Local REST API
+  Direct: 127.0.0.1:8765
+  Store:  127.0.0.1:8766
        ↑
 SwiftUI macOS Client
 ```
