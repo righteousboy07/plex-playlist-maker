@@ -713,7 +713,7 @@ enum APIClientError: LocalizedError {
 }
 
 final class APIClient {
-    let baseURL = URL(string: "http://127.0.0.1:8765")!
+    let baseURL = URL(string: BuildFlavor.current.apiAddress)!
 
     private var decoder: JSONDecoder {
         let d = JSONDecoder()
@@ -6703,7 +6703,9 @@ struct SettingsView: View {
     @State private var plexToken = ""
     @State private var savingPlex = false
 
-    private let apiAddress = "http://127.0.0.1:8765"
+    private var apiAddress: String {
+        BuildFlavor.current.apiAddress
+    }
 
     private var apiKeyExists: Bool {
         FileManager.default.fileExists(atPath: model.api.apiKeyPath)
