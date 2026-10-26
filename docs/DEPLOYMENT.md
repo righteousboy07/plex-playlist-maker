@@ -4,8 +4,12 @@
 
 Plex Curator now ships as a self-contained macOS installer. Users should download the architecture-specific `.pkg` from the GitHub Release:
 
-- Intel: `Plex-Curator-<version>-macOS-intel.pkg`
-- Apple Silicon: `Plex-Curator-<version>-macOS-apple-silicon.pkg`
+- **Intel Mac:** `Plex-Curator-<version>-macOS-intel.pkg`
+- **Apple Silicon Mac:** `Plex-Curator-<version>-macOS-apple-silicon.pkg`
+
+The release workflow verifies that both packages exist before publishing. If either architecture-specific installer is missing, the release job fails rather than publishing an incomplete user release.
+
+The top of each GitHub Release also includes a plain-language download guide telling users which installer to choose.
 
 The installer places:
 
@@ -90,10 +94,12 @@ If `APPLE_NOTARY_PROFILE` is set to a configured `notarytool` keychain profile, 
 Tagged releases (`v*`) build:
 
 - backend source archive;
-- compiled macOS app ZIP;
-- Intel installer package;
-- Apple Silicon installer package;
+- clearly labeled Apple Silicon standalone app ZIP for development/testing;
+- **Intel installer package**;
+- **Apple Silicon installer package**;
 - SHA-256 checksums.
+
+The `.pkg` installers are the recommended end-user downloads.
 
 ## Legacy source deployment
 
