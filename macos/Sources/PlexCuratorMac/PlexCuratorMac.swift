@@ -5789,85 +5789,86 @@ struct HistoryView: View {
         Set(model.history.map(\.channelName)).count
     }
 
+    private var sortedStations: [Station] {
+        model.stations.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    private var summaryHeader: some View {
+        HStack(spacing: 18) {
+            historyMetric("LOADED", model.history.count)
+            historyMetric("SHOWN", filteredHistory.count)
+            historyMetric("SHOWS", uniqueShowCount)
+            historyMetric("CHANNELS", uniqueChannelCount)
+            Spacer()
+        }
+        .padding()
+    }
+
+    @ViewBuilder
+    private var historyContent: some View {
+        if filteredHistory.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.largeTitle)
+                    .foregroundColor(.secondary)
+                Text(emptyMessage)
+                    .font(.headline)
+                if model.history.isEmpty {
+                    Button("Load History") {
+                        Task { await reload() }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(filteredHistory) { item in
+                historyRow(item)
+            }
+        }
+    }
+
+    private var emptyMessage: String {
+        model.history.isEmpty
+            ? "No history loaded."
+            : "No history matches the current search."
+    }
+
+    private var stationPicker: some View {
+        Picker("Station", selection: $stationID) {
+            Text("All Stations").tag("")
+            ForEach(sortedStations) { station in
+                Text(station.name).tag(station.id)
+            }
+        }
+        .frame(width: 170)
+    }
+
+    private var limitPicker: some View {
+        Picker("Limit", selection: $limit) {
+            Text("150").tag(150)
+            Text("500").tag(500)
+            Text("1000").tag(1000)
+        }
+        .frame(width: 90)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 18) {
-                historyMetric("LOADED", model.history.count)
-                historyMetric("SHOWN", filteredHistory.count)
-                historyMetric("SHOWS", uniqueShowCount)
-                historyMetric("CHANNELS", uniqueChannelCount)
-                Spacer()
-            }
-            .padding()
-
+            summaryHeader
             Divider()
-
-            if filteredHistory.isEmpty {
-                VStack(spacing: 10) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.largeTitle)
-                        .foregroundColor(.secondary)
-                    Text(model.history.isEmpty ? "No history loaded." : "No history matches the current search.")
-                        .font(.headline)
-                    if model.history.isEmpty {
-                        Button("Load History") {
-                            Task { await reload() }
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(filteredHistory) { item in
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(
-                                "\(item.showTitle) "
-                                + "S\(String(format: "%02d", item.seasonNumber))"
-                                + "E\(String(format: "%02d", item.episodeNumber))"
-                                + " — \(item.episodeTitle)"
-                            )
-                            .font(.headline)
-
-                            Text(displayChannel(item.channelName))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
-                        Spacer()
-
-                        Text(item.displayDate)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
+            historyContent
         }
         .navigationTitle("History")
         .searchable(text: $searchText, prompt: "Search show, episode, or station")
         .toolbar {
-            Picker("Station", selection: $stationID) {
-                Text("All Stations").tag("")
-                ForEach(model.stations.sorted {
-                    $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-                }) { station in
-                    Text(station.name).tag(station.id)
-                }
-            }
-            .frame(width: 170)
-
-            Picker("Limit", selection: $limit) {
-                Text("150").tag(150)
-                Text("500").tag(500)
-                Text("1000").tag(1000)
-            }
-            .frame(width: 90)
-
+            stationPicker
+            limitPicker
             Button("Copy Visible") {
                 copyVisibleHistory()
             }
             .disabled(filteredHistory.isEmpty)
-
             Button("Reload") {
                 Task { await reload() }
             }
@@ -5878,6 +5879,31 @@ struct HistoryView: View {
             }
             await reload()
         }
+    }
+
+    private func historyRow(_ item: HistoryItem) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(historyTitle(item))
+                    .font(.headline)
+                Text(displayChannel(item.channelName))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Text(item.displayDate)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func historyTitle(_ item: HistoryItem) -> String {
+        let season = String(format: "%02d", item.seasonNumber)
+        let episode = String(format: "%02d", item.episodeNumber)
+        return "\(item.showTitle) S\(season)E\(episode) — \(item.episodeTitle)"
     }
 
     private func reload() async {
