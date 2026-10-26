@@ -1441,7 +1441,8 @@ final class AppModel: ObservableObject {
             if let recentBuilds = try? await api.buildHistory(limit: 8) {
                 buildHistory = recentBuilds
             }
-            if let jobs = try? await api.automationJobs() {
+            if BuildFlavor.current.supportsLaunchAgentManagement,
+               let jobs = try? await api.automationJobs() {
                 automationJobs = jobs
             }
             error = nil
@@ -1907,8 +1908,12 @@ struct RootView: View {
                     NavigationLink(destination: KidsScaryWishlistView()) { Label("Kids Scary Wishlist", systemImage: "checklist") }
                     NavigationLink(destination: HistoryView()) { Label("History", systemImage: "clock.arrow.circlepath") }
                     NavigationLink(destination: HealthView()) { Label("Health", systemImage: "heart.text.square") }
-                    NavigationLink(destination: AutomationView()) { Label("Automation", systemImage: "clock.badge.checkmark") }
-                    NavigationLink(destination: LogsView()) { Label("Logs", systemImage: "doc.text.magnifyingglass") }
+                    if BuildFlavor.current.supportsLaunchAgentManagement {
+                        NavigationLink(destination: AutomationView()) { Label("Automation", systemImage: "clock.badge.checkmark") }
+                    }
+                    if BuildFlavor.current.supportsExternalLogFiles {
+                        NavigationLink(destination: LogsView()) { Label("Logs", systemImage: "doc.text.magnifyingglass") }
+                    }
                     NavigationLink(destination: SettingsView()) { Label("Settings", systemImage: "gearshape") }
                 }
             }
@@ -2029,7 +2034,7 @@ struct OnboardingView: View {
             Text("Welcome to Plex Curator")
                 .font(.largeTitle.bold())
 
-            Text("The installer has already set up the local API, background service, automation manager, and 30-day log retention. The only thing left is connecting Plex Curator to your Plex server.")
+            Text(BuildFlavor.current.onboardingDescription)
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: 500)
@@ -2066,7 +2071,7 @@ struct OnboardingView: View {
                     .textFieldStyle(RoundedBorderTextFieldStyle())
             }
 
-            Text("The token is written to ~/.config/plex-curator/.env with private file permissions and is never displayed back in the app.")
+            Text(BuildFlavor.current.tokenStorageDescription)
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -2521,8 +2526,10 @@ struct DashboardView: View {
                 Label(title, systemImage: "arrow.right.circle")
             }
         case .some(.automation):
-            NavigationLink(destination: AutomationView()) {
-                Label(title, systemImage: "arrow.right.circle")
+            if BuildFlavor.current.supportsLaunchAgentManagement {
+                NavigationLink(destination: AutomationView()) {
+                    Label(title, systemImage: "arrow.right.circle")
+                }
             }
         case .some(.mediaOrganizer):
             NavigationLink(destination: MediaOrganizerView()) {
@@ -2567,8 +2574,10 @@ struct DashboardView: View {
                     NavigationLink(destination: StationsView()) {
                         Label("Stations", systemImage: "tv")
                     }
-                    NavigationLink(destination: AutomationView()) {
-                        Label("Automation", systemImage: "clock.badge.checkmark")
+                    if BuildFlavor.current.supportsLaunchAgentManagement {
+                        NavigationLink(destination: AutomationView()) {
+                            Label("Automation", systemImage: "clock.badge.checkmark")
+                        }
                     }
                     NavigationLink(destination: HealthView()) {
                         Label("Health", systemImage: "heart.text.square")
@@ -6357,12 +6366,16 @@ struct HealthView: View {
             }
             .frame(width: 120)
 
-            NavigationLink(destination: AutomationView()) {
-                Label("Automation", systemImage: "clock.badge.checkmark")
+            if BuildFlavor.current.supportsLaunchAgentManagement {
+                NavigationLink(destination: AutomationView()) {
+                    Label("Automation", systemImage: "clock.badge.checkmark")
+                }
             }
 
-            NavigationLink(destination: LogsView()) {
-                Label("Logs", systemImage: "doc.text.magnifyingglass")
+            if BuildFlavor.current.supportsExternalLogFiles {
+                NavigationLink(destination: LogsView()) {
+                    Label("Logs", systemImage: "doc.text.magnifyingglass")
+                }
             }
 
             Button {
@@ -6773,28 +6786,45 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                GroupBox("API Key") {
+                GroupBox("Distribution") {
                     VStack(alignment: .leading, spacing: 10) {
-                        setting("Path", model.api.apiKeyPath)
-                        setting("Status", apiKeyExists ? "Present" : "Missing")
+                        setting("Edition", BuildFlavor.current.displayName)
+                        setting("Sandbox", BuildFlavor.current.usesAppSandbox ? "Enabled" : "Not required")
+                        setting("State", BuildFlavor.current.stateStorageDescription)
 
-                        HStack(spacing: 10) {
-                            Button("Copy Key Path") {
-                                copyToPasteboard(model.api.apiKeyPath)
-                                model.message = "Copied API key path."
-                            }
-
-                            Button("Reveal in Finder") {
-                                revealAPIKey()
-                            }
-                            .disabled(!apiKeyExists)
+                        if BuildFlavor.current.isAppStore {
+                            Text("This build uses App Store-safe capabilities. External installer and LaunchAgent controls are intentionally unavailable.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
-
-                        Text("The app never displays the API key value here; it only uses the local file for authenticated write actions.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if !BuildFlavor.current.isAppStore {
+                    GroupBox("API Key") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            setting("Path", model.api.apiKeyPath)
+                            setting("Status", apiKeyExists ? "Present" : "Missing")
+
+                            HStack(spacing: 10) {
+                                Button("Copy Key Path") {
+                                    copyToPasteboard(model.api.apiKeyPath)
+                                    model.message = "Copied API key path."
+                                }
+
+                                Button("Reveal in Finder") {
+                                    revealAPIKey()
+                                }
+                                .disabled(!apiKeyExists)
+                            }
+
+                            Text("The app never displays the API key value here; it only uses the local file for authenticated write actions.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
 
                 GroupBox("Backend") {
@@ -6813,11 +6843,15 @@ struct SettingsView: View {
                         NavigationLink(destination: HealthView()) {
                             Label("Health", systemImage: "heart.text.square")
                         }
-                        NavigationLink(destination: AutomationView()) {
-                            Label("Automation", systemImage: "clock.badge.checkmark")
+                        if BuildFlavor.current.supportsLaunchAgentManagement {
+                            NavigationLink(destination: AutomationView()) {
+                                Label("Automation", systemImage: "clock.badge.checkmark")
+                            }
                         }
-                        NavigationLink(destination: LogsView()) {
-                            Label("Logs", systemImage: "doc.text.magnifyingglass")
+                        if BuildFlavor.current.supportsExternalLogFiles {
+                            NavigationLink(destination: LogsView()) {
+                                Label("Logs", systemImage: "doc.text.magnifyingglass")
+                            }
                         }
                         Spacer()
                         Button("Run Diagnostics") {
