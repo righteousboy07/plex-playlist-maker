@@ -4,6 +4,7 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Added self-contained one-click macOS installer packaging for Intel and Apple Silicon, including standalone backend/API/LaunchAgent executables, automatic API/log-retention setup, and in-app first-time Plex URL/token configuration.
 - Added default 30-day launchd log retention: a daily maintenance job tracks a retention cycle and safely truncates Plex Curator stdout/stderr logs every 30 days, including continuously written API logs.
 - Improved History and Logs workflows in the macOS app with station/job pickers, configurable history/log limits, search, history metrics, direct Automation-to-Logs navigation, log severity highlighting, copy controls, and Finder reveal for loaded log files.
 - Improved diagnostics and recovery UX: Health now has summary metrics, issue/pass filtering, search, rerun controls, and links to Automation/Logs; Settings now shows live API/Plex state, API-key file status, safe copy/reveal utilities, and recovery shortcuts.
