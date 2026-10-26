@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 REPO_ROOT="$(cd "$ROOT/.." && pwd)"
 VERSION="${PLEX_CURATOR_VERSION:-$(sed -n 's/^APP_VERSION = "\([^"]*\)"/\1/p' "$REPO_ROOT/backend/plex_curator.py" | head -1)}"
 BUILD_VERSION="$(printf '%s' "$VERSION" | tr -cd '0-9')"
