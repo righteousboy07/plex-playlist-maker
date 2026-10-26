@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -25,8 +27,82 @@ def test_expected_reliability_commands_exist():
         "backup",
         "backup-list",
         "logs",
+        "logs-cleanup",
     }
     assert expected <= commands
+
+
+def test_log_cleanup_preserves_logs_before_retention_is_due(tmp_path, monkeypatch):
+    log_dir = tmp_path / "logs"
+    config_dir = tmp_path / "config"
+    log_dir.mkdir()
+    config_dir.mkdir()
+    log_file = log_dir / "api-server.out.log"
+    log_file.write_text("keep me\n", encoding="utf-8")
+
+    monkeypatch.setattr(core, "LOG_DIR", log_dir)
+    monkeypatch.setattr(core, "CONFIG_DIR", config_dir)
+
+    state = {
+        "retention_days": 30,
+        "cycle_started_at": "2026-01-20T00:00:00+00:00",
+        "last_checked_at": "2026-01-20T00:00:00+00:00",
+        "last_cleared_at": None,
+    }
+    (config_dir / "log-retention.json").write_text(
+        json.dumps(state),
+        encoding="utf-8",
+    )
+
+    result = core.cleanup_logs(
+        retention_days=30,
+        now=datetime(2026, 1, 31, tzinfo=timezone.utc),
+    )
+
+    assert result["cleared"] is False
+    assert log_file.read_text(encoding="utf-8") == "keep me\n"
+    assert result["days_until_cleanup"] == 19.0
+
+
+def test_log_cleanup_truncates_managed_logs_when_retention_is_due(tmp_path, monkeypatch):
+    log_dir = tmp_path / "logs"
+    config_dir = tmp_path / "config"
+    log_dir.mkdir()
+    config_dir.mkdir()
+
+    out_log = log_dir / "api-server.out.log"
+    err_log = log_dir / "stations-nightly.err.log"
+    unrelated = log_dir / "notes.txt"
+    out_log.write_text("output\n", encoding="utf-8")
+    err_log.write_text("error\n", encoding="utf-8")
+    unrelated.write_text("preserve\n", encoding="utf-8")
+
+    monkeypatch.setattr(core, "LOG_DIR", log_dir)
+    monkeypatch.setattr(core, "CONFIG_DIR", config_dir)
+
+    state = {
+        "retention_days": 30,
+        "cycle_started_at": "2026-01-01T00:00:00+00:00",
+        "last_checked_at": "2026-01-01T00:00:00+00:00",
+        "last_cleared_at": None,
+    }
+    (config_dir / "log-retention.json").write_text(
+        json.dumps(state),
+        encoding="utf-8",
+    )
+
+    result = core.cleanup_logs(
+        retention_days=30,
+        now=datetime(2026, 1, 31, tzinfo=timezone.utc),
+    )
+
+    assert result["cleared"] is True
+    assert result["cleared_file_count"] == 2
+    assert result["bytes_freed"] == len("output\n") + len("error\n")
+    assert out_log.read_text(encoding="utf-8") == ""
+    assert err_log.read_text(encoding="utf-8") == ""
+    assert unrelated.read_text(encoding="utf-8") == "preserve\n"
+    assert result["days_until_cleanup"] == 30.0
 
 
 def test_default_station_profiles_validate():
