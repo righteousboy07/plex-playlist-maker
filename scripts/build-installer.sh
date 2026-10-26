@@ -79,6 +79,11 @@ PYINSTALLER="$PYENV/bin/pyinstaller"
   --specpath "$WORK/spec/launchd" \
   "$ROOT/backend/launchd-manager.py"
 
+echo "Smoke-testing frozen backend executables..."
+"$BACKEND_DIST/plex-curator" --help >/dev/null
+"$BACKEND_DIST/plex-curator-api" --help >/dev/null
+"$BACKEND_DIST/plex-curator-launchd" list >/dev/null
+
 echo "Assembling package payload..."
 /usr/bin/ditto "$ROOT/macos/dist/Plex Curator.app" "$PKGROOT/Applications/Plex Curator.app"
 /bin/cp "$BACKEND_DIST/plex-curator" "$PKGROOT/Applications/PlexCurator/plex-curator"
