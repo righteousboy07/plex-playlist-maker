@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   tag:
@@ -41,11 +42,24 @@ jobs:
 
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "$TAG already exists; no tag change needed."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Plex Curator $TAG"
+            git push origin "$TAG"
+            echo "Created $TAG at $GITHUB_SHA."
+          fi
+
+      - name: Ensure release workflow runs for this version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to dispatch."
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Plex Curator $TAG"
-          git push origin "$TAG"
-          echo "Created $TAG at $GITHUB_SHA."
+          echo "Dispatching release workflow for $TAG..."
+          gh workflow run release.yml --ref "$TAG"
