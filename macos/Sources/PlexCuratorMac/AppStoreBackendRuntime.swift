@@ -88,8 +88,10 @@ final class AppStoreBackendRuntime {
         let helpers = Bundle.main.bundleURL
             .appendingPathComponent("Contents", isDirectory: true)
             .appendingPathComponent("Helpers", isDirectory: true)
-        let executable = helpers.appendingPathComponent("plex-curator-api")
-        let examples = helpers.appendingPathComponent("examples", isDirectory: true)
+        let runtime = helpers
+            .appendingPathComponent("plex-curator-api", isDirectory: true)
+        let executable = runtime.appendingPathComponent("plex-curator-api")
+        let examples = runtime.appendingPathComponent("examples", isDirectory: true)
 
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw AppStoreBackendRuntimeError.missingHelper(executable.path)
@@ -120,7 +122,7 @@ final class AppStoreBackendRuntime {
         process.executableURL = executable
         process.arguments = ["serve", "--no-access-log"]
         process.environment = environment
-        process.currentDirectoryURL = helpers
+        process.currentDirectoryURL = runtime
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
 
