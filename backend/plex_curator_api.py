@@ -524,7 +524,7 @@ def plex_config_update(
             "server_version": plex.version,
             "error": None,
         })
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
         payload.update({
             "connected": False,
             "server_name": None,
