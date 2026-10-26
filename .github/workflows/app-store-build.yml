@@ -22,15 +22,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: arm64
+
       - name: Build sandboxed App Store flavor
         run: bash macos/scripts/build-app-store.sh
 
       - name: Verify flavor and entitlements
         run: |
           APP="macos/dist/app-store/Plex Curator.app"
+          API="$APP/Contents/Helpers/plex-curator-api/plex-curator-api"
           test -x "$APP/Contents/MacOS/PlexCuratorMac"
+          test -x "$API"
+          test -f "$APP/Contents/Helpers/plex-curator-api/examples/title-aliases.json"
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Contents/Info.plist" | grep -q "com.ry.plexcurator.appstore"
           codesign -d --entitlements :- "$APP" 2>&1 | grep -q "com.apple.security.app-sandbox"
+          codesign -d --entitlements :- "$API" 2>&1 | grep -q "com.apple.security.inherit"
 
       - uses: actions/upload-artifact@v4
         with:
