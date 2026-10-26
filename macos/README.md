@@ -189,3 +189,32 @@ Station creation, duplication, editing, enable/disable, and deletion are now ava
 - notarization
 - menu-bar helper
 - installer/update strategy
+
+
+## Distribution flavors
+
+The SwiftUI client now builds in two flavors from the same target.
+
+### Direct
+
+Default development/release build:
+
+```bash
+./scripts/build-app.sh
+```
+
+This edition keeps the current localhost API + external backend/LaunchAgent architecture.
+
+### Mac App Store scaffold
+
+Sandboxed flavor:
+
+```bash
+./scripts/build-app-store.sh
+```
+
+This defines `APP_STORE`, applies `PlexCuratorAppStore.entitlements`, uses a separate bundle identifier, and hides direct-only LaunchAgent/log-file controls.
+
+The App Store flavor is a **submission scaffold**, not yet a submission-ready product. The backend/helper still needs to be embedded and sandbox-aware. See `../docs/APP_STORE.md`.
+
+Do not duplicate views or business logic to create Store-specific behavior. Add channel-specific capability switches through `BuildFlavor.current`.
