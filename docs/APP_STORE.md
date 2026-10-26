@@ -166,20 +166,29 @@ Before marking this phase complete, validate on a clean macOS account that the n
 
 Future preset work may store bookmark identities alongside organizer presets when presets begin owning media-root selections.
 
-### Phase 5 — Store automation
+### Phase 5 — Store automation — Core active-app scheduler implemented
 
-Replace direct LaunchAgent management with an App Store-safe model.
+The Store edition now has an App Store-safe automation path that does not write LaunchAgent plist files.
 
-Potential design:
+Implemented:
 
-- explicit **Enable Background Automation** user control
-- bundled helper registered through ServiceManagement
-- automation definitions stored in the sandbox
-- no root escalation
-- no external plist installation
-- no helper continuing after the user disables the feature
+- Automation screen is available in both distributions
+- Direct edition retains the existing LaunchAgent manager unchanged
+- Store edition uses `SMAppService.mainApp` for explicit user-controlled launch at login
+- macOS Login Items approval state is surfaced in the UI
+- Store backend exposes sandbox-native automation job definitions and run endpoints
+- Store jobs execute in-process inside the bundled backend instead of invoking `launchctl` or an external `plex-curator` executable
+- an in-app scheduler checks due jobs every minute while Plex Curator is active
+- successful jobs are stamped per calendar day to prevent duplicate runs
+- failed jobs remain eligible for a later retry
+- Store scheduler stops when Plex Curator exits
+- no root escalation and no external plist installation
 
-The Direct edition keeps its current LaunchAgent manager.
+Current limitation:
+
+The scheduler runs while the main Plex Curator application is active. Launch-at-login makes that practical after restarts, but this is not yet a fully headless background agent if the user explicitly quits the app.
+
+Before submission, decide whether the active-app model is sufficient for the Store edition or add a dedicated bundled login-item helper using ServiceManagement so scheduled jobs can continue without a visible main window. The Direct edition continues to use its current LaunchAgent manager.
 
 ### Phase 6 — App Store Connect submission
 
