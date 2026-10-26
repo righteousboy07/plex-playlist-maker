@@ -2,6 +2,11 @@
 <installer-gui-script minSpecVersion="2">
     <title>Plex Curator</title>
     <domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/>
+    <volume-check script="true">
+        <allowed-os-versions>
+            <os-version min="12.0"/>
+        </allowed-os-versions>
+    </volume-check>
     <options customize="never" require-scripts="false"/>
     <welcome file="welcome.html" mime-type="text/html"/>
     <readme file="readme.html" mime-type="text/html"/>
@@ -13,4 +18,9 @@
         <pkg-ref id="com.ry.plexcurator.component"/>
     </choice>
     <pkg-ref id="com.ry.plexcurator.component" auth="root">PlexCurator.pkg</pkg-ref>
+    <pkg-ref id="com.ry.plexcurator.component">
+        <must-close>
+            <app id="com.ry.plexcurator.mac"/>
+        </must-close>
+    </pkg-ref>
 </installer-gui-script>
