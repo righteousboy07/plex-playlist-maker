@@ -29,6 +29,9 @@ jobs:
           bash -n scripts/install-macos-app.sh
           bash -n scripts/install-all.sh
           bash -n scripts/update-from-git.sh
+          bash -n scripts/build-installer.sh
+          bash -n scripts/package/preinstall
+          bash -n scripts/package/postinstall
           bash -n backend/install.sh
           bash -n macos/scripts/build-app.sh
           bash -n macos/scripts/install-app.sh
