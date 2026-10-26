@@ -475,6 +475,30 @@ struct AutomationActionResponse: Codable {
     let job: AutomationJob
 }
 
+struct StoreAutomationCalendar: Codable, Hashable {
+    let month: Int?
+    let weekday: Int?
+    let hour: Int
+    let minute: Int
+}
+
+struct StoreAutomationJob: Codable, Identifiable, Hashable {
+    var id: String { name }
+    let name: String
+    let description: String
+    let calendar: StoreAutomationCalendar
+}
+
+struct StoreAutomationJobsResponse: Codable {
+    let jobs: [StoreAutomationJob]
+}
+
+struct StoreAutomationRunResponse: Codable {
+    let ok: Bool
+    let jobName: String
+    let output: String
+}
+
 struct MediaOrganizerPreset: Codable, Identifiable, Hashable {
     let id: String
     let name: String
@@ -1175,6 +1199,21 @@ final class APIClient {
         return response.jobs
     }
 
+    func storeAutomationJobs() async throws -> [StoreAutomationJob] {
+        let response: StoreAutomationJobsResponse = try await request("/api/v1/store-automation")
+        return response.jobs
+    }
+
+    func runStoreAutomationJob(_ job: String) async throws -> StoreAutomationRunResponse {
+        let escaped = job.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? job
+        return try await request(
+            "/api/v1/store-automation/\(escaped)/run",
+            method: "POST",
+            authenticated: true,
+            timeout: 600
+        )
+    }
+
     func automationAction(job: String, action: String) async throws -> AutomationJob {
         let escaped = job.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? job
         let response: AutomationActionResponse = try await request(
@@ -1441,7 +1480,7 @@ final class AppModel: ObservableObject {
             if let recentBuilds = try? await api.buildHistory(limit: 8) {
                 buildHistory = recentBuilds
             }
-            if BuildFlavor.current.supportsAutomationManagement,
+            if BuildFlavor.current.supportsLaunchAgentManagement,
                let jobs = try? await api.automationJobs() {
                 automationJobs = jobs
             }
