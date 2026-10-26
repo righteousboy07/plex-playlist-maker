@@ -31,8 +31,8 @@ SMOKE_LOGS="$WORK/smoke-logs"
 
 APP="$ROOT/dist/app-store/Plex Curator.app"
 HELPERS="$APP/Contents/Helpers"
-API_RUNTIME="$HELPERS/plex-curator-api"
-API_BIN="$API_RUNTIME/plex-curator-api"
+API_HELPER_APP="$HELPERS/PlexCuratorBackend.app"
+API_BIN="$API_HELPER_APP/Contents/MacOS/plex-curator-api"
 
 rm -rf "$WORK" "$APP"
 mkdir -p "$WORK" "$BACKEND_DIST" "$SMOKE_CONFIG" "$SMOKE_LOGS"
@@ -52,6 +52,8 @@ python3 -m venv "$PYENV"
   --noconfirm \
   --clean \
   --onedir \
+  --windowed \
+  --osx-bundle-identifier com.ry.plexcurator.appstore.helper.api \
   --name plex-curator-api \
   --paths "$REPO_ROOT/backend" \
   --hidden-import plex_curator \
@@ -65,18 +67,15 @@ python3 -m venv "$PYENV"
   --specpath "$PYI_WORK/spec" \
   "$REPO_ROOT/backend/plex-curator-api"
 
-SMOKE_API="$BACKEND_DIST/plex-curator-api/plex-curator-api"
-[[ -x "$SMOKE_API" ]] || {
-  echo "Frozen API helper was not created." >&2
+GENERATED_HELPER_APP="$BACKEND_DIST/plex-curator-api.app"
+SMOKE_API="$GENERATED_HELPER_APP/Contents/MacOS/plex-curator-api"
+[[ -d "$GENERATED_HELPER_APP" && -x "$SMOKE_API" ]] || {
+  echo "PyInstaller did not create the expected helper app bundle." >&2
+  /usr/bin/find "$BACKEND_DIST" -maxdepth 4 -print >&2 || true
   exit 1
 }
 
-echo "Removing Python packaging metadata that is invalid inside Contents/Helpers..."
-/usr/bin/find "$BACKEND_DIST/plex-curator-api" -type d \
-  \( -name "*.dist-info" -o -name "*.egg-info" -o -name "__pycache__" \) \
-  -prune -exec /bin/rm -rf {} +
-
-echo "Smoke-testing pruned bundled API with sandbox-style storage..."
+echo "Smoke-testing generated helper app with sandbox-style storage..."
 PLEX_CURATOR_DISTRIBUTION="app-store" \
 PLEX_CURATOR_CONFIG_DIR="$SMOKE_CONFIG" \
 PLEX_CURATOR_LOG_DIR="$SMOKE_LOGS" \
@@ -118,8 +117,8 @@ trap - EXIT
 echo "Assembling App Store app bundle..."
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$HELPERS"
 cp "$BIN" "$APP/Contents/MacOS/PlexCuratorMac"
-/usr/bin/ditto "$BACKEND_DIST/plex-curator-api" "$API_RUNTIME"
-/usr/bin/ditto "$REPO_ROOT/backend/examples" "$API_RUNTIME/examples"
+/usr/bin/ditto "$GENERATED_HELPER_APP" "$API_HELPER_APP"
+/usr/bin/ditto "$REPO_ROOT/backend/examples" "$API_HELPER_APP/Contents/Resources/examples"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -144,25 +143,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 
-echo "Signing nested Python runtime..."
-while IFS= read -r -d '' candidate; do
-  if [[ "$candidate" == "$API_BIN" ]]; then
-    continue
-  fi
-  if /usr/bin/file "$candidate" | /usr/bin/grep -q "Mach-O"; then
-    /usr/bin/codesign \
-      --force \
-      --sign "$SIGN_IDENTITY" \
-      "$candidate"
-  fi
-done < <(/usr/bin/find "$API_RUNTIME" -type f -print0)
-
+echo "Signing nested backend helper app..."
 /usr/bin/codesign \
   --force \
+  --deep \
   --identifier "com.ry.plexcurator.appstore.helper.api" \
   --sign "$SIGN_IDENTITY" \
   --entitlements "$ROOT/PlexCuratorHelper.entitlements" \
-  "$API_BIN"
+  "$API_HELPER_APP"
 
 echo "Signing sandboxed app..."
 /usr/bin/codesign \
@@ -173,10 +161,10 @@ echo "Signing sandboxed app..."
 
 echo "Verifying App Store bundle..."
 /usr/bin/codesign --verify --deep --strict "$APP"
-/usr/bin/codesign --verify --strict "$API_BIN"
+/usr/bin/codesign --verify --deep --strict "$API_HELPER_APP"
 /usr/bin/codesign -d --entitlements :- "$APP" 2>&1 \
   | /usr/bin/grep -q "com.apple.security.app-sandbox"
-/usr/bin/codesign -d --entitlements :- "$API_BIN" 2>&1 \
+/usr/bin/codesign -d --entitlements :- "$API_HELPER_APP" 2>&1 \
   | /usr/bin/grep -q "com.apple.security.inherit"
 
 echo "Built App Store flavor with bundled backend:"
