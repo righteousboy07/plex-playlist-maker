@@ -3,9 +3,14 @@ import argparse
 import os
 import plistlib
 import subprocess
+import sys
 from pathlib import Path
 
-APP_DIR = Path(__file__).resolve().parent
+APP_DIR = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parent
+)
 HOME = Path.home()
 LAUNCH_AGENTS = HOME / "Library" / "LaunchAgents"
 LOG_DIR = HOME / "Library" / "Logs" / "PlexCurator"
