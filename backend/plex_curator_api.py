@@ -44,6 +44,54 @@ _media_scan_jobs = {}
 _media_scan_cancel_events = {}
 _media_scan_jobs_lock = threading.Lock()
 
+STORE_AUTOMATION_JOBS = {
+    "saturday-morning": {
+        "calendar": {"weekday": 7, "hour": 7, "minute": 30},
+        "args": ["schedule-build", "saturday-morning", "--create", "--replace", "--avoid-recent", "180", "--min-show-gap", "2", "--seasonal", "auto"],
+        "description": "Saturday at 7:30 AM",
+    },
+    "retro-toon-night": {
+        "calendar": {"weekday": 6, "hour": 17, "minute": 0},
+        "args": ["schedule-build", "retro-toon-night", "--create", "--replace", "--avoid-recent", "120", "--min-show-gap", "2"],
+        "description": "Friday at 5:00 PM",
+    },
+    "80s-cartoon-refresh": {
+        "calendar": {"weekday": 2, "hour": 4, "minute": 15},
+        "args": ["channel", "--preset", "80s-cartoons", "--create", "--replace", "--avoid-recent", "150", "--min-show-gap", "2", "--seasonal", "auto"],
+        "description": "Monday at 4:15 AM",
+    },
+    "90s-cartoon-refresh": {
+        "calendar": {"weekday": 3, "hour": 4, "minute": 15},
+        "args": ["channel", "--preset", "90s-cartoons", "--create", "--replace", "--avoid-recent", "150", "--min-show-gap", "2", "--seasonal", "auto"],
+        "description": "Tuesday at 4:15 AM",
+    },
+    "all-cartoon-refresh": {
+        "calendar": {"weekday": 4, "hour": 4, "minute": 15},
+        "args": ["channel", "--preset", "all-cartoons", "--create", "--replace", "--avoid-recent", "200", "--min-show-gap", "3", "--seasonal", "auto"],
+        "description": "Wednesday at 4:15 AM",
+    },
+    "october-kids": {
+        "calendar": {"month": 10, "hour": 7, "minute": 0},
+        "args": ["schedule-build", "october-kids", "--create", "--replace", "--seasonal", "halloween", "--avoid-recent", "200"],
+        "description": "Daily at 7:00 AM during October",
+    },
+    "kids-scary-wishlist": {
+        "calendar": {"weekday": 1, "hour": 9, "minute": 0},
+        "args": ["wishlist-check", str(core.EXAMPLES_DIR / "kids-scary-missing-wishlist.txt")],
+        "description": "Sunday at 9:00 AM",
+    },
+    "stations-nightly": {
+        "calendar": {"hour": 3, "minute": 30},
+        "args": ["station-refresh-all"],
+        "description": "Daily at 3:30 AM; refresh every enabled station profile",
+    },
+    "log-cleanup": {
+        "calendar": {"hour": 2, "minute": 45},
+        "args": ["logs-cleanup"],
+        "description": "Daily retention check; clears Plex Curator logs every 30 days",
+    },
+}
+
 class PlexConfigRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     token: Optional[str] = Field(default=None, max_length=4096)
@@ -1151,6 +1199,58 @@ def media_organizer_apply(
         )
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+def _store_distribution() -> bool:
+    return os.environ.get("PLEX_CURATOR_DISTRIBUTION", "").strip().lower() == "app-store"
+
+
+def _run_store_automation_job(job_name: str):
+    job = STORE_AUTOMATION_JOBS.get(job_name)
+    if not job:
+        raise HTTPException(status_code=404, detail=f'Unknown Store automation job "{job_name}".')
+
+    parser = core.build_parser()
+    try:
+        args = parser.parse_args(job["args"])
+        with contextlib.redirect_stdout(io.StringIO()) as stdout:
+            args.func(args)
+        return stdout.getvalue().strip()
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        if code != 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f'Store automation job "{job_name}" exited with code {code}.',
+            ) from exc
+        return ""
+
+
+@app.get("/api/v1/store-automation")
+def store_automation_jobs():
+    if not _store_distribution():
+        raise HTTPException(status_code=404, detail="Store automation is only available in the App Store distribution.")
+    return {
+        "jobs": [
+            {
+                "name": name,
+                "description": job["description"],
+                "calendar": job["calendar"],
+            }
+            for name, job in STORE_AUTOMATION_JOBS.items()
+        ]
+    }
+
+
+@app.post("/api/v1/store-automation/{job_name}/run")
+def store_automation_run(
+    job_name: str,
+    _authorized: bool = Depends(require_api_key),
+):
+    if not _store_distribution():
+        raise HTTPException(status_code=404, detail="Store automation is only available in the App Store distribution.")
+    output = _run_store_automation_job(job_name)
+    return {"ok": True, "job_name": job_name, "output": output}
+
 
 @app.get("/api/v1/automation")
 def automation_jobs():
