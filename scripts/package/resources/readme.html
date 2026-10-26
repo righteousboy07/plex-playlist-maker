@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 24px 30px; color: #1d1d1f; }
+h2 { font-size: 20px; margin-bottom: 10px; }
+ul { padding-left: 22px; }
+li, p { font-size: 13px; line-height: 1.5; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<h2>What this installer sets up</h2>
+<ul>
+<li><strong>Plex Curator.app</strong> in <code>/Applications</code></li>
+<li>A self-contained Plex Curator backend and localhost API</li>
+<li>The API background LaunchAgent</li>
+<li>Automatic 30-day Plex Curator log retention</li>
+<li>Safe preservation of existing stations, schedules, history, configuration, and backups</li>
+</ul>
+<p>The local API listens only on <code>127.0.0.1:8765</code>. Plex credentials remain in your private user configuration directory and are not bundled into the application.</p>
+<p>On a first install, the app will ask for your Plex server address and Plex token. On an upgrade, existing settings are reused automatically.</p>
+</body>
+</html>
