@@ -120,7 +120,12 @@ final class AppStoreBackendRuntime {
 
         let process = Process()
         process.executableURL = executable
-        process.arguments = ["serve", "--no-access-log"]
+        process.arguments = [
+            "serve",
+            "--port",
+            "\(BuildFlavor.current.apiPort)",
+            "--no-access-log"
+        ]
         process.environment = environment
         process.currentDirectoryURL = runtime
         process.standardOutput = FileHandle.nullDevice
@@ -136,7 +141,9 @@ final class AppStoreBackendRuntime {
 
     private func ping() async -> Bool {
         var request = URLRequest(
-            url: URL(string: "http://127.0.0.1:8765/api/v1/ping")!
+            url: URL(
+                string: "\(BuildFlavor.current.apiAddress)/api/v1/ping"
+            )!
         )
         request.timeoutInterval = 1
 
