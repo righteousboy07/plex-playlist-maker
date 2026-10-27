@@ -2,6 +2,13 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.13
+
+- Fixed upgrades that could leave an orphaned or manually started older plex-curator-api process listening on port 8765.
+- Installer now stops only stale Plex Curator API processes before reconciling the current background service.
+- Step 2 now displays the connected Plex Curator backend version so stale-backend situations are visible.
+- First-run setup reports a specific error when the GUI is connected to an older backend that does not support the current bootstrap endpoint.
+
 ## 13.2.12
 
 - Fixed first-run Step 2 so saving/testing Plex credentials no longer depends on the app's internal Plex Curator API key.
