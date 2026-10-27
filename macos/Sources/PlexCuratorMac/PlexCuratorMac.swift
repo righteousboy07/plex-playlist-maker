@@ -1516,11 +1516,12 @@ final class AppModel: ObservableObject {
 
     func savePlexConfig(url: String, token: String?, firstRun: Bool) async -> Bool {
         do {
-            let result = try await (
-                firstRun
-                    ? api.setupPlexConfig(url: url, token: token)
-                    : api.savePlexConfig(url: url, token: token)
-            )
+            let result: PlexConfigStatus
+            if firstRun {
+                result = try await api.setupPlexConfig(url: url, token: token)
+            } else {
+                result = try await api.savePlexConfig(url: url, token: token)
+            }
             plexConfig = result
             message = result.connected == true
                 ? "Plex connection saved and verified."
