@@ -2,6 +2,14 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.14
+
+- Reworked Direct Download first-run Step 2 so Plex setup no longer depends on the local Plex Curator API or port 8765.
+- The macOS app now validates the Plex server/token directly and writes the shared ~/.config/plex-curator/.env configuration itself.
+- Added explicit macOS local-network usage metadata for the Direct Download app.
+- Step 2 now always shows the installed app version and separately reports whether a backend was detected.
+- This removes API startup, stale backend, and internal API-key state from the initial Plex connection path.
+
 ## 13.2.13
 
 - Fixed upgrades that could leave an orphaned or manually started older plex-curator-api process listening on port 8765.
