@@ -103,6 +103,46 @@ echo "Smoke-testing frozen backend executables..."
 "$BACKEND_DIST/plex-curator-api" --help >/dev/null
 "$BACKEND_DIST/plex-curator-launchd" list >/dev/null
 
+SMOKE_CONFIG="$WORK/smoke-config"
+SMOKE_LOGS="$WORK/smoke-logs"
+mkdir -p "$SMOKE_CONFIG" "$SMOKE_LOGS"
+
+echo "Starting frozen API for runtime smoke test..."
+PLEX_CURATOR_CONFIG_DIR="$SMOKE_CONFIG" \
+PLEX_CURATOR_LOG_DIR="$SMOKE_LOGS" \
+"$BACKEND_DIST/plex-curator-api" serve --port 18765 --no-access-log \
+  >"$WORK/smoke-api.out.log" 2>"$WORK/smoke-api.err.log" &
+SMOKE_PID=$!
+
+cleanup_smoke() {
+  if /bin/kill -0 "$SMOKE_PID" >/dev/null 2>&1; then
+    /bin/kill "$SMOKE_PID" >/dev/null 2>&1 || true
+    wait "$SMOKE_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup_smoke EXIT
+
+SMOKE_READY=0
+for _attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  if PLEX_CURATOR_CONFIG_DIR="$SMOKE_CONFIG" \
+     "$BACKEND_DIST/plex-curator-api" ping --port 18765 >/dev/null 2>&1; then
+    SMOKE_READY=1
+    break
+  fi
+  /bin/sleep 0.25
+done
+
+if [[ "$SMOKE_READY" -ne 1 ]]; then
+  echo "Frozen Plex Curator API failed runtime smoke test." >&2
+  cat "$WORK/smoke-api.out.log" >&2 || true
+  cat "$WORK/smoke-api.err.log" >&2 || true
+  exit 1
+fi
+
+test -f "$SMOKE_CONFIG/api.key"
+cleanup_smoke
+trap - EXIT
+
 echo "Frozen binary architectures:"
 /usr/bin/file "$BACKEND_DIST/plex-curator" "$BACKEND_DIST/plex-curator-api" "$BACKEND_DIST/plex-curator-launchd"
 echo "Frozen binary build metadata:"
