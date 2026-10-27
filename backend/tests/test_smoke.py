@@ -188,6 +188,43 @@ def test_save_plex_config_replaces_token(tmp_path, monkeypatch):
     assert "PLEX_TOKEN=new-token" in config_file.read_text(encoding="utf-8")
 
 
+def test_normalize_plex_url_accepts_common_setup_inputs():
+    assert core.normalize_plex_url("192.168.1.50") == "http://192.168.1.50:32400"
+    assert core.normalize_plex_url("http://192.168.1.50") == "http://192.168.1.50:32400"
+    assert core.normalize_plex_url("http://192.168.1.50:32400/web") == "http://192.168.1.50:32400"
+    assert core.normalize_plex_url("https://plex.example.com:32400/") == "https://plex.example.com:32400"
+
+
+def test_normalize_plex_token_accepts_query_fragment_and_full_url():
+    assert core.normalize_plex_token("abc123") == "abc123"
+    assert core.normalize_plex_token("X-Plex-Token=abc123") == "abc123"
+    assert core.normalize_plex_token(
+        "http://192.168.1.50:32400/?X-Plex-Token=abc123"
+    ) == "abc123"
+
+
+def test_save_plex_config_normalizes_url_and_token(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_file = config_dir / ".env"
+    config_file.write_text(
+        "PLEX_URL=http://127.0.0.1:32400\nPLEX_TOKEN=old\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(core, "CONFIG_DIR", config_dir)
+    monkeypatch.setattr(core, "CONFIG_FILE", config_file)
+
+    status = core.save_plex_config(
+        "192.168.1.50/web",
+        token="X-Plex-Token=abc123",
+    )
+
+    saved = config_file.read_text(encoding="utf-8")
+    assert "PLEX_URL=http://192.168.1.50:32400" in saved
+    assert "PLEX_TOKEN=abc123" in saved
+    assert status["url"] == "http://192.168.1.50:32400"
+
+
 def test_default_station_profiles_validate():
     assert core.DEFAULT_STATIONS
     for station_id, raw in core.DEFAULT_STATIONS.items():
