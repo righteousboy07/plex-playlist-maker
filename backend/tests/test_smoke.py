@@ -225,6 +225,32 @@ def test_save_plex_config_normalizes_url_and_token(tmp_path, monkeypatch):
     assert status["url"] == "http://192.168.1.50:32400"
 
 
+def test_setup_plex_bootstrap_does_not_require_internal_api_key(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "save_plex_config",
+        lambda url, token=None: {
+            "url": url,
+            "token_present": bool(token),
+            "config_file": "/tmp/.env",
+        },
+    )
+
+    fake_plex = SimpleNamespace(friendlyName="Test Plex", version="1.0")
+    monkeypatch.setattr(core, "connect", lambda: fake_plex)
+
+    result = api.plex_setup_bootstrap(
+        api.PlexConfigRequest(
+            url="http://192.168.1.50:32400",
+            token="abc123",
+        )
+    )
+
+    assert result["connected"] is True
+    assert result["server_name"] == "Test Plex"
+    assert result["server_version"] == "1.0"
+
+
 def test_default_station_profiles_validate():
     assert core.DEFAULT_STATIONS
     for station_id, raw in core.DEFAULT_STATIONS.items():
@@ -248,6 +274,7 @@ def test_api_routes_are_registered():
     assert "/api/v1/ping" in paths
     assert "/api/v1/status" in paths
     assert "/api/v1/config/plex" in paths
+    assert "/api/v1/setup/plex" in paths
     assert "/api/v1/stations" in paths
     assert "/api/v1/stations/{station_id}" in paths
     assert "/api/v1/stations/{station_id}/clone" in paths
