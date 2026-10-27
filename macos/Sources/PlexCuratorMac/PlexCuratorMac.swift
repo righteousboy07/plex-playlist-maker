@@ -2432,11 +2432,22 @@ struct DashboardView: View {
                     }
                 } else {
                     GroupBox("API unavailable") {
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 10) {
                             Text("Start the local backend API:")
-                            Text("./plex-curator-api serve")
-                                .font(.system(.body, design: .monospaced))
-                            Text("or install the api-server LaunchAgent.")
+
+                            HStack(spacing: 10) {
+                                Text("./plex-curator-api serve")
+                                    .font(.system(.body, design: .monospaced))
+                                    .textSelection(.enabled)
+
+                                Button {
+                                    copyAPIStartCommand()
+                                } label: {
+                                    Label("Copy Command", systemImage: "doc.on.doc")
+                                }
+                            }
+
+                            Text("or install/update the API Backend & Automation component from the Plex Curator installer.")
                                 .foregroundColor(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2461,6 +2472,12 @@ struct DashboardView: View {
         } message: {
             Text("This rebuilds \(model.status?.enabledStationCount ?? 0) enabled Plex station playlists. Disabled stations are skipped.")
         }
+    }
+
+    private func copyAPIStartCommand() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("./plex-curator-api serve", forType: .string)
+        model.message = "Copied API start command."
     }
 
     private var header: some View {
