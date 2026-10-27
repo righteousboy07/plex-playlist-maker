@@ -2,6 +2,14 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.9
+
+- Added a Copy Command button to the Dashboard when the local API is unavailable.
+- Split the direct macOS installer into selectable Plex Curator App and API Backend & Automation components.
+- Both installer components are selected by default; users can use Customize to update only the app or only the backend.
+- Kept backend setup, API service registration, automation tooling, and 30-day log cleanup with the backend installer component.
+- Updated installer validation and documentation for component-level upgrades.
+
 ## 13.2.8
 
 - Added a Universal Installer DMG containing clearly labeled Intel and Apple Silicon installers with no Terminal required.
