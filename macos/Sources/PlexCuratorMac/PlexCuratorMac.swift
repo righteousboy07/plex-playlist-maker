@@ -20,6 +20,13 @@ struct PlexStatus: Codable {
     let error: String?
 }
 
+struct PingResponse: Codable {
+    let ok: Bool
+    let apiVersion: String
+    let curatorVersion: String
+    let time: String
+}
+
 struct StatusResponse: Codable {
     let apiVersion: String
     let curatorVersion: String
@@ -801,6 +808,10 @@ final class APIClient {
         }
     }
 
+    func ping() async throws -> PingResponse {
+        try await request("/api/v1/ping")
+    }
+
     func status() async throws -> StatusResponse {
         try await request("/api/v1/status")
     }
@@ -821,12 +832,20 @@ final class APIClient {
 
     func setupPlexConfig(url: String, token: String?) async throws -> PlexConfigStatus {
         let body = try encoder.encode(PlexConfigRequest(url: url, token: token))
-        return try await request(
-            "/api/v1/setup/plex",
-            method: "PUT",
-            body: body,
-            authenticated: false
-        )
+        do {
+            return try await request(
+                "/api/v1/setup/plex",
+                method: "PUT",
+                body: body,
+                authenticated: false
+            )
+        } catch APIClientError.server(let code, _) where code == 404 {
+            let backend = try? await ping()
+            let version = backend?.curatorVersion ?? "unknown"
+            throw APIClientError.transport(
+                "The app is connected to an older Plex Curator backend (version \(version)) that does not support this setup flow. Reinstall the current API Backend & Automation component, then reopen Plex Curator."
+            )
+        }
     }
 
     func stations() async throws -> [Station] {
@@ -2050,6 +2069,7 @@ struct OnboardingView: View {
     @State private var plexToken = ""
     @State private var saving = false
     @State private var connectionMessage: String?
+    @State private var backendVersion: String?
     @State private var showTokenHelp = false
 
     private let totalSteps = 3
@@ -2069,6 +2089,7 @@ struct OnboardingView: View {
             if let saved = model.plexConfig {
                 plexURL = saved.url
             }
+            backendVersion = (try? await model.api.ping())?.curatorVersion
         }
     }
 
@@ -2184,6 +2205,12 @@ struct OnboardingView: View {
             Text(BuildFlavor.current.tokenStorageDescription)
                 .font(.caption)
                 .foregroundColor(.secondary)
+
+            if let backendVersion {
+                Text("Connected backend: Plex Curator \(backendVersion)")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
 
             if let connectionMessage {
                 Label(
