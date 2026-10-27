@@ -57,7 +57,7 @@ LOG_DIR = runtime_path(
 )
 EXAMPLES_DIR = runtime_path("PLEX_CURATOR_EXAMPLES_DIR", APP_DIR / "examples")
 DEFAULT_LOG_RETENTION_DAYS = 30
-APP_VERSION = "13.2.8"
+APP_VERSION = "13.2.9"
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".mpg", ".mpeg", ".ts"
