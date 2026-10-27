@@ -2,6 +2,14 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.10
+
+- Fixed first-run Plex connection handling for common server-address formats, including bare IP/hostname input, missing port 32400, and Plex /web URLs.
+- Plex token entry now accepts a raw token, an X-Plex-Token= value, or a full Plex URL containing the token.
+- Added clearer connection diagnostics for invalid tokens, timeouts, refused connections, and bad hostnames.
+- Added built-in first-run instructions showing how to retrieve an X-Plex-Token, with a link to Plex's official support article.
+- Added regression tests for Plex URL and token normalization.
+
 ## 13.2.9
 
 - Added a Copy Command button to the Dashboard when the local API is unavailable.
