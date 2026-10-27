@@ -2,6 +2,14 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.12
+
+- Fixed first-run Step 2 so saving/testing Plex credentials no longer depends on the app's internal Plex Curator API key.
+- Added a dedicated localhost-only bootstrap endpoint for initial Plex server/token setup.
+- Kept authenticated mutation protection for normal post-setup settings changes.
+- Added regression coverage for the first-run bootstrap route.
+- Preserved the URL/token normalization and token-help improvements introduced in 13.2.10.
+
 ## 13.2.11
 
 - Added automatic cleanup of stale Plex Curator LaunchAgent/background-item registrations left by older installs.
