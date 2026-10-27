@@ -2031,6 +2031,7 @@ struct OnboardingView: View {
     @State private var plexToken = ""
     @State private var saving = false
     @State private var connectionMessage: String?
+    @State private var showTokenHelp = false
 
     private let totalSteps = 3
 
@@ -2043,7 +2044,7 @@ struct OnboardingView: View {
             Divider()
             footer
         }
-        .frame(width: 640, height: 500)
+        .frame(width: 680, height: 590)
         .task {
             await model.loadPlexConfig()
             if let saved = model.plexConfig {
@@ -2122,10 +2123,43 @@ struct OnboardingView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Plex token")
-                    .font(.headline)
-                SecureField("Paste your Plex token", text: $plexToken)
+                HStack {
+                    Text("Plex token")
+                        .font(.headline)
+
+                    Spacer()
+
+                    Button(showTokenHelp ? "Hide token help" : "How do I get my token?") {
+                        withAnimation {
+                            showTokenHelp.toggle()
+                        }
+                    }
+                    .buttonStyle(.link)
+                }
+
+                SecureField("Paste your Plex token or X-Plex-Token value", text: $plexToken)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                if showTokenHelp {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("1. Sign in to Plex Web and open a movie or TV episode.")
+                        Text("2. Open the item’s menu and choose Get Info.")
+                        Text("3. Choose View XML.")
+                        Text("4. In the XML page URL, copy only the value after X-Plex-Token=.")
+                        Text("You can also paste the full X-Plex-Token=… text here; Plex Curator will extract the token automatically.")
+
+                        Link(
+                            "Open Plex’s official token instructions",
+                            destination: URL(string: "https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/")!
+                        )
+                        .padding(.top, 2)
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(10)
+                    .background(Color.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
             }
 
             Text(BuildFlavor.current.tokenStorageDescription)
