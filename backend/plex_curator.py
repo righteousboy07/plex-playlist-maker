@@ -1540,6 +1540,59 @@ def cmd_setup(args):
         print(f"Created {CONFIG_FILE}")
         print("Add the Plex token once; future versions reuse this file.")
 
+def normalize_plex_url(value):
+    url = str(value or "").strip()
+    if not url:
+        raise SystemExit("Enter your Plex server address.")
+
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        url = "http://" + url
+
+    from urllib.parse import urlsplit, urlunsplit
+    parts = urlsplit(url)
+    if not parts.hostname:
+        raise SystemExit("Plex server address is not valid.")
+
+    hostname = parts.hostname
+    if ":" in hostname and not hostname.startswith("["):
+        host_for_netloc = f"[{hostname}]"
+    else:
+        host_for_netloc = hostname
+
+    port = parts.port
+    if port is None:
+        port = 32400
+
+    netloc = f"{host_for_netloc}:{port}"
+    path = parts.path or ""
+    if path.rstrip("/").casefold() == "/web":
+        path = ""
+    elif path not in ("", "/"):
+        raise SystemExit(
+            "Use the Plex server base address, for example http://192.168.1.50:32400, not a library or web-app URL."
+        )
+
+    return urlunsplit((parts.scheme.lower(), netloc, "", "", "")).rstrip("/")
+
+
+def normalize_plex_token(value):
+    token = str(value or "").strip().strip('"').strip("'")
+    if not token:
+        return ""
+
+    marker = "X-Plex-Token="
+    if marker.casefold() in token.casefold():
+        # Accept either a copied query fragment or a full URL containing X-Plex-Token.
+        match = re.search(r"(?:^|[?&])X-Plex-Token=([^&#\s]+)", token, re.IGNORECASE)
+        if match:
+            from urllib.parse import unquote
+            token = unquote(match.group(1)).strip()
+        elif token.casefold().startswith(marker.casefold()):
+            token = token[len(marker):].strip()
+
+    return token
+
+
 def plex_config_status():
     ensure_config()
     load_dotenv(CONFIG_FILE, override=True)
@@ -1553,9 +1606,7 @@ def plex_config_status():
 
 def save_plex_config(url, token=None):
     ensure_config()
-    url = str(url or "").strip()
-    if not re.match(r"^https?://", url, re.IGNORECASE):
-        raise SystemExit("Plex URL must start with http:// or https://.")
+    url = normalize_plex_url(url)
 
     existing_lines = []
     if CONFIG_FILE.exists():
@@ -1574,7 +1625,7 @@ def save_plex_config(url, token=None):
 
     resolved_token = current.get("PLEX_TOKEN", "").strip()
     if token is not None:
-        candidate = str(token).strip()
+        candidate = normalize_plex_token(token)
         if not candidate:
             raise SystemExit("Plex token cannot be blank when replacing it.")
         resolved_token = candidate
