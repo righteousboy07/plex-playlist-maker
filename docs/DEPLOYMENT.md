@@ -39,6 +39,8 @@ The branded Installer package presents Welcome, installation-details, Customize,
 
 Users can install both, or use **Customize** to install only the component that needs updating.
 
+The backend component also reconciles background services during upgrades. It removes obsolete Plex Curator LaunchAgent registrations from older builds, preserves currently supported jobs, and refreshes the required API/log-cleanup jobs so upgrades do not accumulate duplicate "Allow in Background" entries.
+
 The backend component's post-install script:
 
 1. finds the currently logged-in macOS user;
