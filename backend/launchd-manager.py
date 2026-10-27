@@ -82,6 +82,82 @@ JOBS = {
 def plist_path(label):
     return LAUNCH_AGENTS / f"{label}.plist"
 
+CURRENT_LABELS = {job["label"] for job in JOBS.values()}
+LEGACY_PREFIXES = (
+    "com.ry.plexcurator.",
+    "com.ry.plex-curator.",
+    "com.plexcurator.",
+    "io.plexcurator.",
+)
+
+
+def _plist_label(path):
+    try:
+        with path.open("rb") as fh:
+            payload = plistlib.load(fh)
+        return str(payload.get("Label", "")).strip()
+    except Exception:
+        return ""
+
+
+def cleanup_stale():
+    LAUNCH_AGENTS.mkdir(parents=True, exist_ok=True)
+    removed = []
+    preserved = []
+
+    for path in sorted(LAUNCH_AGENTS.glob("*.plist")):
+        label = _plist_label(path)
+        filename = path.name.casefold()
+        label_folded = label.casefold()
+
+        looks_like_plex_curator = (
+            any(label_folded.startswith(prefix) for prefix in LEGACY_PREFIXES)
+            or "plexcurator" in filename
+            or "plex-curator" in filename
+        )
+        if not looks_like_plex_curator:
+            continue
+
+        if label in CURRENT_LABELS:
+            preserved.append(str(path))
+            continue
+
+        target_label = label or path.stem
+        run(["launchctl", "bootout", f"gui/{os.getuid()}", str(path)])
+        if target_label:
+            run(["launchctl", "bootout", f"gui/{os.getuid()}/{target_label}"])
+        try:
+            path.unlink()
+            removed.append(str(path))
+        except FileNotFoundError:
+            pass
+
+    print(f"Removed {len(removed)} stale Plex Curator LaunchAgent(s).")
+    for path in removed:
+        print(f"removed: {path}")
+    if preserved:
+        print(f"Preserved {len(preserved)} current Plex Curator LaunchAgent(s).")
+    return removed
+
+
+def reconcile():
+    # Preserve whichever current optional jobs the user already had installed,
+    # but remove obsolete labels left by older Plex Curator builds.
+    existing = []
+    for name, job in JOBS.items():
+        path = plist_path(job["label"])
+        if path.exists():
+            existing.append(name)
+
+    cleanup_stale()
+
+    required = {"api-server", "log-cleanup"}
+    for name in sorted(set(existing) | required):
+        install(name)
+
+    print("Plex Curator background items reconciled.")
+
+
 def run(cmd):
     return subprocess.run(cmd, text=True, capture_output=True)
 
@@ -215,6 +291,8 @@ def main():
     p = sp.add_parser("install-all"); p.set_defaults(fn=lambda a: [install(n) for n in JOBS])
     p = sp.add_parser("uninstall"); p.add_argument("name", choices=JOBS); p.set_defaults(fn=lambda a: uninstall(a.name))
     p = sp.add_parser("uninstall-all"); p.set_defaults(fn=lambda a: [uninstall(n) for n in JOBS])
+    p = sp.add_parser("cleanup-stale"); p.set_defaults(fn=lambda a: cleanup_stale())
+    p = sp.add_parser("reconcile"); p.set_defaults(fn=lambda a: reconcile())
     p = sp.add_parser("status"); p.add_argument("name", choices=JOBS); p.set_defaults(fn=lambda a: status(a.name))
     p = sp.add_parser("run-now"); p.add_argument("name", choices=JOBS); p.set_defaults(fn=lambda a: run_now(a.name))
 
