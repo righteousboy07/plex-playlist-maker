@@ -32,17 +32,22 @@ done
 WORK="$ROOT/.build/installer-$ARCH_LABEL"
 PYENV="$WORK/pyenv"
 BACKEND_DIST="$WORK/backend-dist"
-PKGROOT="$WORK/pkgroot"
-PKGSCRIPTS="$WORK/pkg-scripts"
+APP_PKGROOT="$WORK/pkgroot-app"
+BACKEND_PKGROOT="$WORK/pkgroot-backend"
+BACKEND_PKGSCRIPTS="$WORK/pkg-scripts-backend"
 COMPONENT_DIR="$WORK/component"
-COMPONENT_PKG="$COMPONENT_DIR/PlexCurator.pkg"
+APP_COMPONENT_PKG="$COMPONENT_DIR/PlexCuratorApp.pkg"
+BACKEND_COMPONENT_PKG="$COMPONENT_DIR/PlexCuratorBackend.pkg"
 RESOURCES="$ROOT/scripts/package/resources"
 DISTRIBUTION="$ROOT/scripts/package/Distribution.xml"
 OUTDIR="$ROOT/dist/installer"
 PKG="$OUTDIR/Plex-Curator-$VERSION-macOS-$ARCH_LABEL.pkg"
 
 rm -rf "$WORK"
-mkdir -p "$WORK" "$BACKEND_DIST" "$PKGROOT/Applications/PlexCurator" "$PKGSCRIPTS" "$COMPONENT_DIR" "$OUTDIR"
+mkdir -p "$WORK" "$BACKEND_DIST" \
+  "$APP_PKGROOT/Applications" \
+  "$BACKEND_PKGROOT/Applications/PlexCurator" \
+  "$BACKEND_PKGSCRIPTS" "$COMPONENT_DIR" "$OUTDIR"
 
 [[ -f "$DISTRIBUTION" ]] || {
   echo "Missing installer distribution: $DISTRIBUTION" >&2
@@ -105,40 +110,49 @@ echo "Frozen binary build metadata:"
 /usr/bin/vtool -show-build "$BACKEND_DIST/plex-curator-api" || true
 /usr/bin/vtool -show-build "$BACKEND_DIST/plex-curator-launchd" || true
 
-echo "Assembling package payload..."
-/usr/bin/ditto "$ROOT/macos/dist/Plex Curator.app" "$PKGROOT/Applications/Plex Curator.app"
-/bin/cp "$BACKEND_DIST/plex-curator" "$PKGROOT/Applications/PlexCurator/plex-curator"
-/bin/cp "$BACKEND_DIST/plex-curator-api" "$PKGROOT/Applications/PlexCurator/plex-curator-api"
-/bin/cp "$BACKEND_DIST/plex-curator-launchd" "$PKGROOT/Applications/PlexCurator/plex-curator-launchd"
-/usr/bin/ditto "$ROOT/backend/examples" "$PKGROOT/Applications/PlexCurator/examples"
-/bin/chmod 755 "$PKGROOT/Applications/PlexCurator/plex-curator" \
-  "$PKGROOT/Applications/PlexCurator/plex-curator-api" \
-  "$PKGROOT/Applications/PlexCurator/plex-curator-launchd"
+echo "Assembling split package payloads..."
+/usr/bin/ditto "$ROOT/macos/dist/Plex Curator.app" "$APP_PKGROOT/Applications/Plex Curator.app"
+
+/bin/cp "$BACKEND_DIST/plex-curator" "$BACKEND_PKGROOT/Applications/PlexCurator/plex-curator"
+/bin/cp "$BACKEND_DIST/plex-curator-api" "$BACKEND_PKGROOT/Applications/PlexCurator/plex-curator-api"
+/bin/cp "$BACKEND_DIST/plex-curator-launchd" "$BACKEND_PKGROOT/Applications/PlexCurator/plex-curator-launchd"
+/usr/bin/ditto "$ROOT/backend/examples" "$BACKEND_PKGROOT/Applications/PlexCurator/examples"
+/bin/chmod 755 "$BACKEND_PKGROOT/Applications/PlexCurator/plex-curator" \
+  "$BACKEND_PKGROOT/Applications/PlexCurator/plex-curator-api" \
+  "$BACKEND_PKGROOT/Applications/PlexCurator/plex-curator-launchd"
 
 if [[ -n "${APP_SIGN_IDENTITY:-}" ]]; then
   echo "Signing backend executables and app..."
   /usr/bin/codesign --force --options runtime --timestamp --sign "$APP_SIGN_IDENTITY" \
-    "$PKGROOT/Applications/PlexCurator/plex-curator"
+    "$BACKEND_PKGROOT/Applications/PlexCurator/plex-curator"
   /usr/bin/codesign --force --options runtime --timestamp --sign "$APP_SIGN_IDENTITY" \
-    "$PKGROOT/Applications/PlexCurator/plex-curator-api"
+    "$BACKEND_PKGROOT/Applications/PlexCurator/plex-curator-api"
   /usr/bin/codesign --force --options runtime --timestamp --sign "$APP_SIGN_IDENTITY" \
-    "$PKGROOT/Applications/PlexCurator/plex-curator-launchd"
+    "$BACKEND_PKGROOT/Applications/PlexCurator/plex-curator-launchd"
   /usr/bin/codesign --force --deep --options runtime --timestamp --sign "$APP_SIGN_IDENTITY" \
-    "$PKGROOT/Applications/Plex Curator.app"
+    "$APP_PKGROOT/Applications/Plex Curator.app"
 fi
 
-/bin/cp "$ROOT/scripts/package/preinstall" "$PKGSCRIPTS/preinstall"
-/bin/cp "$ROOT/scripts/package/postinstall" "$PKGSCRIPTS/postinstall"
-/bin/chmod 755 "$PKGSCRIPTS/preinstall" "$PKGSCRIPTS/postinstall"
+/bin/cp "$ROOT/scripts/package/preinstall" "$BACKEND_PKGSCRIPTS/preinstall"
+/bin/cp "$ROOT/scripts/package/postinstall" "$BACKEND_PKGSCRIPTS/postinstall"
+/bin/chmod 755 "$BACKEND_PKGSCRIPTS/preinstall" "$BACKEND_PKGSCRIPTS/postinstall"
 
-echo "Building component package..."
+echo "Building application component package..."
 /usr/bin/pkgbuild \
-  --root "$PKGROOT" \
-  --scripts "$PKGSCRIPTS" \
-  --identifier "com.ry.plexcurator.component" \
+  --root "$APP_PKGROOT" \
+  --identifier "com.ry.plexcurator.app.component" \
   --version "$VERSION" \
   --install-location / \
-  "$COMPONENT_PKG"
+  "$APP_COMPONENT_PKG"
+
+echo "Building API backend component package..."
+/usr/bin/pkgbuild \
+  --root "$BACKEND_PKGROOT" \
+  --scripts "$BACKEND_PKGSCRIPTS" \
+  --identifier "com.ry.plexcurator.backend.component" \
+  --version "$VERSION" \
+  --install-location / \
+  "$BACKEND_COMPONENT_PKG"
 
 echo "Building branded distribution package..."
 PRODUCTBUILD_ARGS=(
