@@ -30,6 +30,18 @@ LOG_DIR="$USER_HOME/Library/Logs/PlexCurator"
 run_as_user "$INSTALL_DIR/plex-curator" setup >/dev/null 2>&1 || true
 run_as_user "$INSTALL_DIR/plex-curator" logs-cleanup >/dev/null 2>&1 || true
 
+# Stop orphaned/manual Plex Curator API processes from older installs before
+# registering the current LaunchAgent. Limit matching to Plex Curator paths/names
+# so unrelated listeners on the Mac are never touched.
+STALE_PIDS="$(run_as_user /usr/bin/pgrep -f '(/Applications/PlexCurator/.*plex-curator-api|plex-curator-api.*serve)' 2>/dev/null || true)"
+if [[ -n "$STALE_PIDS" ]]; then
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    run_as_user /bin/kill "$pid" >/dev/null 2>&1 || true
+  done <<< "$STALE_PIDS"
+  /bin/sleep 1
+fi
+
 run_as_user "$INSTALL_DIR/plex-curator-launchd" reconcile >/dev/null 2>&1 || {
   run_as_user "$INSTALL_DIR/plex-curator-launchd" install api-server >/dev/null 2>&1 || true
   run_as_user "$INSTALL_DIR/plex-curator-launchd" install log-cleanup >/dev/null 2>&1 || true
