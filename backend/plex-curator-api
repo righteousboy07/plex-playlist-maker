@@ -14,7 +14,11 @@ APP_DIR = (
 )
 VENV_PYTHON = APP_DIR / ".venv" / "bin" / "python"
 
-if VENV_PYTHON.exists():
+# Development/source checkouts may opt into a colocated virtual environment.
+# Never re-exec a PyInstaller-frozen binary through that environment: in a
+# frozen build __file__ lives inside PyInstaller's temporary _MEI directory,
+# which is not a persistent script path for an external Python interpreter.
+if not getattr(sys, "frozen", False) and VENV_PYTHON.exists():
     venv_dir = (APP_DIR / ".venv").resolve()
     current_prefix = Path(sys.prefix).resolve()
     if current_prefix != venv_dir:
