@@ -3806,6 +3806,25 @@ def sqlite_integrity_check(path):
     except Exception as exc:
         return ("FAIL", str(exc))
 
+def packaged_api_runtime_check(port=8765):
+    try:
+        import urllib.request
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/v1/ping",
+            timeout=3,
+        ) as response:
+            payload = json.load(response)
+        if payload.get("ok"):
+            api_version = payload.get("api_version", "unknown")
+            return (
+                "PASS",
+                f"packaged API responding on 127.0.0.1:{port}; API {api_version}",
+            )
+        return ("FAIL", "packaged API returned an unexpected ping response")
+    except Exception as exc:
+        return ("FAIL", f"packaged API is not responding: {exc}")
+
+
 def cmd_doctor(args):
     import subprocess
 
@@ -3872,32 +3891,8 @@ def cmd_doctor(args):
         # executable, not in the CLI executable running this doctor command.
         # Verify the actual packaged API runtime instead of importing API-only
         # modules from the wrong binary.
-        try:
-            import urllib.request
-            with urllib.request.urlopen(
-                "http://127.0.0.1:8765/api/v1/ping",
-                timeout=3,
-            ) as response:
-                payload = json.load(response)
-            if payload.get("ok"):
-                api_version = payload.get("api_version", "unknown")
-                report(
-                    "PASS",
-                    "FastAPI / Uvicorn runtime",
-                    f"packaged API responding on 127.0.0.1:8765; API {api_version}",
-                )
-            else:
-                report(
-                    "FAIL",
-                    "FastAPI / Uvicorn runtime",
-                    "packaged API returned an unexpected ping response",
-                )
-        except Exception as exc:
-            report(
-                "FAIL",
-                "FastAPI / Uvicorn runtime",
-                f"packaged API is not responding: {exc}",
-            )
+        runtime_status, runtime_detail = packaged_api_runtime_check()
+        report("PASS" if runtime_status == "PASS" else "FAIL", "FastAPI / Uvicorn runtime", runtime_detail)
     else:
         for module_name, label in [
             ("fastapi", "FastAPI"),
