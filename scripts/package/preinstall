@@ -22,4 +22,11 @@ if [[ -x "$INSTALL_DIR/plex-curator" ]]; then
   run_as_user "$INSTALL_DIR/plex-curator" backup --reason "pre-pkg-$STAMP" >/dev/null 2>&1 || true
 fi
 
+# Older installers may have left obsolete Plex Curator LaunchAgents behind.
+# If the installed manager already knows how to clean them, do so before
+# replacing the backend. The new postinstall reconciles again afterward.
+if [[ -x "$INSTALL_DIR/plex-curator-launchd" ]]; then
+  run_as_user "$INSTALL_DIR/plex-curator-launchd" cleanup-stale >/dev/null 2>&1 || true
+fi
+
 exit 0
