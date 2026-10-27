@@ -562,11 +562,7 @@ def ping():
 def plex_config():
     return core.plex_config_status()
 
-@app.put("/api/v1/config/plex")
-def plex_config_update(
-    request: PlexConfigRequest,
-    _authorized: bool = Depends(require_api_key),
-):
+def _save_and_test_plex_config(request: PlexConfigRequest):
     try:
         payload = core.save_plex_config(request.url, token=request.token)
     except SystemExit as exc:
@@ -598,6 +594,20 @@ def plex_config_update(
             "error": message,
         })
     return payload
+
+@app.put("/api/v1/setup/plex")
+def plex_setup_bootstrap(request: PlexConfigRequest):
+    # The API binds only to 127.0.0.1. This bootstrap route intentionally
+    # avoids the internal mutation key so first-run setup cannot fail before
+    # the app and backend have agreed on api.key state.
+    return _save_and_test_plex_config(request)
+
+@app.put("/api/v1/config/plex")
+def plex_config_update(
+    request: PlexConfigRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    return _save_and_test_plex_config(request)
 
 @app.get("/api/v1/status")
 def status():
