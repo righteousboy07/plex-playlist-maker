@@ -251,19 +251,7 @@ def test_setup_plex_bootstrap_does_not_require_internal_api_key(monkeypatch):
     assert result["server_version"] == "1.0"
 
 
-def test_doctor_frozen_direct_checks_packaged_api_runtime(monkeypatch):
-    monkeypatch.setattr(core.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(core, "DISTRIBUTION", "direct")
-    monkeypatch.setattr(core, "find_media_tool", lambda _name: "/usr/bin/true")
-    monkeypatch.setattr(core, "CONFIG_DIR", Path("/tmp"))
-    monkeypatch.setattr(core, "CONFIG_FILE", Path("/tmp/.env"))
-    monkeypatch.setattr(core, "PRESETS_FILE", Path("/tmp/presets.json"))
-    monkeypatch.setattr(core, "SCHEDULES_FILE", Path("/tmp/schedules.json"))
-    monkeypatch.setattr(core, "STATIONS_FILE", Path("/tmp/stations.json"))
-    monkeypatch.setattr(core, "STATE_DB", Path("/tmp/state.db"))
-    monkeypatch.setattr(core, "EXPORT_DIR", Path("/tmp"))
-    monkeypatch.setattr(core, "APP_DIR", Path("/tmp"))
-
+def test_packaged_api_runtime_check_reports_success(monkeypatch):
     class FakeResponse:
         def __enter__(self):
             return self
@@ -279,21 +267,24 @@ def test_doctor_frozen_direct_checks_packaged_api_runtime(monkeypatch):
         "load",
         lambda _response: {"ok": True, "api_version": "1.13"},
     )
-    monkeypatch.setattr(core, "json_file_check", lambda _path: ("PASS", "ok"))
-    monkeypatch.setattr(core, "load_stations", lambda: {})
-    monkeypatch.setattr(core, "sqlite_integrity_check", lambda _path: ("PASS", "ok"))
-    monkeypatch.setattr(core.os, "access", lambda *_args: True)
 
-    args = SimpleNamespace(json=True, fix=False, verbose=False)
-    result = core.cmd_doctor(args)
+    status, detail = core.packaged_api_runtime_check()
 
-    runtime = next(
-        item for item in result["checks"]
-        if item["label"] == "FastAPI / Uvicorn runtime"
-    )
-    assert runtime["status"] == "PASS"
-    assert "127.0.0.1:8765" in runtime["detail"]
+    assert status == "PASS"
+    assert "127.0.0.1:8765" in detail
+    assert "API 1.13" in detail
 
+
+def test_packaged_api_runtime_check_reports_failure(monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("urllib.request.urlopen", fail)
+
+    status, detail = core.packaged_api_runtime_check()
+
+    assert status == "FAIL"
+    assert "connection refused" in detail
 
 def test_default_station_profiles_validate():
     assert core.DEFAULT_STATIONS
