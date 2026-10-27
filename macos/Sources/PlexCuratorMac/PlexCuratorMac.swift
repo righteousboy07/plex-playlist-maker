@@ -819,6 +819,16 @@ final class APIClient {
         )
     }
 
+    func setupPlexConfig(url: String, token: String?) async throws -> PlexConfigStatus {
+        let body = try encoder.encode(PlexConfigRequest(url: url, token: token))
+        return try await request(
+            "/api/v1/setup/plex",
+            method: "PUT",
+            body: body,
+            authenticated: false
+        )
+    }
+
     func stations() async throws -> [Station] {
         let r: StationsResponse = try await request("/api/v1/stations")
         return r.stations
@@ -1501,8 +1511,16 @@ final class AppModel: ObservableObject {
     }
 
     func savePlexConfig(url: String, token: String?) async -> Bool {
+        await savePlexConfig(url: url, token: token, firstRun: false)
+    }
+
+    func savePlexConfig(url: String, token: String?, firstRun: Bool) async -> Bool {
         do {
-            let result = try await api.savePlexConfig(url: url, token: token)
+            let result = try await (
+                firstRun
+                    ? api.setupPlexConfig(url: url, token: token)
+                    : api.savePlexConfig(url: url, token: token)
+            )
             plexConfig = result
             message = result.connected == true
                 ? "Plex connection saved and verified."
@@ -2258,7 +2276,8 @@ struct OnboardingView: View {
         let token = plexToken.trimmingCharacters(in: .whitespacesAndNewlines)
         let saved = await model.savePlexConfig(
             url: plexURL.trimmingCharacters(in: .whitespacesAndNewlines),
-            token: token.isEmpty ? nil : token
+            token: token.isEmpty ? nil : token,
+            firstRun: true
         )
 
         guard saved else {
