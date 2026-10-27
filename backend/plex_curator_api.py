@@ -581,11 +581,21 @@ def plex_config_update(
             "error": None,
         })
     except (Exception, SystemExit) as exc:
+        message = str(exc).strip() or exc.__class__.__name__
+        lower = message.casefold()
+        if "401" in lower or "unauthorized" in lower or "not authorized" in lower:
+            message = "Plex rejected the token. Verify that you copied the X-Plex-Token value from the same Plex account that owns or can access this server."
+        elif "timed out" in lower or "timeout" in lower:
+            message = "Plex did not respond before the connection timed out. Verify the server IP/hostname, port 32400, and that Plex Media Server is running."
+        elif "connection refused" in lower:
+            message = "The Plex server refused the connection. Verify Plex Media Server is running and listening on port 32400."
+        elif "name or service not known" in lower or "nodename nor servname" in lower:
+            message = "The Plex server address could not be resolved. Check the IP address or hostname."
         payload.update({
             "connected": False,
             "server_name": None,
             "server_version": None,
-            "error": str(exc),
+            "error": message,
         })
     return payload
 
