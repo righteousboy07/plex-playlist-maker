@@ -54,6 +54,9 @@ jobs:
           rm -rf "$EXPANDED"
           pkgutil --expand-full dist/installer/*.pkg "$EXPANDED"
           test -f "$EXPANDED/Distribution"
+          grep -q 'com.ry.plexcurator.app.component' "$EXPANDED/Distribution"
+          grep -q 'com.ry.plexcurator.backend.component' "$EXPANDED/Distribution"
+          grep -q 'start_selected="true"' "$EXPANDED/Distribution"
           find "$EXPANDED" -path "*Applications/Plex Curator.app/Contents/MacOS/PlexCuratorMac" -print -quit | grep -q .
           find "$EXPANDED" -path "*/Applications/PlexCurator/plex-curator" -type f -print -quit | grep -q .
           find "$EXPANDED" -path "*/Applications/PlexCurator/plex-curator-api" -type f -print -quit | grep -q .
