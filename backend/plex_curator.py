@@ -3861,16 +3861,53 @@ def cmd_doctor(args):
     except Exception as exc:
         report("FAIL", "python-dotenv", str(exc))
 
-    for module_name, label in [
-        ("requests", "requests"),
-        ("fastapi", "FastAPI"),
-        ("uvicorn", "Uvicorn"),
-    ]:
+    try:
+        import requests
+        report("PASS", "requests", getattr(requests, "__version__", "installed"))
+    except Exception as exc:
+        report("FAIL", "requests", str(exc))
+
+    if getattr(sys, "frozen", False) and DISTRIBUTION != "app-store":
+        # FastAPI and Uvicorn live in the separately frozen plex-curator-api
+        # executable, not in the CLI executable running this doctor command.
+        # Verify the actual packaged API runtime instead of importing API-only
+        # modules from the wrong binary.
         try:
-            module = __import__(module_name)
-            report("PASS", label, getattr(module, "__version__", "installed"))
+            import urllib.request
+            with urllib.request.urlopen(
+                "http://127.0.0.1:8765/api/v1/ping",
+                timeout=3,
+            ) as response:
+                payload = json.load(response)
+            if payload.get("ok"):
+                api_version = payload.get("api_version", "unknown")
+                report(
+                    "PASS",
+                    "FastAPI / Uvicorn runtime",
+                    f"packaged API responding on 127.0.0.1:8765; API {api_version}",
+                )
+            else:
+                report(
+                    "FAIL",
+                    "FastAPI / Uvicorn runtime",
+                    "packaged API returned an unexpected ping response",
+                )
         except Exception as exc:
-            report("FAIL", label, str(exc))
+            report(
+                "FAIL",
+                "FastAPI / Uvicorn runtime",
+                f"packaged API is not responding: {exc}",
+            )
+    else:
+        for module_name, label in [
+            ("fastapi", "FastAPI"),
+            ("uvicorn", "Uvicorn"),
+        ]:
+            try:
+                module = __import__(module_name)
+                report("PASS", label, getattr(module, "__version__", "installed"))
+            except Exception as exc:
+                report("FAIL", label, str(exc))
 
     launchd_manager = (
         APP_DIR / "plex-curator-launchd"
