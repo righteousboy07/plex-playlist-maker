@@ -2,6 +2,14 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.11
+
+- Added automatic cleanup of stale Plex Curator LaunchAgent/background-item registrations left by older installs.
+- Installer upgrades now reconcile Plex Curator background services before and after replacing the backend.
+- Existing current automation jobs are preserved and refreshed in place.
+- Required API server and log-cleanup services are reinstalled using the current labels instead of accumulating duplicates.
+- Added regression tests for background-item cleanup and reconciliation.
+
 ## 13.2.10
 
 - Fixed first-run Plex connection handling for common server-address formats, including bare IP/hostname input, missing port 32400, and Plex /web URLs.
