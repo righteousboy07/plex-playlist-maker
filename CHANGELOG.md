@@ -2,6 +2,13 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.16
+
+- Fixed false Health failures for FastAPI and Uvicorn in packaged Direct Download installs.
+- Health now verifies the actual running packaged API on localhost instead of trying to import API-only libraries from the separate CLI executable.
+- FastAPI/Uvicorn are reported as healthy when the packaged API responds successfully.
+- Added focused regression tests for packaged API runtime health detection.
+
 ## 13.2.15
 
 - Fixed the packaged plex-curator-api executable incorrectly re-executing through a colocated Python virtual environment.
