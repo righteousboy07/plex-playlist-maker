@@ -251,6 +251,50 @@ def test_setup_plex_bootstrap_does_not_require_internal_api_key(monkeypatch):
     assert result["server_version"] == "1.0"
 
 
+def test_doctor_frozen_direct_checks_packaged_api_runtime(monkeypatch):
+    monkeypatch.setattr(core.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(core, "DISTRIBUTION", "direct")
+    monkeypatch.setattr(core, "find_media_tool", lambda _name: "/usr/bin/true")
+    monkeypatch.setattr(core, "CONFIG_DIR", Path("/tmp"))
+    monkeypatch.setattr(core, "CONFIG_FILE", Path("/tmp/.env"))
+    monkeypatch.setattr(core, "PRESETS_FILE", Path("/tmp/presets.json"))
+    monkeypatch.setattr(core, "SCHEDULES_FILE", Path("/tmp/schedules.json"))
+    monkeypatch.setattr(core, "STATIONS_FILE", Path("/tmp/stations.json"))
+    monkeypatch.setattr(core, "STATE_DB", Path("/tmp/state.db"))
+    monkeypatch.setattr(core, "EXPORT_DIR", Path("/tmp"))
+    monkeypatch.setattr(core, "APP_DIR", Path("/tmp"))
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    monkeypatch.setattr(
+        core.json,
+        "load",
+        lambda _response: {"ok": True, "api_version": "1.13"},
+    )
+    monkeypatch.setattr(core, "json_file_check", lambda _path: ("PASS", "ok"))
+    monkeypatch.setattr(core, "load_stations", lambda: {})
+    monkeypatch.setattr(core, "sqlite_integrity_check", lambda _path: ("PASS", "ok"))
+    monkeypatch.setattr(core.os, "access", lambda *_args: True)
+
+    args = SimpleNamespace(json=True, fix=False, verbose=False)
+    result = core.cmd_doctor(args)
+
+    runtime = next(
+        item for item in result["checks"]
+        if item["label"] == "FastAPI / Uvicorn runtime"
+    )
+    assert runtime["status"] == "PASS"
+    assert "127.0.0.1:8765" in runtime["detail"]
+
+
 def test_default_station_profiles_validate():
     assert core.DEFAULT_STATIONS
     for station_id, raw in core.DEFAULT_STATIONS.items():
