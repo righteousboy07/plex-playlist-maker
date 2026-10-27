@@ -2,6 +2,13 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.15
+
+- Fixed the packaged plex-curator-api executable incorrectly re-executing through a colocated Python virtual environment.
+- Frozen PyInstaller builds now stay inside the packaged executable and no longer try to open a temporary _MEI.../plex-curator-api.py path.
+- Installer builds now launch the frozen API, wait for it to answer on a temporary localhost port, and fail if the packaged runtime cannot actually start.
+- This strengthens release validation beyond the previous --help-only smoke test.
+
 ## 13.2.14
 
 - Reworked Direct Download first-run Step 2 so Plex setup no longer depends on the local Plex Curator API or port 8765.
