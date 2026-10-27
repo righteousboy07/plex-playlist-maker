@@ -1468,6 +1468,186 @@ final class NotificationManager {
 
 // MARK: - App Model
 
+private enum DirectPlexSetupError: LocalizedError {
+    case invalidURL
+    case missingToken
+    case rejectedToken
+    case server(Int)
+    case invalidResponse
+    case transport(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidURL:
+            return "Enter a valid Plex server address, such as 192.168.1.50 or http://192.168.1.50:32400."
+        case .missingToken:
+            return "Paste your Plex X-Plex-Token value."
+        case .rejectedToken:
+            return "Plex rejected the token. Verify the X-Plex-Token value and make sure it belongs to an account that can access this server."
+        case .server(let code):
+            return "Plex returned HTTP \(code). Verify the server address, port 32400, and token."
+        case .invalidResponse:
+            return "Plex responded, but the response could not be recognized."
+        case .transport(let message):
+            return "Could not reach Plex: \(message)"
+        }
+    }
+}
+
+private struct DirectPlexSetup {
+    static func normalizeURL(_ raw: String) throws -> URL {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw DirectPlexSetupError.invalidURL }
+
+        if !text.lowercased().hasPrefix("http://") && !text.lowercased().hasPrefix("https://") {
+            text = "http://" + text
+        }
+
+        guard var components = URLComponents(string: text),
+              components.host != nil else {
+            throw DirectPlexSetupError.invalidURL
+        }
+
+        if components.port == nil {
+            components.port = 32400
+        }
+
+        let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if path.caseInsensitiveCompare("web") == .orderedSame {
+            components.path = ""
+        } else if !path.isEmpty {
+            throw DirectPlexSetupError.invalidURL
+        }
+
+        components.query = nil
+        components.fragment = nil
+
+        guard let url = components.url else {
+            throw DirectPlexSetupError.invalidURL
+        }
+        return url
+    }
+
+    static func normalizeToken(_ raw: String) throws -> String {
+        var token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+        guard !token.isEmpty else { throw DirectPlexSetupError.missingToken }
+
+        if let range = token.range(of: "X-Plex-Token=", options: .caseInsensitive) {
+            var remainder = String(token[range.upperBound...])
+            if let end = remainder.firstIndex(where: { $0 == "&" || $0 == "#" || $0.isWhitespace }) {
+                remainder = String(remainder[..<end])
+            }
+            token = remainder.removingPercentEncoding ?? remainder
+        }
+
+        token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { throw DirectPlexSetupError.missingToken }
+        return token
+    }
+
+    static func save(url: URL, token: String) throws {
+        let configDirectory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config/plex-curator", isDirectory: true)
+        let configURL = configDirectory.appendingPathComponent(".env")
+
+        try FileManager.default.createDirectory(
+            at: configDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let existing = (try? String(contentsOf: configURL, encoding: .utf8)) ?? ""
+        var lines = existing.components(separatedBy: .newlines)
+        if lines.last == "" { lines.removeLast() }
+
+        var sawURL = false
+        var sawToken = false
+        for index in lines.indices {
+            let trimmed = lines[index].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("PLEX_URL=") {
+                lines[index] = "PLEX_URL=\(url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))"
+                sawURL = true
+            } else if trimmed.hasPrefix("PLEX_TOKEN=") {
+                lines[index] = "PLEX_TOKEN=\(token)"
+                sawToken = true
+            }
+        }
+        if !sawURL {
+            lines.append("PLEX_URL=\(url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")))")
+        }
+        if !sawToken {
+            lines.append("PLEX_TOKEN=\(token)")
+        }
+
+        let output = lines.joined(separator: "\n") + "\n"
+        try output.write(to: configURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: configURL.path
+        )
+    }
+
+    static func verify(url: URL, token: String) async throws -> PlexConfigStatus {
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "X-Plex-Token", value: token)]
+        guard let requestURL = components?.url else {
+            throw DirectPlexSetupError.invalidURL
+        }
+
+        var request = URLRequest(url: requestURL)
+        request.timeoutInterval = 15
+        request.setValue("application/xml", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw DirectPlexSetupError.invalidResponse
+            }
+            if http.statusCode == 401 {
+                throw DirectPlexSetupError.rejectedToken
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                throw DirectPlexSetupError.server(http.statusCode)
+            }
+
+            let body = String(data: data, encoding: .utf8) ?? ""
+            let name = attribute("friendlyName", in: body)
+            let version = attribute("version", in: body)
+
+            try save(url: url, token: token)
+
+            let configURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".config/plex-curator/.env")
+            return PlexConfigStatus(
+                url: url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")),
+                tokenPresent: true,
+                configFile: configURL.path,
+                connected: true,
+                serverName: name,
+                serverVersion: version,
+                error: nil
+            )
+        } catch let error as DirectPlexSetupError {
+            throw error
+        } catch {
+            throw DirectPlexSetupError.transport(error.localizedDescription)
+        }
+    }
+
+    private static func attribute(_ name: String, in xml: String) -> String? {
+        let pattern = "\\b\(NSRegularExpression.escapedPattern(for: name))=\"([^\"]+)\""
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(
+                in: xml,
+                range: NSRange(xml.startIndex..<xml.endIndex, in: xml)
+              ),
+              let range = Range(match.range(at: 1), in: xml) else {
+            return nil
+        }
+        return String(xml[range])
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var status: StatusResponse?
@@ -1536,7 +1716,14 @@ final class AppModel: ObservableObject {
     func savePlexConfig(url: String, token: String?, firstRun: Bool) async -> Bool {
         do {
             let result: PlexConfigStatus
-            if firstRun {
+            if firstRun && !BuildFlavor.current.isAppStore {
+                let normalizedURL = try DirectPlexSetup.normalizeURL(url)
+                let normalizedToken = try DirectPlexSetup.normalizeToken(token ?? "")
+                result = try await DirectPlexSetup.verify(
+                    url: normalizedURL,
+                    token: normalizedToken
+                )
+            } else if firstRun {
                 result = try await api.setupPlexConfig(url: url, token: token)
             } else {
                 result = try await api.savePlexConfig(url: url, token: token)
@@ -2206,11 +2393,15 @@ struct OnboardingView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
 
-            if let backendVersion {
-                Text("Connected backend: Plex Curator \(backendVersion)")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("App version: Plex Curator \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown")")
+                Text(
+                    backendVersion.map { "Connected backend: Plex Curator \($0)" }
+                        ?? "Connected backend: not detected (Direct setup does not require it)"
+                )
             }
+            .font(.caption2)
+            .foregroundColor(.secondary)
 
             if let connectionMessage {
                 Label(
