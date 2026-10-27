@@ -32,7 +32,14 @@ The installer places:
 
 No Python runtime or virtual environment is required on the destination Mac.
 
-The branded Installer package presents Welcome, installation-details, and completion screens. Its post-install script:
+The branded Installer package presents Welcome, installation-details, Customize, and completion screens. It contains two selectable components, both enabled by default:
+
+- **Plex Curator App** — updates only the native macOS GUI.
+- **API Backend & Automation** — updates only the backend/API, CLI engine, examples, and LaunchAgent tooling.
+
+Users can install both, or use **Customize** to install only the component that needs updating.
+
+The backend component's post-install script:
 
 1. finds the currently logged-in macOS user;
 2. preserves/initializes `~/.config/plex-curator/`;
@@ -76,7 +83,7 @@ On macOS:
 bash scripts/build-installer.sh
 ```
 
-The build creates a temporary Python build environment, installs PyInstaller, builds and smoke-tests standalone backend/API/LaunchAgent binaries, builds the SwiftUI release app, creates a component package, and wraps it with `productbuild` into a branded distribution package using the Installer resources under `scripts/package/resources/`.
+The build creates a temporary Python build environment, installs PyInstaller, builds and smoke-tests standalone backend/API/LaunchAgent binaries, builds the SwiftUI release app, creates separate App and API Backend component packages, and wraps both with `productbuild` into a branded customizable distribution package using the Installer resources under `scripts/package/resources/`.
 
 Output:
 
