@@ -2,6 +2,16 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.8
+
+- Added a Universal Installer DMG containing clearly labeled Intel and Apple Silicon installers with no Terminal required.
+- Release workflow now requires both architecture-specific installer packages before publishing.
+- Added automatic version tagging and explicit release workflow dispatch so GitHub Releases track APP_VERSION changes.
+- Added App Store security-scoped Media Organizer folder authorization with persisted bookmarks.
+- Added App Store-safe ServiceManagement launch-at-login controls and scheduled automation execution.
+- Added Store automation job dashboard with schedules, last-run status, and Run Now validation.
+- Preserved the Direct Download edition's existing LaunchAgent automation path.
+
 ## Unreleased
 
 - App Store Phase 2/3: embedded a signed sandbox-inheriting backend helper inside the Store app, added container-aware backend/config/log paths, separated Direct (8765) and Store (8766) localhost APIs for side-by-side installs, disabled external LaunchAgent behavior in Store mode, and added CI startup/signing verification for the bundled runtime.
