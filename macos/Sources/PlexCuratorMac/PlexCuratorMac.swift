@@ -3352,32 +3352,69 @@ struct StationsView: View {
             Divider()
 
             List(filteredStations) { station in
-                NavigationLink(destination: StationDetailView(station: station)) {
-                    HStack(spacing: 12) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(PlexTheme.accent.opacity(station.enabled ? 0.14 : 0.06))
-                            Image(systemName: station.enabled ? "play.tv.fill" : "pause.tv")
-                                .foregroundColor(station.enabled ? PlexTheme.accent : .secondary)
-                        }
-                        .frame(width: 36, height: 36)
+                HStack(spacing: 10) {
+                    NavigationLink(destination: StationDetailView(station: station)) {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(PlexTheme.accent.opacity(station.enabled ? 0.14 : 0.06))
+                                Image(systemName: station.enabled ? "play.tv.fill" : "pause.tv")
+                                    .foregroundColor(station.enabled ? PlexTheme.accent : .secondary)
+                            }
+                            .frame(width: 36, height: 36)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(station.name).font(.headline)
-                            Text(station.description ?? station.playlist)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(station.name).font(.headline)
+                                Text(station.description ?? station.playlist)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 3) {
+                                Text("\(station.total) items")
+                                Text(station.enabled ? "Enabled" : "Disabled")
+                                    .font(.caption2)
+                                    .foregroundColor(station.enabled ? .green : .secondary)
+                            }
                         }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 3) {
-                            Text("\(station.total) items")
-                            Text(station.enabled ? "Enabled" : "Disabled")
-                                .font(.caption2)
-                                .foregroundColor(station.enabled ? .green : .secondary)
-                        }
+                        .padding(.vertical, 5)
                     }
-                    .padding(.vertical, 5)
+                    .buttonStyle(.plain)
+
+                    Button {
+                        Task { _ = await model.setStationEnabled(station, enabled: !station.enabled) }
+                    } label: {
+                        Label(
+                            station.enabled ? "Disable" : "Enable",
+                            systemImage: station.enabled ? "pause.fill" : "play.fill"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(station.enabled ? Color.orange : Color.green)
+                    .help(station.enabled ? "Disable this station" : "Enable this station")
+
+                    Menu {
+                        Button {
+                            Task { await model.loadPreview(station) }
+                        } label: {
+                            Label("Load Preview", systemImage: "eye")
+                        }
+                        Button {
+                            Task { await model.dryRun(station) }
+                        } label: {
+                            Label("Dry Run", systemImage: "testtube.2")
+                        }
+                        Button {
+                            Task { await model.loadDiff(station) }
+                        } label: {
+                            Label("Load Diff", systemImage: "arrow.left.arrow.right")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .help("More station actions")
                 }
             }
             .listStyle(InsetListStyle())
@@ -5899,6 +5936,29 @@ struct ScheduleEditorView: View {
     @State private var playlist: String
     @State private var blocks: [BlockDraft]
     @State private var saving = false
+    @State private var confirmDiscard = false
+
+    private var totalMinutes: Int {
+        blocks.reduce(0) { $0 + $1.minutes }
+    }
+
+    private var isDirty: Bool {
+        let normalizedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPlaylist = playlist.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedDescription == original.description,
+              normalizedPlaylist == original.playlist,
+              blocks.count == original.blocks.count else {
+            return true
+        }
+
+        return zip(blocks, original.blocks).contains { draft, saved in
+            draft.name.trimmingCharacters(in: .whitespacesAndNewlines) != saved.name
+                || draft.type != (saved.type ?? "cartoons")
+                || draft.preset.trimmingCharacters(in: .whitespacesAndNewlines) != (saved.preset ?? "")
+                || draft.minutes != saved.minutes
+                || draft.seasonal != (saved.seasonal ?? "")
+        }
+    }
 
     struct BlockDraft: Identifiable {
         let id = UUID()
@@ -5922,12 +5982,27 @@ struct ScheduleEditorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Edit Schedule").font(.title2.bold())
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text("Edit Schedule").font(.title2.bold())
+                        if isDirty {
+                            Text("Unsaved Changes")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(PlexTheme.accent.opacity(0.16))
+                                .clipShape(Capsule())
+                        }
+                    }
+                    Text("Total runtime: \(formattedScheduleDuration(totalMinutes))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { attemptDismiss() }
                 Button(saving ? "Saving…" : "Save") { save() }
                     .buttonStyle(.borderedProminent).tint(PlexTheme.accent)
-                    .disabled(saving || playlist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || blocks.isEmpty)
+                    .disabled(saving || !isDirty || playlist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || blocks.isEmpty)
             }
             Form {
                 TextField("Description", text: $description)
@@ -5937,8 +6012,39 @@ struct ScheduleEditorView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 TextField("Block name", text: $block.name)
-                                Button(role: .destructive) { blocks.removeAll { $0.id == block.id } } label: { Image(systemName: "trash") }
-                                    .disabled(blocks.count == 1)
+                                Spacer(minLength: 8)
+                                if let index = blocks.firstIndex(where: { $0.id == block.id }) {
+                                    Button {
+                                        moveBlock(at: index, by: -1)
+                                    } label: {
+                                        Image(systemName: "arrow.up")
+                                    }
+                                    .disabled(index == 0)
+                                    .help("Move block up")
+
+                                    Button {
+                                        moveBlock(at: index, by: 1)
+                                    } label: {
+                                        Image(systemName: "arrow.down")
+                                    }
+                                    .disabled(index == blocks.count - 1)
+                                    .help("Move block down")
+
+                                    Button {
+                                        duplicateBlock(at: index)
+                                    } label: {
+                                        Image(systemName: "plus.square.on.square")
+                                    }
+                                    .help("Duplicate block")
+                                }
+
+                                Button(role: .destructive) {
+                                    blocks.removeAll { $0.id == block.id }
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .disabled(blocks.count == 1)
+                                .help("Remove block")
                             }
                             Picker("Type", selection: $block.type) { Text("Cartoons").tag("cartoons"); Text("Movie").tag("movie") }
                             TextField("Preset", text: $block.preset)
@@ -5951,7 +6057,53 @@ struct ScheduleEditorView: View {
                     Button("Add Block") { blocks.append(BlockDraft(name: "New Block", type: "cartoons", preset: "all-cartoons", minutes: 60, seasonal: "")) }
                 }
             }
-        }.padding(20)
+        }
+        .padding(20)
+        .confirmationDialog(
+            "Discard unsaved schedule changes?",
+            isPresented: $confirmDiscard,
+            titleVisibility: .visible
+        ) {
+            Button("Discard Changes", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) { }
+        } message: {
+            Text("Your changes to this schedule have not been saved.")
+        }
+    }
+
+    private func formattedScheduleDuration(_ minutes: Int) -> String {
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        if hours == 0 { return "\(remainder) min" }
+        if remainder == 0 { return "\(hours) hr" + (hours == 1 ? "" : "s") }
+        return "\(hours) hr \(remainder) min"
+    }
+
+    private func moveBlock(at index: Int, by offset: Int) {
+        let destination = index + offset
+        guard blocks.indices.contains(index), blocks.indices.contains(destination) else { return }
+        blocks.swapAt(index, destination)
+    }
+
+    private func duplicateBlock(at index: Int) {
+        guard blocks.indices.contains(index) else { return }
+        let source = blocks[index]
+        let copy = BlockDraft(
+            name: source.name + " Copy",
+            type: source.type,
+            preset: source.preset,
+            minutes: source.minutes,
+            seasonal: source.seasonal
+        )
+        blocks.insert(copy, at: min(index + 1, blocks.count))
+    }
+
+    private func attemptDismiss() {
+        if isDirty {
+            confirmDiscard = true
+        } else {
+            dismiss()
+        }
     }
 
     private func save() {
