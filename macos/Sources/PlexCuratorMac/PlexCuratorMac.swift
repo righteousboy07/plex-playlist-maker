@@ -175,6 +175,12 @@ struct PlaylistItemsMutationRequest: Encodable {
     let playlistItemIds: [Int]
 }
 
+struct PlaylistSelectionCopyRequest: Encodable {
+    let currentName: String
+    let newName: String
+    let playlistItemIds: [Int]
+}
+
 struct PlaylistMoveResponse: Decodable {
     let ok: Bool
     let title: String
@@ -1065,6 +1071,28 @@ final class APIClient {
             method: "POST",
             authenticated: true
         )
+    }
+
+    func copyPlaylistSelection(
+        currentName: String,
+        newName: String,
+        playlistItemIds: [Int]
+    ) async throws -> PlaylistSummary {
+        let body = try encoder.encode(
+            PlaylistSelectionCopyRequest(
+                currentName: currentName,
+                newName: newName,
+                playlistItemIds: playlistItemIds
+            )
+        )
+        let response: PlaylistMutationResponse = try await request(
+            "/api/v1/playlist/copy-selection",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+        guard let playlist = response.playlist else { throw APIClientError.invalidResponse }
+        return playlist
     }
 
     func copyPlaylist(currentName: String, newName: String) async throws -> PlaylistSummary {
@@ -2264,6 +2292,28 @@ final class AppModel: ObservableObject {
                 : "Removed \(result.removedCount) duplicate entr\(result.removedCount == 1 ? "y" : "ies") from \(playlist.title)."
             error = nil
             return result.removedCount
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func copyPlaylistSelection(
+        _ playlist: PlaylistSummary,
+        ids: [Int],
+        to newName: String
+    ) async -> PlaylistSummary? {
+        do {
+            let created = try await api.copyPlaylistSelection(
+                currentName: playlist.title,
+                newName: newName,
+                playlistItemIds: ids
+            )
+            playlists.append(created)
+            playlists.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            message = "Created \(created.title) from \(ids.count) selected item\(ids.count == 1 ? "" : "s")."
+            error = nil
+            return created
         } catch {
             self.error = error.localizedDescription
             return nil
@@ -6824,6 +6874,8 @@ struct PlaylistDetailView: View {
     @State private var selectionMode = false
     @State private var selectedPlaylistItemIds: Set<Int> = []
     @State private var confirmBulkRemove = false
+    @State private var showSelectionCopy = false
+    @State private var selectionCopyName = ""
 
     private var items: [MediaItem] {
         detail?.items ?? []
@@ -7011,6 +7063,12 @@ struct PlaylistDetailView: View {
                             Button("Select All Visible") {
                                 selectedPlaylistItemIds = Set(filteredItems.compactMap(\.playlistItemId))
                             }
+                            Button("Save Selection As New") {
+                                selectionCopyName = playlist.title + " Selection"
+                                showSelectionCopy = true
+                            }
+                            .disabled(selectedPlaylistItemIds.isEmpty)
+
                             Button("Remove Selected", role: .destructive) {
                                 confirmBulkRemove = true
                             }
@@ -7051,6 +7109,38 @@ struct PlaylistDetailView: View {
             }
         }
         .navigationTitle(playlist.title)
+        .sheet(isPresented: $showSelectionCopy) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Save Selection As New Playlist").font(.title2.bold())
+                Text("\(selectedPlaylistItemIds.count) selected item\(selectedPlaylistItemIds.count == 1 ? "" : "s") will be copied in current playlist order.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("New playlist name", text: $selectionCopyName)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showSelectionCopy = false }
+                    Button("Create Playlist") {
+                        let ids = Array(selectedPlaylistItemIds)
+                        let name = selectionCopyName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        Task {
+                            if !name.isEmpty,
+                               await model.copyPlaylistSelection(playlist, ids: ids, to: name) != nil {
+                                showSelectionCopy = false
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+                    .disabled(
+                        selectedPlaylistItemIds.isEmpty
+                        || selectionCopyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+                }
+            }
+            .padding(20)
+            .frame(width: 460)
+        }
         .sheet(isPresented: $showCopy) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Save As New Playlist").font(.title2.bold())
