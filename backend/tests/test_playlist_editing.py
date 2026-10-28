@@ -155,3 +155,25 @@ def test_playlist_copy_preserves_item_order(monkeypatch):
     assert result["ok"] is True
     assert result["playlist"]["title"] == "Test Playlist Copy"
     assert [item.playlistItemID for item in plex.created[0][1]] == [11, 12, 13]
+
+
+def test_playlist_bulk_remove_targets_exact_ids(monkeypatch):
+    items = [media(1, 11, "A"), media(2, 12, "B"), media(3, 13, "C")]
+    playlist = FakePlaylist(items=items)
+    plex = FakePlex()
+
+    monkeypatch.setattr(core, "connect", lambda: plex)
+    monkeypatch.setattr(core, "find_playlist", lambda _plex, _name: playlist)
+
+    result = api.playlist_remove_items(
+        name="Test Playlist",
+        request=api.PlaylistItemsMutationRequest(playlist_item_ids=[11, 13]),
+        _authorized=True,
+    )
+
+    assert result["removed_count"] == 2
+    assert result["item_count"] == 1
+    assert [entry[0] for entry in playlist._server.deleted_keys] == [
+        "/playlists/99/items/11",
+        "/playlists/99/items/13",
+    ]
