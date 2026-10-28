@@ -36,25 +36,25 @@ jobs:
           cp scripts/package/postinstall "$SCRIPTS/postinstall"
           chmod 755 "$SCRIPTS/preinstall" "$SCRIPTS/postinstall"
 
-          pkgbuild \\
-            --root "$APP_ROOT" \\
-            --identifier com.ry.plexcurator.app.component \\
-            --version 13.2.17 \\
-            --install-location / \\
+          pkgbuild \
+            --root "$APP_ROOT" \
+            --identifier com.ry.plexcurator.app.component \
+            --version 13.2.17 \
+            --install-location / \
             "$COMPONENTS/PlexCuratorApp.pkg"
 
-          pkgbuild \\
-            --root "$BACKEND_ROOT" \\
-            --scripts "$SCRIPTS" \\
-            --identifier com.ry.plexcurator.backend.component \\
-            --version 13.2.17 \\
-            --install-location / \\
+          pkgbuild \
+            --root "$BACKEND_ROOT" \
+            --scripts "$SCRIPTS" \
+            --identifier com.ry.plexcurator.backend.component \
+            --version 13.2.17 \
+            --install-location / \
             "$COMPONENTS/PlexCuratorBackend.pkg"
 
-          productbuild \\
-            --distribution scripts/package/Distribution.xml \\
-            --package-path "$COMPONENTS" \\
-            --resources scripts/package/resources \\
+          productbuild \
+            --distribution scripts/package/Distribution.xml \
+            --package-path "$COMPONENTS" \
+            --resources scripts/package/resources \
             "$RUNNER_TEMP/Plex-Curator-smoke.pkg"
 
           pkgutil --expand-full "$RUNNER_TEMP/Plex-Curator-smoke.pkg" "$EXPANDED"
