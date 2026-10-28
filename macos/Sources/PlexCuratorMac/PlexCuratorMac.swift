@@ -6818,6 +6818,9 @@ struct PlaylistDetailView: View {
     @State private var copyName = ""
     @State private var itemPendingRemoval: MediaItem?
     @State private var mutatingPlaylistItemId: Int?
+    @State private var selectionMode = false
+    @State private var selectedPlaylistItemIds: Set<Int> = []
+    @State private var confirmBulkRemove = false
 
     private var items: [MediaItem] {
         detail?.items ?? []
@@ -6963,6 +6966,17 @@ struct PlaylistDetailView: View {
                                     canMoveUp: (item.position ?? 1) > 1,
                                     canMoveDown: (item.position ?? detail.itemCount) < detail.itemCount,
                                     isMutating: mutatingPlaylistItemId == item.playlistItemId,
+                                    selectionMode: selectionMode,
+                                    isSelected: item.playlistItemId.map { selectedPlaylistItemIds.contains($0) } ?? false,
+                                    onToggleSelection: {
+                                        if let id = item.playlistItemId {
+                                            if selectedPlaylistItemIds.contains(id) {
+                                                selectedPlaylistItemIds.remove(id)
+                                            } else {
+                                                selectedPlaylistItemIds.insert(id)
+                                            }
+                                        }
+                                    },
                                     onMoveUp: { move(item, direction: "up") },
                                     onMoveDown: { move(item, direction: "down") },
                                     onRemove: { itemPendingRemoval = item }
@@ -6981,6 +6995,25 @@ struct PlaylistDetailView: View {
                         Text("Duplicates").tag(3)
                     }
                     .frame(width: 130)
+
+                    if !playlist.smart {
+                        Button(selectionMode ? "Done Selecting" : "Select") {
+                            selectionMode.toggle()
+                            if !selectionMode {
+                                selectedPlaylistItemIds.removeAll()
+                            }
+                        }
+
+                        if selectionMode {
+                            Button("Select All Visible") {
+                                selectedPlaylistItemIds = Set(filteredItems.compactMap(\.playlistItemId))
+                            }
+                            Button("Remove Selected", role: .destructive) {
+                                confirmBulkRemove = true
+                            }
+                            .disabled(selectedPlaylistItemIds.isEmpty)
+                        }
+                    }
 
                     if duplicateExtraCount > 0 && !playlist.smart {
                         Button(isDeduplicating ? "Cleaning…" : "Remove Duplicates") {
@@ -7069,6 +7102,25 @@ struct PlaylistDetailView: View {
             }
             .padding(20)
             .frame(width: 420)
+        }
+        .confirmationDialog(
+            "Remove \(selectedPlaylistItemIds.count) selected item\(selectedPlaylistItemIds.count == 1 ? "" : "s")?",
+            isPresented: $confirmBulkRemove,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Selected", role: .destructive) {
+                let ids = Array(selectedPlaylistItemIds)
+                Task {
+                    if await model.removePlaylistItems(ids: ids, from: playlist) {
+                        selectedPlaylistItemIds.removeAll()
+                        selectionMode = false
+                        await load()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Only playlist entries are removed. The underlying media files remain untouched.")
         }
         .confirmationDialog(
             "Remove item from \(playlist.title)?",
@@ -7174,6 +7226,9 @@ struct PlaylistMediaCard: View {
     var canMoveUp = false
     var canMoveDown = false
     var isMutating = false
+    var selectionMode = false
+    var isSelected = false
+    var onToggleSelection: (() -> Void)? = nil
     var onMoveUp: (() -> Void)? = nil
     var onMoveDown: (() -> Void)? = nil
     var onRemove: (() -> Void)? = nil
@@ -7192,6 +7247,19 @@ struct PlaylistMediaCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if selectionMode && editable {
+                Button {
+                    onToggleSelection?()
+                } label: {
+                    Label(
+                        isSelected ? "Selected" : "Select",
+                        systemImage: isSelected ? "checkmark.circle.fill" : "circle"
+                    )
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(isSelected ? PlexTheme.accent : .secondary)
+            }
+
             ZStack {
                 RoundedRectangle(cornerRadius: 9)
                     .fill(Color.secondary.opacity(0.12))
