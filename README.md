@@ -6,12 +6,20 @@ Plex Curator is a local Plex playlist, channel-programming, media-organization, 
 
 Plex Curator now maintains two distribution channels from the **same codebase**:
 
-- **Direct Download** — the full-power signed/notarized `.pkg`, with external LaunchAgent automation, external log access, and the current self-contained backend installation.
+- **Direct Download** — the full-power `.pkg` installer, with external LaunchAgent automation, external log access, and a self-contained backend. Developer ID signing and Apple notarization depend on release credentials and must be verified for each published artifact.
 - **Mac App Store** — a sandboxed build flavor that shares the programming/UI logic but replaces installer, filesystem, and background-service behavior with App Store-safe equivalents.
 
 The Direct edition remains the production build today. The App Store edition now has its own sandboxed, bundled backend runtime, container-scoped state, security-scoped Media Organizer folder access, and Store-safe automation controls.
 
 See [docs/APP_STORE.md](docs/APP_STORE.md) for the App Store roadmap and channel-by-channel capability rules.
+
+## Release validation and supported systems
+
+- **Direct Download:** targets macOS 12 or newer; packages are built separately for Intel and Apple Silicon.
+- **Mac App Store flavor:** targets macOS 13 or newer and uses a sandboxed bundled backend. A successful CI build does not mean Apple has approved or published the app.
+- **CI checks:** verify the macOS Swift build, App Store flavor bundle, and installer packaging separately. An in-progress or cancelled job is not a passing release check.
+- **Signing:** check the actual package signature, Developer ID chain, notarization ticket, and Gatekeeper acceptance before describing a downloadable installer as signed and notarized. Ad-hoc signing of the App Store test flavor is not App Store distribution signing.
+- **Upgrade safety:** verify existing Plex settings, station definitions, playlists, and automation jobs survive an installer upgrade before promoting a release.
 
 ## Recommended install: one macOS installer, no Terminal
 
