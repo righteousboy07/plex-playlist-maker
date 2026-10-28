@@ -17,9 +17,32 @@ run_as_user() {
   /bin/launchctl asuser "$USER_UID" /usr/bin/sudo -u "$CONSOLE_USER" -H "$@"
 }
 
+# An upgrade must not overwrite an existing installation if its state
+# could not be backed up. The backend backup includes config, station/schedule
+# definitions, presets, and the SQLite state database.
 if [[ -x "$INSTALL_DIR/plex-curator" ]]; then
   STAMP="$(/bin/date +%Y%m%d-%H%M%S)"
-  run_as_user "$INSTALL_DIR/plex-curator" backup --reason "pre-pkg-$STAMP" >/dev/null 2>&1 || true
+  BACKUP_OUTPUT="$(run_as_user "$INSTALL_DIR/plex-curator" backup --reason "pre-pkg-$STAMP" 2>&1)"
+  BACKUP_STATUS=$?
+  if [[ "$BACKUP_STATUS" -ne 0 ]]; then
+    echo "ERROR: Plex Curator could not back up existing data. Installation stopped to protect your settings." >&2
+    echo "Open the existing Plex Curator app and check available disk space and configuration-folder permissions, then retry." >&2
+    exit 1
+  fi
+  case "$BACKUP_OUTPUT" in
+    "Backup created: "*)
+      BACKUP_PATH="${BACKUP_OUTPUT#Backup created: }"
+      if [[ ! -f "$BACKUP_PATH/manifest.json" ]]; then
+        echo "ERROR: Plex Curator backup manifest is missing; installation stopped." >&2
+        exit 1
+      fi
+      echo "Existing Plex Curator data backed up successfully."
+      ;;
+    *)
+      echo "ERROR: Plex Curator backup did not confirm success; installation stopped." >&2
+      exit 1
+      ;;
+  esac
 fi
 
 # Older installers may have left obsolete Plex Curator LaunchAgents behind.
