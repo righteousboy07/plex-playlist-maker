@@ -2180,15 +2180,41 @@ struct RootView: View {
     var body: some View {
         NavigationView {
             List {
-                Section("Plex Curator") {
-                    NavigationLink(destination: DashboardView()) { Label("Dashboard", systemImage: "gauge") }
+                HStack(spacing: 11) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.16))
+                        Image(systemName: "play.rectangle.on.rectangle.fill")
+                            .font(.system(size: 21, weight: .semibold))
+                            .foregroundColor(.accentColor)
+                    }
+                    .frame(width: 40, height: 40)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Plex Curator")
+                            .font(.headline)
+                        Text("Media control center")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.vertical, 6)
+
+                Section("Library") {
+                    NavigationLink(destination: DashboardView()) { Label("Dashboard", systemImage: "square.grid.2x2") }
                     NavigationLink(destination: StationsView()) { Label("Stations", systemImage: "tv") }
                     NavigationLink(destination: SchedulesView()) { Label("Schedules", systemImage: "calendar") }
                     NavigationLink(destination: PlaylistsView()) { Label("Playlists", systemImage: "rectangle.stack") }
+                    NavigationLink(destination: HistoryView()) { Label("History", systemImage: "clock.arrow.circlepath") }
+                }
+
+                Section("Tools") {
                     NavigationLink(destination: MediaOrganizerView()) { Label("Media Organizer", systemImage: "folder.badge.gearshape") }
                     NavigationLink(destination: MovieCuratorView()) { Label("Movie Curator", systemImage: "film.stack") }
                     NavigationLink(destination: KidsScaryWishlistView()) { Label("Kids Scary Wishlist", systemImage: "checklist") }
-                    NavigationLink(destination: HistoryView()) { Label("History", systemImage: "clock.arrow.circlepath") }
+                }
+
+                Section("System") {
                     NavigationLink(destination: HealthView()) { Label("Health", systemImage: "heart.text.square") }
                     if BuildFlavor.current.supportsAutomationManagement {
                         NavigationLink(destination: AutomationView()) { Label("Automation", systemImage: "clock.badge.checkmark") }
@@ -2200,7 +2226,7 @@ struct RootView: View {
                 }
             }
             .listStyle(SidebarListStyle())
-            .frame(minWidth: 210)
+            .frame(minWidth: 230, idealWidth: 240, maxWidth: 270)
 
             DashboardView()
         }
@@ -2235,14 +2261,22 @@ struct RootView: View {
     }
 
     private func notice(icon: String, text: String, dismiss: @escaping () -> Void) -> some View {
-        HStack {
+        HStack(spacing: 10) {
             Image(systemName: icon)
-            Text(text).lineLimit(2)
-            Spacer()
+                .font(.headline)
+            Text(text)
+                .lineLimit(2)
+            Spacer(minLength: 16)
             Button("Dismiss", action: dismiss)
+                .buttonStyle(.borderless)
         }
-        .padding(10)
-        .background(.ultraThickMaterial)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: 680)
+        .background(.ultraThickMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .shadow(radius: 8, y: 3)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 16)
     }
 }
 
@@ -2270,7 +2304,7 @@ struct OnboardingView: View {
             Divider()
             footer
         }
-        .frame(width: 680, height: 590)
+        .frame(width: 720, height: 620)
         .task {
             await model.loadPlexConfig()
             if let saved = model.plexConfig {
@@ -2281,21 +2315,35 @@ struct OnboardingView: View {
     }
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.16))
+                Image(systemName: "play.rectangle.on.rectangle.fill")
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundColor(.accentColor)
+            }
+            .frame(width: 48, height: 48)
+
+            VStack(alignment: .leading, spacing: 3) {
                 Text("Plex Curator")
-                    .font(.title.bold())
+                    .font(.title2.bold())
                 Text("First-time setup")
                     .foregroundColor(.secondary)
             }
 
             Spacer()
 
-            Text("Step \(step + 1) of \(totalSteps)")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            VStack(alignment: .trailing, spacing: 6) {
+                Text("Step \(step + 1) of \(totalSteps)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                ProgressView(value: Double(step + 1), total: Double(totalSteps))
+                    .frame(width: 150)
+            }
         }
-        .padding(24)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 20)
     }
 
     @ViewBuilder
@@ -2324,12 +2372,14 @@ struct OnboardingView: View {
                 .foregroundColor(.secondary)
                 .frame(maxWidth: 500)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 11) {
                 Label("No Terminal setup required", systemImage: "checkmark.circle.fill")
                 Label("Your Plex token stays on this Mac", systemImage: "lock.fill")
                 Label("Existing stations and state are preserved on upgrades", systemImage: "externaldrive.fill.badge.checkmark")
             }
-            .frame(maxWidth: 460, alignment: .leading)
+            .frame(maxWidth: 500, alignment: .leading)
+            .padding(16)
+            .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .padding(32)
     }
@@ -2515,6 +2565,24 @@ struct OnboardingView: View {
     }
 }
 
+struct PlexCardGroupBoxStyle: GroupBoxStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if !configuration.label.isEmpty {
+                configuration.label
+                    .font(.headline)
+            }
+            configuration.content
+        }
+        .padding(16)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+}
+
 struct StatusBadge: View {
     let text: String
     let good: Bool
@@ -2552,7 +2620,8 @@ struct DashboardView: View {
     @State private var showCreateStation = false
 
     private let metricColumns = [
-        GridItem(.adaptive(minimum: 180, maximum: 260), spacing: 14)
+        GridItem(.flexible(minimum: 180), spacing: 14),
+        GridItem(.flexible(minimum: 180), spacing: 14)
     ]
 
     private var loadedAutomationCount: Int {
@@ -2726,8 +2795,10 @@ struct DashboardView: View {
                     }
                 }
             }
-            .padding(24)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 24)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Dashboard")
         .sheet(isPresented: $showCreateStation) {
             StationCreateView()
@@ -2753,11 +2824,11 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Plex Curator")
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Dashboard")
                     .font(.largeTitle.bold())
-                Text("Programming control center")
+                Text("Your Plex Curator system at a glance")
                     .foregroundColor(.secondary)
             }
             Spacer()
@@ -2770,8 +2841,10 @@ struct DashboardView: View {
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
+            .buttonStyle(.bordered)
             .disabled(model.loading)
         }
+        .padding(.bottom, 2)
     }
 
     private func metrics(_ status: StatusResponse) -> some View {
@@ -2825,8 +2898,10 @@ struct DashboardView: View {
                     .foregroundColor(.secondary)
                     .lineLimit(1)
             }
-            .frame(maxWidth: .infinity, minHeight: 78, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 86, alignment: .leading)
+            .padding(.vertical, 2)
         }
+        .groupBoxStyle(PlexCardGroupBoxStyle())
     }
 
     private var attentionSection: some View {
@@ -6692,18 +6767,31 @@ struct HealthView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 18) {
-                healthMetric("RESULT", model.doctor?.result ?? "Unknown")
-                healthMetric("PASSED", "\(passedCount)")
-                healthMetric("WARNINGS", "\(model.doctor?.warnings ?? 0)")
-                healthMetric("FAILURES", "\(model.doctor?.failures ?? 0)")
-                Spacer()
-                StatusBadge(
-                    text: model.status?.plex.connected == true ? "Plex Connected" : "Plex Offline",
-                    good: model.status?.plex.connected == true
-                )
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("System Health")
+                            .font(.title2.bold())
+                        Text("Diagnostics for Plex, the local API, storage, and automation.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    StatusBadge(
+                        text: model.status?.plex.connected == true ? "Plex Connected" : "Plex Offline",
+                        good: model.status?.plex.connected == true
+                    )
+                }
+
+                HStack(spacing: 12) {
+                    healthMetric("RESULT", model.doctor?.result ?? "Unknown")
+                    healthMetric("PASSED", "\(passedCount)")
+                    healthMetric("WARNINGS", "\(model.doctor?.warnings ?? 0)")
+                    healthMetric("FAILURES", "\(model.doctor?.failures ?? 0)")
+                }
             }
-            .padding()
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
 
             Divider()
 
@@ -6781,15 +6869,19 @@ struct HealthView: View {
     }
 
     private func healthMetric(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.caption2)
+                .font(.caption2.weight(.semibold))
                 .foregroundColor(.secondary)
             Text(value)
                 .font(.title3.bold())
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
-        .frame(minWidth: 80, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func healthIcon(_ status: String) -> String {
@@ -7466,8 +7558,12 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(24)
+            .padding(.horizontal, 28)
+            .padding(.vertical, 24)
+            .frame(maxWidth: 900, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Settings")
         .task {
             await loadPlexSettings()
@@ -7500,7 +7596,7 @@ struct SettingsView: View {
         HStack(alignment: .top) {
             Text(label)
                 .foregroundColor(.secondary)
-                .frame(width: 110, alignment: .leading)
+                .frame(width: 130, alignment: .leading)
             Text(value)
                 .textSelection(.enabled)
             Spacer()
