@@ -7257,6 +7257,17 @@ struct AutomationView: View {
                         .padding(4)
                     }
 
+                    GroupBox("Troubleshooting") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("Use Refresh to reload the scheduler and job history.", systemImage: "arrow.clockwise")
+                            Label("A job that fails will report its scheduler error above.", systemImage: "exclamationmark.triangle")
+                            Label("If background runs stop after restarting your Mac, verify Launch at Login is approved.", systemImage: "gearshape")
+                        }
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(4)
+                    }
+
                     GroupBox("How Store Automation Works") {
                         VStack(alignment: .leading, spacing: 10) {
                             Label(
@@ -7308,7 +7319,7 @@ struct AutomationView: View {
             HStack(spacing: 12) {
                 automationMetric("TOTAL JOBS", model.automationJobs.count, icon: "calendar")
                 automationMetric("ACTIVE", model.automationJobs.filter(\.loaded).count, icon: "checkmark.circle")
-                automationMetric("NEEDS SETUP", model.automationJobs.filter { !$0.loaded && !$0.protected }.count, icon: "exclamationmark.circle")
+                automationMetric("NEEDS ATTENTION", model.automationJobs.filter { (!$0.loaded && !$0.protected) || (($0.lastExitCode ?? 0) != 0) }.count, icon: "exclamationmark.circle")
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
@@ -7346,6 +7357,15 @@ struct AutomationView: View {
                         }
                         .font(.caption2)
                         .foregroundColor(.secondary)
+                        if let exit = job.lastExitCode, exit != 0 {
+                            Label("Last run failed (exit \(exit)). Open Logs for details.", systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                        } else if !job.loaded && !job.protected {
+                            Label("Not active — install this job to enable scheduled runs.", systemImage: "info.circle")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     Spacer()
