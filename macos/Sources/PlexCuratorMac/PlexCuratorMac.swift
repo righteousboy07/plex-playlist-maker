@@ -2568,10 +2568,8 @@ struct OnboardingView: View {
 struct PlexCardGroupBoxStyle: GroupBoxStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            if !configuration.label.isEmpty {
-                configuration.label
-                    .font(.headline)
-            }
+            configuration.label
+                .font(.headline)
             configuration.content
         }
         .padding(16)
