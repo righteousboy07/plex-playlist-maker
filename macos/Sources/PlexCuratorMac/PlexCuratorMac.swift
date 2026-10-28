@@ -1742,15 +1742,25 @@ final class AppModel: ObservableObject {
     }
 
     func refreshHealth() async {
+        // Fetch status first: a failed diagnostics endpoint should not hide a
+        // healthy API/Plex connection, and an unreachable API must not leave
+        // stale green status indicators on screen.
         do {
-            async let statusRequest = api.status()
-            async let doctorRequest = api.doctor()
-            status = try await statusRequest
-            doctor = try await doctorRequest
+            status = try await api.status()
+        } catch {
+            status = nil
+            doctor = nil
+            self.error = "Local API unavailable: " + error.localizedDescription
+            return
+        }
+
+        do {
+            doctor = try await api.doctor()
             error = nil
             message = "Diagnostics refreshed."
         } catch {
-            self.error = error.localizedDescription
+            doctor = nil
+            self.error = "The API is responding, but diagnostics failed: " + error.localizedDescription
         }
     }
 
