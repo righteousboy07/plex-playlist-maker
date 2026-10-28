@@ -2,6 +2,15 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.18
+
+- Restored clear Enable/Disable controls on Station detail screens while preserving every other station setting during the toggle.
+- Added real Schedule editing for descriptions, Plex playlist names, programming blocks, block types, presets, runtimes, and seasonal overrides.
+- Added Playlist rename and delete controls with destructive confirmation and smart-playlist safeguards.
+- Replaced vague malformed-response failures with field-level decoding diagnostics so API/schema mismatches identify the exact failing value.
+- Increased action/navigation contrast across Stations, Schedules, Playlists, and detail toolbars using the amber accent and prominent button styling.
+- Kept the v13.2.17 dark navy / light-content visual system while making top-level controls and text easier to distinguish from the background.
+
 ## 13.2.17
 
 - Introduced the approved dark navy, amber, and light-content visual system across the macOS interface.
