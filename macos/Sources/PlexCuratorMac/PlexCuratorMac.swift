@@ -901,17 +901,17 @@ final class APIClient {
             let detail: String
             switch decoding {
             case .keyNotFound(let key, let context):
-                detail = "missing key \\(key.stringValue) at \\(location): \\(context.debugDescription)"
+                detail = "missing key \(key.stringValue) at \(location): \(context.debugDescription)"
             case .typeMismatch(let type, let context):
-                detail = "expected \\(type) at \\(location): \\(context.debugDescription)"
+                detail = "expected \(type) at \(location): \(context.debugDescription)"
             case .valueNotFound(let type, let context):
-                detail = "missing \\(type) value at \\(location): \\(context.debugDescription)"
+                detail = "missing \(type) value at \(location): \(context.debugDescription)"
             case .dataCorrupted(let context):
-                detail = "invalid data at \\(location): \\(context.debugDescription)"
+                detail = "invalid data at \(location): \(context.debugDescription)"
             @unknown default:
                 detail = decoding.localizedDescription
             }
-            throw APIClientError.transport("Could not read \\(path.isEmpty ? \"API response\" : path): \\(detail)")
+            throw APIClientError.transport("Could not read \(path.isEmpty ? \"API response\" : path): \(detail)")
         } catch {
             throw APIClientError.transport(error.localizedDescription)
         }
