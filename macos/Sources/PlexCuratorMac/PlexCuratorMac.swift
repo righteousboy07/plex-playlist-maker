@@ -4371,6 +4371,7 @@ struct MediaOrganizerView: View {
     @State private var recursive = true
     @State private var includeLowConfidence = false
     @State private var confirmApply = false
+    @State private var showAdvancedRules = false
     @State private var reviewedSources: Set<String> = []
     @State private var reviewedTitles: [String: String] = [:]
     @State private var reviewedTypes: [String: String] = [:]
@@ -4541,13 +4542,13 @@ struct MediaOrganizerView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Media Organizer")
                         .font(.largeTitle.bold())
-                    Text("Scan interstitial video folders, preview clean names and categories, visually inspect mystery clips, then safely organize the files.")
+                    Text("Scan folders, review proposed changes, and organize media safely.")
                         .foregroundColor(.secondary)
                 }
                 Spacer()
             }
 
-            GroupBox("Folders") {
+            GroupBox("1 · Select Media Folders") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         TextField("Source folder", text: $sourcePath)
@@ -4570,7 +4571,8 @@ struct MediaOrganizerView: View {
 
                     Toggle("Scan subfolders recursively", isOn: $recursive)
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    DisclosureGroup(isExpanded: $showAdvancedRules) {
+                        VStack(alignment: .leading, spacing: 8) {
                         Text("Exclusion preset")
                             .font(.headline)
 
@@ -4669,6 +4671,10 @@ struct MediaOrganizerView: View {
                         Text("Case-insensitive glob patterns, one per line or comma-separated. Examples: Sample.avi, sample.*, */sample/*")
                             .font(.caption)
                             .foregroundColor(.secondary)
+                        }
+                    } label: {
+                        Label("Advanced exclusion rules and presets", systemImage: "slider.horizontal.3")
+                            .font(.headline)
                     }
 
                     HStack {
@@ -4818,7 +4824,7 @@ struct MediaOrganizerView: View {
                     }
                 }
 
-                GroupBox("Proposed Changes") {
+                GroupBox("2 · Review Proposed Changes") {
                     if plan.items.isEmpty {
                         Text("No supported video files were found.")
                             .foregroundColor(.secondary)
@@ -4861,6 +4867,8 @@ struct MediaOrganizerView: View {
                     }
                 }
 
+                GroupBox("3 · Confirm File Operations") {
+                VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Toggle("Include low-confidence filename guesses", isOn: $includeLowConfidence)
                         .help("Low-confidence files look like generic names such as video_0047.mp4 and are skipped by default.")
@@ -4880,6 +4888,11 @@ struct MediaOrganizerView: View {
                     .disabled(actionableCount == 0 || model.loading || model.mediaOrganizerScanning)
                 }
 
+                if deleteExcluded && excludedCount > 0 {
+                    Label("Warning: \(excludedCount) excluded files will be permanently deleted when you confirm Apply.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout.weight(.semibold))
+                        .foregroundColor(.red)
+                }
                 if unresolvedReviewCount > 0 && !includeLowConfidence {
                     Label(
                         "\(unresolvedReviewCount) low-confidence file\(unresolvedReviewCount == 1 ? "" : "s") will remain untouched for review.",
@@ -4887,6 +4900,8 @@ struct MediaOrganizerView: View {
                     )
                     .font(.caption)
                     .foregroundColor(.secondary)
+                }
+                }
                 }
             } else {
                 VStack(spacing: 12) {
@@ -4903,7 +4918,10 @@ struct MediaOrganizerView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding()
+        .padding(24)
+        .frame(maxWidth: 1100, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .groupBoxStyle(PlexCardGroupBoxStyle())
         .navigationTitle("Media Organizer")
         .task {
             if model.mediaOrganizerPresets.isEmpty {
@@ -5058,7 +5076,7 @@ struct MediaOrganizerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+        .background(PlexTheme.softFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
