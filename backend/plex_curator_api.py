@@ -169,6 +169,19 @@ class ScheduleOptionsRequest(BaseModel):
 class ScheduleBuildRequest(ScheduleOptionsRequest):
     replace: bool = True
 
+class ScheduleBlockUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    type: str = Field(min_length=1, max_length=40)
+    preset: Optional[str] = Field(default=None, max_length=120)
+    minutes: int = Field(ge=1, le=1440)
+    seasonal: Optional[str] = Field(default=None, max_length=40)
+
+class ScheduleUpdateRequest(BaseModel):
+    description: str = Field(default="", max_length=500)
+    playlist: str = Field(min_length=1, max_length=120)
+    blocks: list[ScheduleBlockUpdateRequest] = Field(min_length=1, max_length=48)
+
+
 class InterstitialPoolRequest(BaseModel):
     playlist: str = Field(min_length=1, max_length=120)
     type: str = Field(default="general")
@@ -1332,6 +1345,43 @@ def schedules_list():
 @app.get("/api/v1/schedules/{schedule_id}")
 def schedule_detail(schedule_id: str):
     return schedule_summary(schedule_id, schedule_or_404(schedule_id))
+
+@app.put("/api/v1/schedules/{schedule_id}")
+def schedule_update(
+    schedule_id: str,
+    request: ScheduleUpdateRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    schedules = core.load_schedules()
+    if schedule_id not in schedules:
+        raise HTTPException(status_code=404, detail=f'Unknown schedule "{schedule_id}".')
+
+    blocks = []
+    for block in request.blocks:
+        block_type = block.type.strip().casefold()
+        if block_type not in {"cartoons", "movie"}:
+            raise HTTPException(status_code=422, detail="Schedule block type must be cartoons or movie.")
+        seasonal = block.seasonal.strip().casefold() if block.seasonal else None
+        if seasonal and seasonal not in {"auto", "none", "halloween", "christmas"}:
+            raise HTTPException(status_code=422, detail="Invalid seasonal setting.")
+        payload = {
+            "name": block.name.strip(),
+            "type": block_type,
+            "minutes": block.minutes,
+        }
+        if block.preset:
+            payload["preset"] = block.preset.strip()
+        if seasonal:
+            payload["seasonal"] = seasonal
+        blocks.append(payload)
+
+    schedules[schedule_id] = {
+        "description": request.description.strip(),
+        "playlist": request.playlist.strip(),
+        "blocks": blocks,
+    }
+    core.save_schedules(schedules)
+    return {"ok": True, "schedule": schedule_summary(schedule_id, schedules[schedule_id])}
 
 @app.post("/api/v1/schedules/{schedule_id}/preview")
 def schedule_preview(schedule_id: str, request: ScheduleOptionsRequest):
