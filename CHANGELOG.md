@@ -98,6 +98,7 @@ This project uses milestone tags for major Plex Curator releases.
 - Added precise per-item playlist editing with Move Up, Move Down, and Remove controls keyed by Plex playlist-entry IDs, including duplicate-safe behavior.
 - Added Save As New Playlist to clone a regular playlist while preserving its current item order.
 - Added dedicated regression tests for playlist copy, exact-occurrence removal, and up/down movement behavior.
+- Added a centralized Issues Center that retains the 50 most recent distinct app/API errors for the current session, surfaces diagnostic warnings, and provides Copy/Clear controls plus a sidebar issue count.
 - App Store Phase 2/3: embedded a signed sandbox-inheriting backend helper inside the Store app, added container-aware backend/config/log paths, separated Direct (8765) and Store (8766) localhost APIs for side-by-side installs, disabled external LaunchAgent behavior in Store mode, and added CI startup/signing verification for the bundled runtime.
 - Added a shared Direct/App Store distribution architecture: compile-time build flavors, App Sandbox entitlements, direct-only UI capability gating, a sandboxed App Store build/CI target, and an explicit App Store migration roadmap without forking the product codebase.
 - Added a native first-run onboarding wizard that walks fresh installs through Plex connection and verification, while existing configured users bypass it automatically.
