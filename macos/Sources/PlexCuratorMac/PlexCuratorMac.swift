@@ -3,6 +3,7 @@ import AppKit
 import Foundation
 import UserNotifications
 import Vision
+import UniformTypeIdentifiers
 
 // MARK: - API Models
 
@@ -169,6 +170,11 @@ struct PlaylistDeduplicateResponse: Decodable {
 struct PlaylistItemMoveRequest: Encodable {
     let playlistItemId: Int
     let direction: String
+}
+
+struct PlaylistItemReorderRequest: Encodable {
+    let playlistItemId: Int
+    let beforePlaylistItemId: Int
 }
 
 struct PlaylistItemsMutationRequest: Encodable {
@@ -1135,6 +1141,24 @@ final class APIClient {
         return try await request(
             components.string ?? "/api/v1/playlist/items",
             method: "DELETE",
+            body: body,
+            authenticated: true
+        )
+    }
+
+    func reorderPlaylistItem(name: String, playlistItemId: Int, beforePlaylistItemId: Int) async throws -> PlaylistMoveResponse {
+        var components = URLComponents()
+        components.path = "/api/v1/playlist/item/reorder"
+        components.queryItems = [URLQueryItem(name: "name", value: name)]
+        let body = try encoder.encode(
+            PlaylistItemReorderRequest(
+                playlistItemId: playlistItemId,
+                beforePlaylistItemId: beforePlaylistItemId
+            )
+        )
+        return try await request(
+            components.string ?? "/api/v1/playlist/item/reorder",
+            method: "POST",
             body: body,
             authenticated: true
         )
@@ -2364,6 +2388,28 @@ final class AppModel: ObservableObject {
         do {
             let result = try await api.removePlaylistItems(name: playlist.title, playlistItemIds: ids)
             message = "Removed \(result.removedCount) selected entr\(result.removedCount == 1 ? "y" : "ies") from \(playlist.title)."
+            error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    func reorderPlaylistItem(
+        playlistItemId: Int,
+        beforePlaylistItemId: Int,
+        in playlist: PlaylistSummary
+    ) async -> Bool {
+        do {
+            let result = try await api.reorderPlaylistItem(
+                name: playlist.title,
+                playlistItemId: playlistItemId,
+                beforePlaylistItemId: beforePlaylistItemId
+            )
+            if result.moved {
+                message = "Reordered \(playlist.title)."
+            }
             error = nil
             return true
         } catch {
@@ -6975,6 +7021,7 @@ struct PlaylistDetailView: View {
     @State private var confirmBulkRemove = false
     @State private var showSelectionCopy = false
     @State private var selectionCopyName = ""
+    @State private var draggedPlaylistItemId: Int?
 
     private var items: [MediaItem] {
         detail?.items ?? []
@@ -7112,8 +7159,14 @@ struct PlaylistDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
+                        if !playlist.smart && !selectionMode && items.count > 1 {
+                            Label("Drag any playlist card onto another card to move it before that item.", systemImage: "hand.draw")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
-                            ForEach(Array(filteredItems.enumerated()), id: \.offset) { _, item in
+                            ForEach(filteredItems) { item in
                                 PlaylistMediaCard(
                                     item: item,
                                     editable: !playlist.smart && item.playlistItemId != nil,
@@ -7134,6 +7187,36 @@ struct PlaylistDetailView: View {
                                     onMoveUp: { move(item, direction: "up") },
                                     onMoveDown: { move(item, direction: "down") },
                                     onRemove: { itemPendingRemoval = item }
+                                )
+                                .onDrag {
+                                    guard !playlist.smart,
+                                          !selectionMode,
+                                          let id = item.playlistItemId
+                                    else {
+                                        return NSItemProvider()
+                                    }
+                                    draggedPlaylistItemId = id
+                                    return NSItemProvider(object: String(id) as NSString)
+                                }
+                                .onDrop(
+                                    of: [UTType.plainText.identifier],
+                                    delegate: PlaylistItemDropDelegate(
+                                        targetItemId: item.playlistItemId,
+                                        draggedItemId: $draggedPlaylistItemId,
+                                        isEnabled: !playlist.smart && !selectionMode,
+                                        onMoveBefore: { draggedId, targetId in
+                                            guard draggedId != targetId else { return }
+                                            Task {
+                                                if await model.reorderPlaylistItem(
+                                                    playlistItemId: draggedId,
+                                                    beforePlaylistItemId: targetId,
+                                                    in: playlist
+                                                ) {
+                                                    await load()
+                                                }
+                                            }
+                                        }
+                                    )
                                 )
                             }
                         }
@@ -7408,6 +7491,36 @@ struct PlaylistDetailView: View {
         } catch {
             model.error = error.localizedDescription
         }
+    }
+}
+
+struct PlaylistItemDropDelegate: DropDelegate {
+    let targetItemId: Int?
+    @Binding var draggedItemId: Int?
+    let isEnabled: Bool
+    let onMoveBefore: (Int, Int) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        isEnabled && targetItemId != nil && draggedItemId != nil
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard isEnabled,
+              let draggedItemId,
+              let targetItemId,
+              draggedItemId != targetItemId
+        else {
+            self.draggedItemId = nil
+            return false
+        }
+
+        onMoveBefore(draggedItemId, targetItemId)
+        self.draggedItemId = nil
+        return true
+    }
+
+    func dropExited(info: DropInfo) {
+        // Keep the drag state alive while moving between playlist cards.
     }
 }
 
