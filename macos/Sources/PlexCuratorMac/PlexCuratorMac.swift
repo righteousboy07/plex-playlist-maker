@@ -2699,6 +2699,9 @@ struct RootView: View {
                             }
                         }
                     }
+                    NavigationLink(destination: BackupsView()) {
+                        Label("Backups", systemImage: "externaldrive.badge.timemachine")
+                    }
                     if BuildFlavor.current.supportsAutomationManagement {
                         NavigationLink(destination: AutomationView()) { Label("Automation", systemImage: "clock.badge.checkmark") }
                     }
@@ -8670,6 +8673,134 @@ struct LogsView: View {
             return .orange
         }
         return .primary
+    }
+}
+
+struct BackupsView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var restoreCandidate: BackupEntry?
+    @State private var creating = false
+    @State private var restoring = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Backups")
+                        .font(.title2.bold())
+                    Text("Protect and restore Plex Curator configuration and state.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button(creating ? "Creating…" : "Create Backup") {
+                    creating = true
+                    Task {
+                        _ = await model.createBackup()
+                        creating = false
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(PlexTheme.accent)
+                .disabled(creating || restoring)
+
+                Button("Reload") {
+                    Task { await model.loadBackups() }
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+
+            Divider()
+
+            if model.backups.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "externaldrive.badge.plus")
+                        .font(.system(size: 44))
+                        .foregroundColor(.secondary)
+                    Text("No backups found.")
+                        .font(.headline)
+                    Text("Create a backup before major station, schedule, or configuration changes.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(model.backups) { backup in
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(backup.name)
+                                    .font(.headline)
+                                Text(backup.manifest.reason ?? "Backup")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+
+                            if let version = backup.manifest.appVersion {
+                                Text("v\(version)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Button("Reveal") {
+                                NSWorkspace.shared.activateFileViewerSelecting([
+                                    URL(fileURLWithPath: backup.path)
+                                ])
+                            }
+
+                            Button("Restore") {
+                                restoreCandidate = backup
+                            }
+                            .disabled(restoring)
+                        }
+
+                        HStack(spacing: 12) {
+                            if let created = backup.manifest.createdAt {
+                                Text(created.replacingOccurrences(of: "T", with: " "))
+                            }
+                            if let files = backup.manifest.files {
+                                Text("\(files.count) files")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 5)
+                }
+                .listStyle(.inset)
+            }
+        }
+        .navigationTitle("Backups")
+        .tint(PlexTheme.accent)
+        .task {
+            await model.loadBackups()
+        }
+        .confirmationDialog(
+            restoreCandidate.map { "Restore \($0.name)?" } ?? "Restore backup?",
+            isPresented: Binding(
+                get: { restoreCandidate != nil },
+                set: { if !$0 { restoreCandidate = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Restore Backup", role: .destructive) {
+                guard let backup = restoreCandidate else { return }
+                restoreCandidate = nil
+                restoring = true
+                Task {
+                    _ = await model.restoreBackup(backup)
+                    restoring = false
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                restoreCandidate = nil
+            }
+        } message: {
+            Text("Plex Curator creates a safety backup of the current configuration before restoring. Plex media files and Plex playlists are not deleted.")
+        }
     }
 }
 
