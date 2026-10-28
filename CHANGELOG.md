@@ -90,6 +90,10 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Added drag-and-drop reordering for regular Plex playlists using exact playlist-entry IDs, while retaining Move Up/Down controls.
+- Added regression coverage for arbitrary playlist reordering, including moving an item to the first position.
+- Added a centralized Activity Center with active-operation status, Media Organizer scan progress/cancellation, automation failure visibility, and recent completed programming.
+- Added an Activity sidebar status badge when tracked work is in progress.
 - Added one-click Station Enable/Disable controls directly in the Stations list, plus compact Preview, Dry Run, and Diff actions.
 - Added unsaved-change detection and discard protection to Station editing, with a prominent Save state.
 - Upgraded Schedule editing with live total runtime, Unsaved Changes status, block move up/down controls, block duplication, and discard protection.

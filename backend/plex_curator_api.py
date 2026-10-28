@@ -170,6 +170,10 @@ class PlaylistItemsMutationRequest(BaseModel):
 class PlaylistItemMoveRequest(PlaylistItemMutationRequest):
     direction: str = Field(pattern="^(up|down)$")
 
+class PlaylistItemReorderRequest(BaseModel):
+    playlist_item_id: int = Field(gt=0)
+    before_playlist_item_id: int = Field(gt=0)
+
 class PlaylistCopyRequest(BaseModel):
     current_name: str = Field(min_length=1, max_length=120)
     new_name: str = Field(min_length=1, max_length=120)
@@ -1761,6 +1765,45 @@ def playlist_remove_items(
         "removed_count": len(requested),
         "item_count": max(0, len(items) - len(requested)),
     }
+
+
+@app.post("/api/v1/playlist/item/reorder")
+def playlist_reorder_item(
+    request: PlaylistItemReorderRequest,
+    name: str = Query(min_length=1),
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    playlist = core.find_playlist(plex, name)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    if bool(getattr(playlist, "smart", False)):
+        raise HTTPException(status_code=422, detail="Smart playlists cannot be reordered.")
+
+    items = list(playlist.items())
+    moving = next(
+        (item for item in items if getattr(item, "playlistItemID", None) == request.playlist_item_id),
+        None,
+    )
+    target = next(
+        (item for item in items if getattr(item, "playlistItemID", None) == request.before_playlist_item_id),
+        None,
+    )
+    if moving is None or target is None:
+        raise HTTPException(status_code=404, detail="Playlist item not found.")
+    if moving is target:
+        return {"ok": True, "title": playlist.title, "moved": False}
+
+    remaining = [item for item in items if item is not moving]
+    target_index = remaining.index(target)
+    after = remaining[target_index - 1] if target_index > 0 else None
+
+    try:
+        playlist.moveItem(moving, after=after)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"ok": True, "title": playlist.title, "moved": True}
 
 
 @app.post("/api/v1/playlist/item/move")
