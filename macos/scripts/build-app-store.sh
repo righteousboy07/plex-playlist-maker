@@ -117,6 +117,32 @@ trap - EXIT
 echo "Assembling App Store app bundle..."
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$HELPERS"
 cp "$BIN" "$APP/Contents/MacOS/PlexCuratorMac"
+
+echo "Generating Plex Curator app icon..."
+ICON_WORK="$WORK/app-icon"
+ICON_PNG="$ICON_WORK/icon-1024.png"
+ICONSET="$ICON_WORK/PlexCurator.iconset"
+rm -rf "$ICON_WORK"
+mkdir -p "$ICONSET"
+swift "$ROOT/scripts/generate-app-icon.swift" "$ICON_PNG"
+
+for spec in \
+  "16 icon_16x16.png" \
+  "32 icon_16x16@2x.png" \
+  "32 icon_32x32.png" \
+  "64 icon_32x32@2x.png" \
+  "128 icon_128x128.png" \
+  "256 icon_128x128@2x.png" \
+  "256 icon_256x256.png" \
+  "512 icon_256x256@2x.png" \
+  "512 icon_512x512.png" \
+  "1024 icon_512x512@2x.png"; do
+  px="${spec%% *}"
+  name="${spec#* }"
+  /usr/bin/sips -z "$px" "$px" "$ICON_PNG" --out "$ICONSET/$name" >/dev/null
+done
+/usr/bin/iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/PlexCurator.icns"
+
 /usr/bin/ditto "$GENERATED_HELPER_APP" "$API_HELPER_APP"
 /usr/bin/ditto "$REPO_ROOT/backend/examples" "$API_HELPER_APP/Contents/Resources/examples"
 
@@ -129,6 +155,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleName</key><string>Plex Curator</string>
 <key>CFBundleDisplayName</key><string>Plex Curator</string>
 <key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>PlexCurator.icns</string>
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
 <key>CFBundleVersion</key><string>$BUILD_VERSION</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
