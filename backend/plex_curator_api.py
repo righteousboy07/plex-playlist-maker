@@ -157,6 +157,10 @@ class MoviePlaylistRequest(MovieFilterRequest):
     playlist: str = Field(min_length=1, max_length=120)
     replace: bool = True
 
+class PlaylistRenameRequest(BaseModel):
+    current_name: str = Field(min_length=1, max_length=120)
+    new_name: str = Field(min_length=1, max_length=120)
+
 class ScheduleOptionsRequest(BaseModel):
     playlist: Optional[str] = Field(default=None, min_length=1, max_length=120)
     avoid_recent: int = Field(default=150, ge=0, le=100000)
@@ -1529,6 +1533,56 @@ def playlists():
             ),
         })
     return {"playlists": result}
+
+@app.put("/api/v1/playlist")
+def playlist_rename(
+    request: PlaylistRenameRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    playlist = core.find_playlist(plex, request.current_name)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    if bool(getattr(playlist, "smart", False)):
+        raise HTTPException(status_code=422, detail="Smart playlists cannot be renamed safely by Plex Curator yet.")
+    new_name = request.new_name.strip()
+    if core.find_playlist(plex, new_name):
+        raise HTTPException(status_code=409, detail=f'Playlist "{new_name}" already exists.')
+    items = list(playlist.items())
+    try:
+        created = plex.createPlaylist(new_name, items=items)
+        playlist.delete()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "playlist": {
+            "title": created.title,
+            "item_count": len(items),
+            "rating_key": str(getattr(created, "ratingKey", "") or ""),
+            "playlist_type": getattr(created, "playlistType", None),
+            "smart": bool(getattr(created, "smart", False)),
+            "updated_at": (
+                getattr(created, "updatedAt", None).isoformat()
+                if getattr(created, "updatedAt", None) else None
+            ),
+        },
+    }
+
+@app.delete("/api/v1/playlist")
+def playlist_delete(
+    name: str = Query(min_length=1),
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    playlist = core.find_playlist(plex, name)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    try:
+        playlist.delete()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"ok": True, "title": name}
 
 @app.get("/api/v1/playlist")
 def playlist_detail_query(name: str = Query(min_length=1)):
