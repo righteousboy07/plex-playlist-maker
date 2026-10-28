@@ -3881,6 +3881,7 @@ struct StationEditorView: View {
     @State private var excludeShows: String
     @State private var validationMessage: String?
     @State private var editorSection = 0
+    @State private var confirmDiscard = false
 
     init(station: Station, onSaved: @escaping (Station) -> Void) {
         original = station
@@ -3933,6 +3934,53 @@ struct StationEditorView: View {
         _syncWatchProgress = State(initialValue: station.syncWatchProgress)
         _includeShows = State(initialValue: station.includeShows.joined(separator: "\n"))
         _excludeShows = State(initialValue: station.excludeShows.joined(separator: "\n"))
+    }
+
+    private var isDirty: Bool {
+        let originalPools = (original.interstitialPools.isEmpty
+            ? original.interstitialPlaylists.map {
+                InterstitialPool(playlist: $0, type: "general", weight: 1)
+            }
+            : original.interstitialPools
+        ).sorted { $0.playlist.localizedCaseInsensitiveCompare($1.playlist) == .orderedAscending }
+
+        let currentPools = interstitialPlaylists.sorted().map {
+            InterstitialPool(
+                playlist: $0,
+                type: interstitialTypes[$0] ?? "general",
+                weight: max(1, interstitialWeights[$0] ?? 1)
+            )
+        }
+
+        let currentSequence = orderedBreaksEnabled ? interstitialSequence : []
+        let currentPattern = cyclicBreaksEnabled ? interstitialBreakPattern : []
+
+        return name.trimmingCharacters(in: .whitespacesAndNewlines) != original.name
+            || description != (original.description ?? "")
+            || enabled != original.enabled
+            || playlist.trimmingCharacters(in: .whitespacesAndNewlines) != original.playlist
+            || preset != original.preset
+            || parsedYear(yearMin) != original.yearMin
+            || parsedYear(yearMax) != original.yearMax
+            || kidsOnly != original.kidsOnly
+            || adult != original.adult
+            || perShow != original.perShow
+            || total != original.total
+            || avoidRecent != original.avoidRecent
+            || minShowGap != original.minShowGap
+            || seasonal != original.seasonal
+            || specialEvery != original.specialEvery
+            || currentPools != originalPools
+            || currentSequence != (original.interstitialSequence ?? [])
+            || currentPattern != (original.interstitialBreakPattern ?? [])
+            || interstitialEvery != original.interstitialEvery
+            || interstitialCount != original.interstitialCount
+            || runtimeBlockMinutes != original.runtimeBlockMinutes
+            || runtimeBlockCount != original.runtimeBlockCount
+            || unwatched != original.unwatched
+            || syncWatchProgress != original.syncWatchProgress
+            || lines(includeShows) != original.includeShows
+            || lines(excludeShows) != original.excludeShows
     }
 
     private var videoPlaylists: [PlaylistSummary] {
@@ -4109,13 +4157,26 @@ struct StationEditorView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Edit Station").font(.title2.bold())
+                    HStack(spacing: 8) {
+                        Text("Edit Station").font(.title2.bold())
+                        if isDirty {
+                            Text("Unsaved Changes")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(PlexTheme.accent.opacity(0.16))
+                                .clipShape(Capsule())
+                        }
+                    }
                     Text(original.name).font(.caption).foregroundColor(.secondary)
                 }
                 Spacer()
-                Button("Cancel") { dismiss() }
+                Button("Cancel") { attemptDismiss() }
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+                    .disabled(!isDirty)
             }.padding()
 
             Divider()
@@ -4489,6 +4550,24 @@ struct StationEditorView: View {
             if model.playlists.isEmpty {
                 await model.loadPlaylists()
             }
+        }
+        .confirmationDialog(
+            "Discard unsaved station changes?",
+            isPresented: $confirmDiscard,
+            titleVisibility: .visible
+        ) {
+            Button("Discard Changes", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) { }
+        } message: {
+            Text("Your changes to this station have not been saved.")
+        }
+    }
+
+    private func attemptDismiss() {
+        if isDirty {
+            confirmDiscard = true
+        } else {
+            dismiss()
         }
     }
 
@@ -5951,8 +6030,9 @@ struct ScheduleEditorView: View {
             return true
         }
 
-        return zip(blocks, original.blocks).contains { draft, saved in
-            draft.name.trimmingCharacters(in: .whitespacesAndNewlines) != saved.name
+        return zip(blocks, original.blocks).contains { pair in
+            let (draft, saved) = pair
+            return draft.name.trimmingCharacters(in: .whitespacesAndNewlines) != saved.name
                 || draft.type != (saved.type ?? "cartoons")
                 || draft.preset.trimmingCharacters(in: .whitespacesAndNewlines) != (saved.preset ?? "")
                 || draft.minutes != saved.minutes
