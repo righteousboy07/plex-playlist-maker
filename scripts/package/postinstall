@@ -56,8 +56,27 @@ for _attempt in 1 2 3 4 5 6 7 8 9 10; do
   /bin/sleep 1
 done
 
+# Keep a short, non-sensitive installation health report for support.
+# Do not record the Plex token, API key, or environment contents.
+REPORT="$LOG_DIR/installer-health.txt"
+{
+  echo "Plex Curator installation health"
+  echo "Checked: $(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "Backend executable: $([[ -x "$INSTALL_DIR/plex-curator-api" ]] && echo present || echo missing)"
+  echo "App bundle: $([[ -d "$APP_PATH" ]] && echo present || echo missing)"
+  if [[ "$API_READY" -eq 1 ]]; then
+    echo "Local API: responding"
+  else
+    echo "Local API: not responding after 10 seconds"
+    echo "Next step: open Plex Curator > Automation and inspect the api-server logs."
+    echo "If needed, use the app's Settings screen to check the Plex connection."
+  fi
+} > "$REPORT" 2>/dev/null || true
+/usr/sbin/chown "$CONSOLE_USER":staff "$REPORT" 2>/dev/null || true
+/bin/chmod 600 "$REPORT" 2>/dev/null || true
+
 if [[ "$API_READY" -ne 1 ]]; then
-  echo "WARNING: Plex Curator API did not answer before first launch." >&2
+  echo "WARNING: Plex Curator API did not answer before first launch. See $REPORT" >&2
 fi
 
 if [[ -d "$APP_PATH" ]]; then
