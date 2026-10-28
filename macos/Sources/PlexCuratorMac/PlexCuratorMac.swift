@@ -902,22 +902,28 @@ final class APIClient {
         } catch let e as APIClientError {
             throw e
         } catch let decoding as DecodingError {
-            let path = decoding.codingPath.map(\.stringValue).joined(separator: ".")
-            let location = path.isEmpty ? "response root" : path
             let detail: String
             switch decoding {
             case .keyNotFound(let key, let context):
+                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+                let location = path.isEmpty ? "response root" : path
                 detail = "missing key \(key.stringValue) at \(location): \(context.debugDescription)"
             case .typeMismatch(let type, let context):
+                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+                let location = path.isEmpty ? "response root" : path
                 detail = "expected \(type) at \(location): \(context.debugDescription)"
             case .valueNotFound(let type, let context):
+                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+                let location = path.isEmpty ? "response root" : path
                 detail = "missing \(type) value at \(location): \(context.debugDescription)"
             case .dataCorrupted(let context):
+                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+                let location = path.isEmpty ? "response root" : path
                 detail = "invalid data at \(location): \(context.debugDescription)"
             @unknown default:
                 detail = decoding.localizedDescription
             }
-            throw APIClientError.transport("Could not read \(path.isEmpty ? \"API response\" : path): \(detail)")
+            throw APIClientError.transport("Could not read API response: \(detail)")
         } catch {
             throw APIClientError.transport(error.localizedDescription)
         }
@@ -6952,6 +6958,9 @@ struct PlaylistDetailView: View {
     @State private var playlist: PlaylistSummary
 
     @State private var detail: PlaylistDetailResponse?
+    @State private var showRename = false
+    @State private var renameText = ""
+    @State private var confirmDelete = false
     @State private var searchText = ""
     @State private var itemFilter = 0
     @State private var isLoading = false
