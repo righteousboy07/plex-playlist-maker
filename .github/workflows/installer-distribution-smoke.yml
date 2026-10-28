@@ -24,32 +24,42 @@ jobs:
 
       - name: Build distribution smoke package
         run: |
-          ROOT="$RUNNER_TEMP/root"
+          APP_ROOT="$RUNNER_TEMP/app-root"
+          BACKEND_ROOT="$RUNNER_TEMP/backend-root"
           SCRIPTS="$RUNNER_TEMP/scripts"
           COMPONENTS="$RUNNER_TEMP/components"
           EXPANDED="$RUNNER_TEMP/expanded"
-          mkdir -p "$ROOT/Applications/PlexCurator" "$SCRIPTS" "$COMPONENTS"
-          printf 'installer distribution probe\n' > "$ROOT/Applications/PlexCurator/.distribution-probe"
+          mkdir -p "$APP_ROOT/Applications/Plex Curator.app" "$BACKEND_ROOT/Applications/PlexCurator" "$SCRIPTS" "$COMPONENTS"
+          printf 'app distribution probe\n' > "$APP_ROOT/Applications/Plex Curator.app/.app-probe"
+          printf 'backend distribution probe\n' > "$BACKEND_ROOT/Applications/PlexCurator/.backend-probe"
           cp scripts/package/preinstall "$SCRIPTS/preinstall"
           cp scripts/package/postinstall "$SCRIPTS/postinstall"
           chmod 755 "$SCRIPTS/preinstall" "$SCRIPTS/postinstall"
 
-          pkgbuild \
-            --root "$ROOT" \
-            --scripts "$SCRIPTS" \
-            --identifier com.ry.plexcurator.component \
-            --version 13.2.6 \
-            --install-location / \
-            "$COMPONENTS/PlexCurator.pkg"
+          pkgbuild \\
+            --root "$APP_ROOT" \\
+            --identifier com.ry.plexcurator.app.component \\
+            --version 13.2.17 \\
+            --install-location / \\
+            "$COMPONENTS/PlexCuratorApp.pkg"
 
-          productbuild \
-            --distribution scripts/package/Distribution.xml \
-            --package-path "$COMPONENTS" \
-            --resources scripts/package/resources \
+          pkgbuild \\
+            --root "$BACKEND_ROOT" \\
+            --scripts "$SCRIPTS" \\
+            --identifier com.ry.plexcurator.backend.component \\
+            --version 13.2.17 \\
+            --install-location / \\
+            "$COMPONENTS/PlexCuratorBackend.pkg"
+
+          productbuild \\
+            --distribution scripts/package/Distribution.xml \\
+            --package-path "$COMPONENTS" \\
+            --resources scripts/package/resources \\
             "$RUNNER_TEMP/Plex-Curator-smoke.pkg"
 
           pkgutil --expand-full "$RUNNER_TEMP/Plex-Curator-smoke.pkg" "$EXPANDED"
           test -f "$EXPANDED/Distribution"
-          find "$EXPANDED" -name .distribution-probe -print -quit | grep -q .
+          find "$EXPANDED" -name .app-probe -print -quit | grep -q .
+          find "$EXPANDED" -name .backend-probe -print -quit | grep -q .
           grep -q "welcome.html" "$EXPANDED/Distribution"
           grep -q "macOS 12" scripts/package/resources/readme.html || true
