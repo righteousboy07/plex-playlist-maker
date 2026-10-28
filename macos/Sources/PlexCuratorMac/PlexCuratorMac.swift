@@ -7072,12 +7072,29 @@ struct AutomationView: View {
         .groupBoxStyle(PlexCardGroupBoxStyle())
     }
 
+    private func automationMetric(_ title: String, _ count: Int, icon: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundColor(PlexTheme.accent)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.caption2).foregroundColor(.secondary)
+                Text("\(count)").font(.title2.bold())
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PlexTheme.softFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     private var storeAutomationView: some View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Automation").font(.title.bold())
-                    Text("App Store-safe scheduled jobs")
+                    Text("Scheduled jobs running inside the app sandbox")
                         .foregroundColor(.secondary)
                 }
                 Spacer()
@@ -7159,6 +7176,11 @@ struct AutomationView: View {
                                 .foregroundColor(.secondary)
                         }
                         .padding(4)
+                    }
+
+                    HStack(spacing: 12) {
+                        automationMetric("SCHEDULED", storeScheduler.jobs.count, icon: "calendar")
+                        automationMetric("RUNNING", storeScheduler.runningJob == nil ? 0 : 1, icon: "arrow.triangle.2.circlepath")
                     }
 
                     GroupBox("Scheduled Jobs") {
@@ -7273,7 +7295,7 @@ struct AutomationView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Automation").font(.title.bold())
-                    Text("Manage Plex Curator LaunchAgents")
+                    Text("Manage scheduled jobs and macOS LaunchAgents")
                         .foregroundColor(.secondary)
                 }
                 Spacer()
@@ -7283,10 +7305,23 @@ struct AutomationView: View {
 
             Divider()
 
+            HStack(spacing: 12) {
+                automationMetric("TOTAL JOBS", model.automationJobs.count, icon: "calendar")
+                automationMetric("ACTIVE", model.automationJobs.filter(\.loaded).count, icon: "checkmark.circle")
+                automationMetric("NEEDS SETUP", model.automationJobs.filter { !$0.loaded && !$0.protected }.count, icon: "exclamationmark.circle")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+
             List(model.automationJobs) { job in
                 HStack(alignment: .center, spacing: 14) {
-                    Image(systemName: job.loaded ? "checkmark.circle.fill" : "circle")
-                        .foregroundColor(job.loaded ? .green : .secondary)
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(job.loaded ? Color.green.opacity(0.10) : PlexTheme.softFill)
+                        Image(systemName: job.loaded ? "checkmark.circle.fill" : "clock.badge.exclamationmark")
+                            .foregroundColor(job.loaded ? .green : .secondary)
+                    }
+                    .frame(width: 38, height: 38)
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack {
@@ -7338,8 +7373,9 @@ struct AutomationView: View {
                         }
                     }
                 }
-                .padding(.vertical, 5)
+                .padding(.vertical, 7)
             }
+            .listStyle(InsetListStyle())
         }
         .task { await model.loadAutomation() }
         .alert(item: $confirmJob) { job in
