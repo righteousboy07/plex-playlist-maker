@@ -161,6 +161,16 @@ class PlaylistRenameRequest(BaseModel):
     current_name: str = Field(min_length=1, max_length=120)
     new_name: str = Field(min_length=1, max_length=120)
 
+class PlaylistItemMutationRequest(BaseModel):
+    playlist_item_id: int = Field(gt=0)
+
+class PlaylistItemMoveRequest(PlaylistItemMutationRequest):
+    direction: str = Field(pattern="^(up|down)$")
+
+class PlaylistCopyRequest(BaseModel):
+    current_name: str = Field(min_length=1, max_length=120)
+    new_name: str = Field(min_length=1, max_length=120)
+
 class ScheduleOptionsRequest(BaseModel):
     playlist: Optional[str] = Field(default=None, min_length=1, max_length=120)
     avoid_recent: int = Field(default=150, ge=0, le=100000)
@@ -273,6 +283,7 @@ def serialize_item(item, position: Optional[int] = None):
     duration_ms = getattr(item, "duration", None)
     data = {
         "rating_key": rating_key,
+        "playlist_item_id": getattr(item, "playlistItemID", None),
         "type": getattr(item, "type", None),
         "title": getattr(item, "title", None),
         "year": getattr(item, "year", None),
@@ -1583,6 +1594,114 @@ def playlist_delete(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"ok": True, "title": name}
+
+@app.post("/api/v1/playlist/copy")
+def playlist_copy(
+    request: PlaylistCopyRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    playlist = core.find_playlist(plex, request.current_name)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    new_name = request.new_name.strip()
+    if core.find_playlist(plex, new_name):
+        raise HTTPException(status_code=409, detail=f'Playlist "{new_name}" already exists.')
+    items = list(playlist.items())
+    if not items:
+        raise HTTPException(status_code=422, detail="Plex cannot create an empty copied playlist.")
+    try:
+        created = plex.createPlaylist(new_name, items=items)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "playlist": {
+            "title": created.title,
+            "item_count": len(items),
+            "rating_key": str(getattr(created, "ratingKey", "") or ""),
+            "playlist_type": getattr(created, "playlistType", None),
+            "smart": bool(getattr(created, "smart", False)),
+            "updated_at": (
+                getattr(created, "updatedAt", None).isoformat()
+                if getattr(created, "updatedAt", None) else None
+            ),
+        },
+    }
+
+
+@app.delete("/api/v1/playlist/item")
+def playlist_remove_item(
+    name: str = Query(min_length=1),
+    playlist_item_id: int = Query(gt=0),
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    playlist = core.find_playlist(plex, name)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    if bool(getattr(playlist, "smart", False)):
+        raise HTTPException(status_code=422, detail="Smart playlists cannot be edited item-by-item.")
+    items = list(playlist.items())
+    item = next(
+        (value for value in items if getattr(value, "playlistItemID", None) == playlist_item_id),
+        None,
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Playlist item not found.")
+    try:
+        key = f"{playlist.key}/items/{playlist_item_id}"
+        playlist._server.query(key, method=playlist._server._session.delete)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "title": playlist.title,
+        "removed_count": 1,
+        "item_count": max(0, len(items) - 1),
+    }
+
+
+@app.post("/api/v1/playlist/item/move")
+def playlist_move_item(
+    name: str = Query(min_length=1),
+    request: PlaylistItemMoveRequest = ...,
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    playlist = core.find_playlist(plex, name)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    if bool(getattr(playlist, "smart", False)):
+        raise HTTPException(status_code=422, detail="Smart playlists cannot be reordered.")
+
+    items = list(playlist.items())
+    index = next(
+        (
+            idx for idx, value in enumerate(items)
+            if getattr(value, "playlistItemID", None) == request.playlist_item_id
+        ),
+        None,
+    )
+    if index is None:
+        raise HTTPException(status_code=404, detail="Playlist item not found.")
+
+    if request.direction == "up":
+        if index == 0:
+            return {"ok": True, "title": playlist.title, "moved": False}
+        after = items[index - 2] if index >= 2 else None
+    else:
+        if index >= len(items) - 1:
+            return {"ok": True, "title": playlist.title, "moved": False}
+        after = items[index + 1]
+
+    try:
+        playlist.moveItem(items[index], after=after)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"ok": True, "title": playlist.title, "moved": True}
+
 
 @app.post("/api/v1/playlist/deduplicate")
 def playlist_deduplicate(
