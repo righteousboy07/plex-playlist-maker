@@ -159,6 +159,13 @@ struct PlaylistMutationResponse: Decodable {
     let title: String?
 }
 
+struct PlaylistDeduplicateResponse: Decodable {
+    let ok: Bool
+    let title: String
+    let removedCount: Int
+    let itemCount: Int
+}
+
 struct MovieFilterRequest: Encodable {
     let library: String
     let genre: String?
@@ -992,6 +999,17 @@ final class APIClient {
         components.path = "/api/v1/playlist"
         components.queryItems = [URLQueryItem(name: "name", value: name)]
         return try await request(components.string ?? "/api/v1/playlist")
+    }
+
+    func deduplicatePlaylist(name: String) async throws -> PlaylistDeduplicateResponse {
+        var components = URLComponents()
+        components.path = "/api/v1/playlist/deduplicate"
+        components.queryItems = [URLQueryItem(name: "name", value: name)]
+        return try await request(
+            components.string ?? "/api/v1/playlist/deduplicate",
+            method: "POST",
+            authenticated: true
+        )
     }
 
     func artworkURL(ratingKey: String, width: Int = 240, height: Int = 360) -> URL? {
@@ -2065,6 +2083,31 @@ final class AppModel: ObservableObject {
         } catch {
             self.error = error.localizedDescription
             return false
+        }
+    }
+
+    func deduplicatePlaylist(_ playlist: PlaylistSummary) async -> Int? {
+        do {
+            let result = try await api.deduplicatePlaylist(name: playlist.title)
+            if let index = playlists.firstIndex(where: { $0.id == playlist.id }) {
+                let current = playlists[index]
+                playlists[index] = PlaylistSummary(
+                    title: current.title,
+                    itemCount: result.itemCount,
+                    ratingKey: current.ratingKey,
+                    playlistType: current.playlistType,
+                    smart: current.smart,
+                    updatedAt: current.updatedAt
+                )
+            }
+            message = result.removedCount == 0
+                ? "No duplicate entries found in \(playlist.title)."
+                : "Removed \(result.removedCount) duplicate entr\(result.removedCount == 1 ? "y" : "ies") from \(playlist.title)."
+            error = nil
+            return result.removedCount
+        } catch {
+            self.error = error.localizedDescription
+            return nil
         }
     }
 
@@ -6495,6 +6538,8 @@ struct PlaylistDetailView: View {
     @State private var searchText = ""
     @State private var itemFilter = 0
     @State private var isLoading = false
+    @State private var confirmDeduplicate = false
+    @State private var isDeduplicating = false
 
     private var items: [MediaItem] {
         detail?.items ?? []
@@ -6650,6 +6695,12 @@ struct PlaylistDetailView: View {
                     }
                     .frame(width: 130)
 
+                    if duplicateExtraCount > 0 && !playlist.smart {
+                        Button(isDeduplicating ? "Cleaning…" : "Remove Duplicates") {
+                            confirmDeduplicate = true
+                        }
+                        .disabled(isDeduplicating)
+                    }
                     Button("Rename") { renameText = playlist.title; showRename = true }
                         .disabled(playlist.smart)
                     Button("Delete", role: .destructive) { confirmDelete = true }
@@ -6696,6 +6747,24 @@ struct PlaylistDetailView: View {
             }
             .padding(20)
             .frame(width: 420)
+        }
+        .confirmationDialog(
+            "Remove duplicate entries from \(playlist.title)?",
+            isPresented: $confirmDeduplicate,
+            titleVisibility: .visible
+        ) {
+            Button("Remove \(duplicateExtraCount) Duplicate\(duplicateExtraCount == 1 ? "" : "s")") {
+                isDeduplicating = true
+                Task {
+                    if await model.deduplicatePlaylist(playlist) != nil {
+                        await load()
+                    }
+                    isDeduplicating = false
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Plex Curator keeps the first occurrence of each media item and removes only repeated playlist entries. Media files are not deleted.")
         }
         .confirmationDialog("Delete \(playlist.title)?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete Playlist", role: .destructive) {
