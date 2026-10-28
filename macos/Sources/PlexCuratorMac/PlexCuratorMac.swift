@@ -2790,6 +2790,20 @@ struct RootView: View {
 
                 Section("System") {
                     NavigationLink(destination: HealthView()) { Label("Health", systemImage: "heart.text.square") }
+                    NavigationLink(destination: ActivityCenterView()) {
+                        HStack {
+                            Label("Activity", systemImage: "waveform.path.ecg")
+                            Spacer()
+                            if model.loading || model.mediaOrganizerScanJob?.isActive == true {
+                                Text("Active")
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(PlexTheme.accent.opacity(0.2))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                    }
                     NavigationLink(destination: IssuesView()) {
                         HStack {
                             Label("Issues", systemImage: "exclamationmark.bubble")
@@ -8975,6 +8989,210 @@ struct LogsView: View {
             return .orange
         }
         return .primary
+    }
+}
+
+struct ActivityCenterView: View {
+    @EnvironmentObject var model: AppModel
+
+    private var failedAutomationJobs: [AutomationJob] {
+        model.automationJobs.filter { ($0.lastExitCode ?? 0) != 0 }
+    }
+
+    private var hasActiveWork: Bool {
+        model.loading || model.mediaOrganizerScanJob?.isActive == true
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Activity Center")
+                            .font(.title2.bold())
+                        Text("Current operations, failures, and recently completed programming.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    StatusBadge(
+                        text: hasActiveWork ? "Work in Progress" : "Idle",
+                        good: !hasActiveWork
+                    )
+                    Button("Refresh") {
+                        Task {
+                            await model.refreshDashboard()
+                            if BuildFlavor.current.supportsAutomationManagement {
+                                await model.loadAutomation()
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+                }
+
+                GroupBox("Active Operations") {
+                    VStack(spacing: 0) {
+                        if model.loading {
+                            activityRow(
+                                icon: "arrow.triangle.2.circlepath",
+                                title: "Plex Curator operation",
+                                detail: "A refresh, build, apply, or synchronization operation is running.",
+                                trailing: AnyView(ProgressView().controlSize(.small))
+                            )
+                        }
+
+                        if let scan = model.mediaOrganizerScanJob, scan.isActive {
+                            if model.loading {
+                                Divider()
+                            }
+                            VStack(alignment: .leading, spacing: 9) {
+                                HStack {
+                                    Image(systemName: "folder.badge.gearshape")
+                                        .foregroundColor(PlexTheme.accent)
+                                        .frame(width: 24)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Media Organizer scan")
+                                            .font(.headline)
+                                        Text(scan.detail ?? scan.phase.capitalized)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Button("Cancel", role: .destructive) {
+                                        Task { await model.cancelMediaOrganizerScan() }
+                                    }
+                                    .disabled(scan.cancelRequested)
+                                }
+
+                                if let total = scan.totalCount, total > 0 {
+                                    ProgressView(value: Double(scan.processedCount), total: Double(total))
+                                    Text("\(scan.processedCount) of \(total) files analyzed")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    ProgressView()
+                                    Text("\(scan.discoveredCount) files discovered")
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 8)
+                        }
+
+                        if !hasActiveWork {
+                            Label("No long-running operations are active.", systemImage: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 8)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if !failedAutomationJobs.isEmpty {
+                    GroupBox("Automation Needs Attention") {
+                        VStack(spacing: 0) {
+                            ForEach(Array(failedAutomationJobs.enumerated()), id: \.element.id) { index, job in
+                                HStack(spacing: 12) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.red)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(job.name)
+                                            .font(.headline)
+                                        Text("Last exit code: \(job.lastExitCode ?? -1)")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    if BuildFlavor.current.supportsAutomationManagement {
+                                        NavigationLink(destination: AutomationView()) {
+                                            Text("Open")
+                                        }
+                                    }
+                                }
+                                .padding(.vertical, 7)
+
+                                if index < failedAutomationJobs.count - 1 {
+                                    Divider()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                GroupBox("Recent Completed Programming") {
+                    VStack(spacing: 0) {
+                        if model.buildHistory.isEmpty {
+                            Text("No completed station or schedule builds are recorded yet.")
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 8)
+                        } else {
+                            ForEach(Array(model.buildHistory.prefix(12).enumerated()), id: \.element.id) { index, build in
+                                HStack(spacing: 12) {
+                                    Image(systemName: build.channelName.hasPrefix("schedule:") ? "calendar" : "tv")
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 24)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(build.displayChannel)
+                                            .font(.headline)
+                                        Text(build.playlistName)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    VStack(alignment: .trailing, spacing: 2) {
+                                        Text("\(build.itemCount) items")
+                                            .font(.caption.bold())
+                                        Text(build.displayDate)
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.vertical, 7)
+
+                                if index < min(model.buildHistory.count, 12) - 1 {
+                                    Divider()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(24)
+        }
+        .navigationTitle("Activity")
+        .tint(PlexTheme.accent)
+        .task {
+            await model.refreshDashboard()
+            if BuildFlavor.current.supportsAutomationManagement {
+                await model.loadAutomation()
+            }
+        }
+    }
+
+    private func activityRow(
+        icon: String,
+        title: String,
+        detail: String,
+        trailing: AnyView
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundColor(PlexTheme.accent)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            trailing
+        }
+        .padding(.vertical, 8)
     }
 }
 
