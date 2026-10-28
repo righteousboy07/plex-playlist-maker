@@ -2136,6 +2136,14 @@ final class AppModel: ObservableObject {
     }
 }
 
+enum PlexTheme {
+    static let accent = Color(red: 0.96, green: 0.58, blue: 0.10)
+    static let sidebar = Color(red: 0.055, green: 0.085, blue: 0.12)
+    static let sidebarSecondary = Color(red: 0.075, green: 0.115, blue: 0.16)
+    static let cardBorder = Color.black.opacity(0.07)
+    static let softFill = Color.black.opacity(0.035)
+}
+
 // MARK: - App
 
 @main
@@ -2224,9 +2232,27 @@ struct RootView: View {
                     }
                     NavigationLink(destination: SettingsView()) { Label("Settings", systemImage: "gearshape") }
                 }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(spacing: 7) {
+                            Circle()
+                                .fill(model.status == nil ? Color.orange : Color.green)
+                                .frame(width: 8, height: 8)
+                            Text(model.status == nil ? "API Offline" : "API Connected")
+                                .font(.caption.weight(.semibold))
+                        }
+                        Text("Plex Curator v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown")")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 6)
+                }
             }
             .listStyle(SidebarListStyle())
             .frame(minWidth: 230, idealWidth: 240, maxWidth: 270)
+            .background(PlexTheme.sidebar)
+            .environment(\.colorScheme, .dark)
 
             DashboardView()
         }
@@ -2247,6 +2273,7 @@ struct RootView: View {
         .task {
             await checkOnboarding()
         }
+        .tint(PlexTheme.accent)
     }
 
     private func checkOnboarding() async {
@@ -2573,11 +2600,12 @@ struct PlexCardGroupBoxStyle: GroupBoxStyle {
             configuration.content
         }
         .padding(16)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                .stroke(PlexTheme.cardBorder, lineWidth: 1)
         )
+        .shadow(color: Color.black.opacity(0.035), radius: 8, y: 2)
     }
 }
 
@@ -2589,8 +2617,16 @@ struct StatusBadge: View {
             Circle().fill(good ? Color.green : Color.orange).frame(width: 8, height: 8)
             Text(text).font(.caption)
         }
-        .padding(.horizontal, 9).padding(.vertical, 5)
-        .background(Color.secondary.opacity(0.12)).clipShape(Capsule())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            (good ? Color.green : Color.orange).opacity(0.10),
+            in: Capsule()
+        )
+        .overlay(
+            Capsule()
+                .stroke((good ? Color.green : Color.orange).opacity(0.20), lineWidth: 1)
+        )
     }
 }
 
@@ -2798,6 +2834,8 @@ struct DashboardView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Dashboard")
+        .environment(\.colorScheme, .light)
+        .tint(PlexTheme.accent)
         .sheet(isPresented: $showCreateStation) {
             StationCreateView()
                 .environmentObject(model)
@@ -6837,6 +6875,8 @@ struct HealthView: View {
             }
         }
         .navigationTitle("Health")
+        .environment(\.colorScheme, .light)
+        .tint(PlexTheme.accent)
         .searchable(text: $searchText, prompt: "Search diagnostics")
         .toolbar {
             Picker("Show", selection: $filterMode) {
@@ -7563,6 +7603,8 @@ struct SettingsView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Settings")
+        .environment(\.colorScheme, .light)
+        .tint(PlexTheme.accent)
         .task {
             await loadPlexSettings()
         }
