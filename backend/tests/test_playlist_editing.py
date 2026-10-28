@@ -177,3 +177,30 @@ def test_playlist_bulk_remove_targets_exact_ids(monkeypatch):
         "/playlists/99/items/11",
         "/playlists/99/items/13",
     ]
+
+
+def test_playlist_copy_selection_preserves_source_order(monkeypatch):
+    items = [media(1, 11, "A"), media(2, 12, "B"), media(3, 13, "C")]
+    source = FakePlaylist(items=items)
+    plex = FakePlex()
+
+    def find_playlist(_plex, name):
+        if name == "Test Playlist":
+            return source
+        return None
+
+    monkeypatch.setattr(core, "connect", lambda: plex)
+    monkeypatch.setattr(core, "find_playlist", find_playlist)
+
+    result = api.playlist_copy_selection(
+        api.PlaylistSelectionCopyRequest(
+            current_name="Test Playlist",
+            new_name="Picked",
+            playlist_item_ids=[13, 11],
+        ),
+        _authorized=True,
+    )
+
+    assert result["ok"] is True
+    assert result["playlist"]["item_count"] == 2
+    assert [item.playlistItemID for item in plex.created[0][1]] == [11, 13]
