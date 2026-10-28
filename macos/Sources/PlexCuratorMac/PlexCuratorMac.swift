@@ -171,6 +171,10 @@ struct PlaylistItemMoveRequest: Encodable {
     let direction: String
 }
 
+struct PlaylistItemsMutationRequest: Encodable {
+    let playlistItemIds: [Int]
+}
+
 struct PlaylistMoveResponse: Decodable {
     let ok: Bool
     let title: String
@@ -502,6 +506,42 @@ struct RefreshAllResponse: Codable {
     let ok: Bool
     let dryRun: Bool
     let results: [RefreshAllResult]
+}
+
+struct BackupManifest: Codable, Hashable {
+    let appVersion: String?
+    let createdAt: String?
+    let reason: String?
+    let sourceConfigDir: String?
+    let files: [String]?
+}
+
+struct BackupEntry: Codable, Identifiable, Hashable {
+    var id: String { name }
+    let name: String
+    let path: String
+    let manifest: BackupManifest
+}
+
+struct BackupsResponse: Codable {
+    let backups: [BackupEntry]
+}
+
+struct BackupRequest: Encodable {
+    let reason: String
+}
+
+struct BackupMutationResponse: Codable {
+    let ok: Bool
+    let path: String
+    let name: String
+}
+
+struct BackupRestoreResponse: Codable {
+    let ok: Bool
+    let restoredBackup: String
+    let preRestoreBackup: String
+    let files: [String]
 }
 
 struct LogResponse: Codable {
@@ -1053,6 +1093,19 @@ final class APIClient {
         )
     }
 
+    func removePlaylistItems(name: String, playlistItemIds: [Int]) async throws -> PlaylistDeduplicateResponse {
+        var components = URLComponents()
+        components.path = "/api/v1/playlist/items"
+        components.queryItems = [URLQueryItem(name: "name", value: name)]
+        let body = try encoder.encode(PlaylistItemsMutationRequest(playlistItemIds: playlistItemIds))
+        return try await request(
+            components.string ?? "/api/v1/playlist/items",
+            method: "DELETE",
+            body: body,
+            authenticated: true
+        )
+    }
+
     func movePlaylistItem(name: String, playlistItemId: Int, direction: String) async throws -> PlaylistMoveResponse {
         var components = URLComponents()
         components.path = "/api/v1/playlist/item/move"
@@ -1359,6 +1412,30 @@ final class APIClient {
             body: body,
             authenticated: true,
             timeout: 300
+        )
+    }
+
+    func backups(limit: Int = 20) async throws -> [BackupEntry] {
+        let response: BackupsResponse = try await request("/api/v1/backups?limit=\(limit)")
+        return response.backups
+    }
+
+    func createBackup(reason: String) async throws -> BackupMutationResponse {
+        let body = try encoder.encode(BackupRequest(reason: reason))
+        return try await request(
+            "/api/v1/backups",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+    }
+
+    func restoreBackup(name: String) async throws -> BackupRestoreResponse {
+        let escaped = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
+        return try await request(
+            "/api/v1/backups/\(escaped)/restore",
+            method: "POST",
+            authenticated: true
         )
     }
 
@@ -1809,6 +1886,7 @@ final class AppModel: ObservableObject {
     @Published var doctor: DoctorResponse?
     @Published var history: [HistoryItem] = []
     @Published var buildHistory: [BuildHistoryItem] = []
+    @Published var backups: [BackupEntry] = []
     @Published var preview: PreviewResponse?
     @Published var diff: DiffResponse?
     @Published var log: LogResponse?
@@ -2222,6 +2300,19 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func removePlaylistItems(ids: [Int], from playlist: PlaylistSummary) async -> Bool {
+        guard !ids.isEmpty else { return false }
+        do {
+            let result = try await api.removePlaylistItems(name: playlist.title, playlistItemIds: ids)
+            message = "Removed \(result.removedCount) selected entr\(result.removedCount == 1 ? "y" : "ies") from \(playlist.title)."
+            error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
     func movePlaylistItem(_ item: MediaItem, in playlist: PlaylistSummary, direction: String) async -> Bool {
         guard let playlistItemId = item.playlistItemId else {
             error = "This playlist item does not include a Plex playlist item identifier."
@@ -2438,6 +2529,42 @@ final class AppModel: ObservableObject {
             error = nil
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    func loadBackups() async {
+        do {
+            backups = try await api.backups(limit: 50)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func createBackup(reason: String = "manual-gui") async -> Bool {
+        do {
+            _ = try await api.createBackup(reason: reason)
+            message = "Backup created."
+            await loadBackups()
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    func restoreBackup(_ backup: BackupEntry) async -> Bool {
+        do {
+            let result = try await api.restoreBackup(name: backup.name)
+            message = "Restored \(backup.name). Safety backup: \(result.preRestoreBackup)."
+            await refreshDashboard()
+            await loadSchedules()
+            await loadPlaylists()
+            await loadBackups()
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
         }
     }
 
