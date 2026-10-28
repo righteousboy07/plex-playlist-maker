@@ -2,6 +2,12 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.17
+
+- Introduced the approved dark navy, amber, and light-content visual system across the macOS interface.
+- Refined Dashboard, Health, Stations, Schedules, Playlists, Settings, and Automation layouts.
+- Added a generated multi-resolution film-reel app icon to Direct Download and App Store builds.
+
 ## 13.2.16
 
 - Fixed false Health failures for FastAPI and Uvicorn in packaged Direct Download installs.
