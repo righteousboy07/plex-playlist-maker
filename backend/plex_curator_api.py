@@ -174,6 +174,9 @@ class PlaylistCopyRequest(BaseModel):
     current_name: str = Field(min_length=1, max_length=120)
     new_name: str = Field(min_length=1, max_length=120)
 
+class PlaylistSelectionCopyRequest(PlaylistCopyRequest):
+    playlist_item_ids: list[int] = Field(min_length=1, max_length=1000)
+
 class ScheduleOptionsRequest(BaseModel):
     playlist: Optional[str] = Field(default=None, min_length=1, max_length=120)
     avoid_recent: int = Field(default=150, ge=0, le=100000)
@@ -1597,6 +1600,59 @@ def playlist_delete(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"ok": True, "title": name}
+
+@app.post("/api/v1/playlist/copy-selection")
+def playlist_copy_selection(
+    request: PlaylistSelectionCopyRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    playlist = core.find_playlist(plex, request.current_name)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    new_name = request.new_name.strip()
+    if core.find_playlist(plex, new_name):
+        raise HTTPException(status_code=409, detail=f'Playlist "{new_name}" already exists.')
+
+    requested = set(request.playlist_item_ids)
+    selected = [
+        item for item in playlist.items()
+        if getattr(item, "playlistItemID", None) in requested
+    ]
+    if not selected:
+        raise HTTPException(status_code=422, detail="No selected playlist items were found.")
+
+    missing = requested - {
+        int(getattr(item, "playlistItemID"))
+        for item in selected
+        if getattr(item, "playlistItemID", None) is not None
+    }
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Playlist item IDs not found: {', '.join(map(str, sorted(missing)[:10]))}",
+        )
+
+    try:
+        created = plex.createPlaylist(new_name, items=selected)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "playlist": {
+            "title": created.title,
+            "item_count": len(selected),
+            "rating_key": str(getattr(created, "ratingKey", "") or ""),
+            "playlist_type": getattr(created, "playlistType", None),
+            "smart": bool(getattr(created, "smart", False)),
+            "updated_at": (
+                getattr(created, "updatedAt", None).isoformat()
+                if getattr(created, "updatedAt", None) else None
+            ),
+        },
+    }
+
 
 @app.post("/api/v1/playlist/copy")
 def playlist_copy(
