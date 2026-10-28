@@ -3671,6 +3671,7 @@ struct StationEditorView: View {
     @State private var includeShows: String
     @State private var excludeShows: String
     @State private var validationMessage: String?
+    @State private var editorSection = 0
 
     init(station: Station, onSaved: @escaping (Station) -> Void) {
         original = station
@@ -3898,7 +3899,10 @@ struct StationEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Edit Station").font(.title2.bold())
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Edit Station").font(.title2.bold())
+                    Text(original.name).font(.caption).foregroundColor(.secondary)
+                }
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button("Save") { save() }
@@ -3907,7 +3911,18 @@ struct StationEditorView: View {
 
             Divider()
 
+            Picker("Configuration", selection: $editorSection) {
+                Text("Basics").tag(0)
+                Text("Programming").tag(1)
+                Text("Interstitials").tag(2)
+                Text("Filters").tag(3)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 12)
+
             Form {
+                if editorSection == 0 {
                 Section("Identity") {
                     TextField("Name", text: $name)
                     TextField("Description", text: $description)
@@ -3915,6 +3930,8 @@ struct StationEditorView: View {
                     Toggle("Enabled", isOn: $enabled)
                 }
 
+                }
+                if editorSection == 1 {
                 Section("Programming") {
                     Picker("Preset", selection: $preset) {
                         Text("All Cartoons").tag("all-cartoons")
@@ -3984,6 +4001,8 @@ struct StationEditorView: View {
                     Stepper("Special every: \(specialEvery)", value: $specialEvery, in: 1...1000)
                 }
 
+                }
+                if editorSection == 2 {
                 Section("Interstitials") {
                     Text("Choose Plex video playlists, then assign each pool a type and relative weight.")
                         .font(.caption)
@@ -4225,6 +4244,8 @@ struct StationEditorView: View {
                     }
                 }
 
+                }
+                if editorSection == 3 {
                 Section("Audience / Progress") {
                     Toggle("Kids-only filtering", isOn: $kidsOnly)
                     Toggle("Allow adult animation", isOn: $adult)
@@ -4246,6 +4267,7 @@ struct StationEditorView: View {
                         .foregroundColor(.secondary)
                 }
 
+                }
                 if let validationMessage {
                     Section {
                         Text(validationMessage).foregroundColor(.red)
@@ -4253,6 +4275,7 @@ struct StationEditorView: View {
                 }
             }
             .padding()
+            .formStyle(.grouped)
         }
         .task {
             if model.playlists.isEmpty {
