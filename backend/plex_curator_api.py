@@ -1936,6 +1936,25 @@ def create_backup(
         "name": path.name,
     }
 
+@app.post("/api/v1/backups/{backup_name}/restore")
+def restore_backup(
+    backup_name: str,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        result = core.restore_backup(backup_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        **result,
+    }
+
+
 @app.get("/api/v1/logs/{job}")
 def logs(
     job: str,
