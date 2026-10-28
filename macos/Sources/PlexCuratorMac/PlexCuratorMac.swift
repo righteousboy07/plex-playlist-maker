@@ -1796,6 +1796,12 @@ private struct DirectPlexSetup {
 }
 
 @MainActor
+struct AppIssue: Identifiable, Hashable {
+    let id = UUID()
+    let createdAt: Date
+    let message: String
+}
+
 final class AppModel: ObservableObject {
     @Published var status: StatusResponse?
     @Published var plexConfig: PlexConfigStatus?
@@ -1814,11 +1820,30 @@ final class AppModel: ObservableObject {
     @Published var mediaOrganizerScanning = false
     @Published var mediaOrganizerPresets: [MediaOrganizerPreset] = []
     @Published var analyzedMediaItems: [String: MediaOrganizerItem] = [:]
-    @Published var error: String?
+    @Published var issues: [AppIssue] = []
+    @Published var error: String? {
+        didSet {
+            guard let value = error?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { return }
+            recordIssue(value)
+        }
+    }
     @Published var message: String?
     @Published var loading = false
 
     let api = APIClient()
+
+    private func recordIssue(_ message: String) {
+        if issues.first?.message == message { return }
+        issues.insert(AppIssue(createdAt: Date(), message: message), at: 0)
+        if issues.count > 50 {
+            issues.removeLast(issues.count - 50)
+        }
+    }
+
+    func clearIssues() {
+        issues.removeAll()
+    }
 
     func bootstrap() async { await refreshDashboard() }
 
@@ -2533,6 +2558,20 @@ struct RootView: View {
 
                 Section("System") {
                     NavigationLink(destination: HealthView()) { Label("Health", systemImage: "heart.text.square") }
+                    NavigationLink(destination: IssuesView()) {
+                        HStack {
+                            Label("Issues", systemImage: "exclamationmark.bubble")
+                            Spacer()
+                            if !model.issues.isEmpty {
+                                Text("\(model.issues.count)")
+                                    .font(.caption2.bold())
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(PlexTheme.accent.opacity(0.2))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                    }
                     if BuildFlavor.current.supportsAutomationManagement {
                         NavigationLink(destination: AutomationView()) { Label("Automation", systemImage: "clock.badge.checkmark") }
                     }
@@ -8436,6 +8475,129 @@ struct LogsView: View {
             return .orange
         }
         return .primary
+    }
+}
+
+struct IssuesView: View {
+    @EnvironmentObject var model: AppModel
+
+    private var diagnosticProblems: [DoctorCheck] {
+        (model.doctor?.checks ?? []).filter {
+            let status = $0.status.lowercased()
+            return status != "pass" && status != "ok" && status != "healthy"
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Issues")
+                        .font(.title2.bold())
+                    Text("Recent app errors and current diagnostic warnings.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button("Run Diagnostics") {
+                    Task { await model.refreshHealth() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(PlexTheme.accent)
+
+                Button("Clear History") {
+                    model.clearIssues()
+                }
+                .disabled(model.issues.isEmpty)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+
+            Divider()
+
+            if model.issues.isEmpty && diagnosticProblems.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: 44))
+                        .foregroundColor(.green)
+                    Text("No issues need attention.")
+                        .font(.headline)
+                    Text("New API, decoding, playlist, station, schedule, and automation errors will appear here.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 460)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    if !model.issues.isEmpty {
+                        Section("Recent App Errors") {
+                            ForEach(model.issues) { issue in
+                                HStack(alignment: .top, spacing: 12) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.orange)
+                                        .padding(.top, 2)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(issue.message)
+                                            .textSelection(.enabled)
+                                        Text(issue.createdAt.formatted(date: .abbreviated, time: .standard))
+                                            .font(.caption2)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Button("Copy") {
+                                        copy(issue.message)
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+
+                    if !diagnosticProblems.isEmpty {
+                        Section("Current Diagnostics") {
+                            ForEach(diagnosticProblems) { check in
+                                HStack(alignment: .top, spacing: 12) {
+                                    Image(systemName: "wrench.and.screwdriver.fill")
+                                        .foregroundColor(check.status.lowercased().contains("fail") ? .red : .orange)
+                                        .padding(.top, 2)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        HStack {
+                                            Text(check.label)
+                                                .font(.headline)
+                                            Text(check.status.uppercased())
+                                                .font(.caption2.bold())
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Text(check.detail)
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                            .textSelection(.enabled)
+                                    }
+                                    Spacer()
+                                    Button("Copy") {
+                                        copy("\(check.label) — \(check.status)\n\(check.detail)")
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+                }
+                .listStyle(.inset)
+            }
+        }
+        .navigationTitle("Issues")
+        .tint(PlexTheme.accent)
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        model.message = "Copied issue details."
     }
 }
 
