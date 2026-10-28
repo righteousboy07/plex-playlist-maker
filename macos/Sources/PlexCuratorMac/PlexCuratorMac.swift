@@ -148,6 +148,17 @@ struct PlaylistDetailResponse: Codable {
     let items: [MediaItem]
 }
 
+struct PlaylistRenameRequest: Encodable {
+    let currentName: String
+    let newName: String
+}
+
+struct PlaylistMutationResponse: Decodable {
+    let ok: Bool
+    let playlist: PlaylistSummary?
+    let title: String?
+}
+
 struct MovieFilterRequest: Encodable {
     let library: String
     let genre: String?
@@ -956,6 +967,24 @@ final class APIClient {
     func playlists() async throws -> [PlaylistSummary] {
         let response: PlaylistsResponse = try await request("/api/v1/playlists")
         return response.playlists
+    }
+
+    func renamePlaylist(currentName: String, newName: String) async throws -> PlaylistSummary {
+        let body = try encoder.encode(PlaylistRenameRequest(currentName: currentName, newName: newName))
+        let response: PlaylistMutationResponse = try await request(
+            "/api/v1/playlist", method: "PUT", body: body, authenticated: true
+        )
+        guard let playlist = response.playlist else { throw APIClientError.invalidResponse }
+        return playlist
+    }
+
+    func deletePlaylist(name: String) async throws {
+        var components = URLComponents()
+        components.path = "/api/v1/playlist"
+        components.queryItems = [URLQueryItem(name: "name", value: name)]
+        let _: PlaylistMutationResponse = try await request(
+            components.string ?? "/api/v1/playlist", method: "DELETE", authenticated: true
+        )
     }
 
     func playlistDetail(name: String) async throws -> PlaylistDetailResponse {
@@ -2009,6 +2038,33 @@ final class AppModel: ObservableObject {
             error = nil
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    func renamePlaylist(_ playlist: PlaylistSummary, to newName: String) async -> PlaylistSummary? {
+        do {
+            let updated = try await api.renamePlaylist(currentName: playlist.title, newName: newName)
+            if let index = playlists.firstIndex(where: { $0.id == playlist.id }) { playlists[index] = updated }
+            playlists.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            message = "Renamed \(playlist.title) to \(updated.title)."
+            error = nil
+            return updated
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func deletePlaylist(_ playlist: PlaylistSummary) async -> Bool {
+        do {
+            try await api.deletePlaylist(name: playlist.title)
+            playlists.removeAll { $0.id == playlist.id }
+            message = "Deleted playlist \(playlist.title)."
+            error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
         }
     }
 
@@ -5571,6 +5627,9 @@ struct ScheduleDetailView: View {
     @State private var followWatchProgress = true
     @State private var preview: SchedulePreviewResponse?
     @State private var isLoading = false
+    @State private var showRename = false
+    @State private var renameText = ""
+    @State private var confirmDelete = false
     @State private var confirmBuild = false
     @State private var showEditor = false
 
@@ -6197,7 +6256,8 @@ struct PlaylistsView: View {
 
 struct PlaylistDetailView: View {
     @EnvironmentObject var model: AppModel
-    let playlist: PlaylistSummary
+    @Environment(\.dismiss) private var dismiss
+    @State private var playlist: PlaylistSummary
 
     @State private var detail: PlaylistDetailResponse?
     @State private var searchText = ""
@@ -6299,6 +6359,11 @@ struct PlaylistDetailView: View {
         GridItem(.adaptive(minimum: 130, maximum: 190), spacing: 12)
     ]
 
+    init(playlist: PlaylistSummary) {
+        _playlist = State(initialValue: playlist)
+        _renameText = State(initialValue: playlist.title)
+    }
+
     var body: some View {
         Group {
             if isLoading && detail == nil {
@@ -6353,9 +6418,12 @@ struct PlaylistDetailView: View {
                     }
                     .frame(width: 130)
 
+                    Button("Rename") { renameText = playlist.title; showRename = true }
+                        .disabled(playlist.smart)
+                    Button("Delete", role: .destructive) { confirmDelete = true }
                     Button("Reload") { Task { await load() } }
-                .buttonStyle(.borderedProminent)
-                .tint(PlexTheme.accent)
+                        .buttonStyle(.borderedProminent)
+                        .tint(PlexTheme.accent)
                 }
                 .overlay(alignment: .topTrailing) {
                     Text("\(filteredItems.count) shown")
@@ -6372,6 +6440,39 @@ struct PlaylistDetailView: View {
             }
         }
         .navigationTitle(playlist.title)
+        .sheet(isPresented: $showRename) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Rename Playlist").font(.title2.bold())
+                TextField("Playlist name", text: $renameText)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showRename = false }
+                    Button("Rename") {
+                        Task {
+                            let value = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !value.isEmpty, let updated = await model.renamePlaylist(playlist, to: value) {
+                                playlist = updated
+                                showRename = false
+                                await load()
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent).tint(PlexTheme.accent)
+                    .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || renameText == playlist.title)
+                }
+            }
+            .padding(20)
+            .frame(width: 420)
+        }
+        .confirmationDialog("Delete \(playlist.title)?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete Playlist", role: .destructive) {
+                Task { if await model.deletePlaylist(playlist) { dismiss() } }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This removes the playlist from Plex. The underlying media files are not deleted.")
+        }
         .task { await load() }
     }
 
