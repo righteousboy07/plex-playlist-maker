@@ -1463,6 +1463,66 @@ def create_backup(reason="manual"):
     )
     return target
 
+def restore_backup(name):
+    ensure_config()
+    if not name or Path(name).name != name:
+        raise ValueError("Backup name is invalid.")
+
+    source = BACKUP_DIR / name
+    if not source.is_dir():
+        raise FileNotFoundError(f"Backup not found: {name}")
+
+    manifest_path = source / "manifest.json"
+    if not manifest_path.is_file():
+        raise RuntimeError("Backup manifest is missing.")
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    files = manifest.get("files") or []
+    allowed_names = {
+        CONFIG_FILE.name,
+        PRESETS_FILE.name,
+        SCHEDULES_FILE.name,
+        STATIONS_FILE.name,
+        MEDIA_ORGANIZER_PRESETS_FILE.name,
+        STATE_DB.name,
+    }
+    if not files:
+        raise RuntimeError("Backup contains no restorable files.")
+    if any(Path(filename).name != filename or filename not in allowed_names for filename in files):
+        raise RuntimeError("Backup manifest contains an unsupported file.")
+
+    # Always snapshot the current state before restoring an older one.
+    pre_restore = create_backup("pre-restore")
+
+    restored = []
+    for filename in files:
+        src = source / filename
+        if not src.is_file():
+            raise RuntimeError(f"Backup payload missing: {filename}")
+
+        destination = CONFIG_DIR / filename
+        temp = destination.with_name(destination.name + ".restore-tmp")
+        shutil.copy2(src, temp)
+
+        if filename == STATE_DB.name:
+            with sqlite3.connect(temp) as connection:
+                result = connection.execute("PRAGMA quick_check").fetchone()
+                if not result or result[0] != "ok":
+                    temp.unlink(missing_ok=True)
+                    raise RuntimeError("Backup SQLite integrity check failed")
+
+        temp.replace(destination)
+        if filename == CONFIG_FILE.name:
+            os.chmod(destination, 0o600)
+        restored.append(filename)
+
+    return {
+        "restored_backup": name,
+        "pre_restore_backup": pre_restore.name,
+        "files": restored,
+    }
+
+
 def cmd_backup(args):
     target = create_backup(args.reason or "manual")
     print(f"Backup created: {target}")
