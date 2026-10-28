@@ -224,7 +224,7 @@ def test_playlist_drag_reorder_moves_before_target(monkeypatch):
     )
 
     assert result["moved"] is True
-    assert playlist.moved[-1] == (14, 11)
+    assert playlist.moves[-1] == (14, 11)
 
 
 def test_playlist_drag_reorder_to_first_uses_no_anchor(monkeypatch):
@@ -245,4 +245,4 @@ def test_playlist_drag_reorder_to_first_uses_no_anchor(monkeypatch):
     )
 
     assert result["moved"] is True
-    assert playlist.moved[-1] == (13, None)
+    assert playlist.moves[-1] == (13, None)
