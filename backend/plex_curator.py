@@ -2609,6 +2609,12 @@ def load_schedules():
     ensure_config()
     return json.loads(SCHEDULES_FILE.read_text(encoding="utf-8"))
 
+def save_schedules(schedules):
+    ensure_config()
+    temp = SCHEDULES_FILE.with_suffix(".json.tmp")
+    temp.write_text(json.dumps(schedules, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temp.replace(SCHEDULES_FILE)
+
 def cmd_schedule_list(_args):
     for n, c in load_schedules().items():
         print(f"{n:22} {c.get('description','')}")
