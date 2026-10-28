@@ -2274,6 +2274,7 @@ struct RootView: View {
             await checkOnboarding()
         }
         .tint(PlexTheme.accent)
+        .environment(\.colorScheme, .light)
     }
 
     private func checkOnboarding() async {
@@ -3172,19 +3173,56 @@ struct StationsView: View {
     }
 
     var body: some View {
-        List(filteredStations) { station in
-            NavigationLink(destination: StationDetailView(station: station)) {
-                HStack {
-                    Image(systemName: station.enabled ? "play.tv.fill" : "pause.tv")
-                    VStack(alignment: .leading) {
-                        Text(station.name).font(.headline)
-                        Text(station.description ?? station.playlist)
-                            .font(.caption).foregroundColor(.secondary).lineLimit(1)
-                    }
-                    Spacer()
-                    Text("\(station.total) items").foregroundColor(.secondary)
-                }.padding(.vertical, 3)
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Stations")
+                        .font(.title2.bold())
+                    Text("Manage programmed Plex channels and generated lineups.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                StatusBadge(
+                    text: "\(model.stations.filter(\.enabled).count) Enabled",
+                    good: !model.stations.filter(\.enabled).isEmpty
+                )
             }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+
+            Divider()
+
+            List(filteredStations) { station in
+                NavigationLink(destination: StationDetailView(station: station)) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(PlexTheme.accent.opacity(station.enabled ? 0.14 : 0.06))
+                            Image(systemName: station.enabled ? "play.tv.fill" : "pause.tv")
+                                .foregroundColor(station.enabled ? PlexTheme.accent : .secondary)
+                        }
+                        .frame(width: 36, height: 36)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(station.name).font(.headline)
+                            Text(station.description ?? station.playlist)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Text("\(station.total) items")
+                            Text(station.enabled ? "Enabled" : "Disabled")
+                                .font(.caption2)
+                                .foregroundColor(station.enabled ? .green : .secondary)
+                        }
+                    }
+                    .padding(.vertical, 5)
+                }
+            }
+            .listStyle(InsetListStyle())
         }
         .navigationTitle("Stations")
         .searchable(text: $searchText, prompt: "Search stations or shows")
@@ -5270,14 +5308,37 @@ struct SchedulesView: View {
     }
 
     var body: some View {
-        List(filteredSchedules) { schedule in
-            NavigationLink(destination: ScheduleDetailView(schedule: schedule)) {
-                HStack(spacing: 14) {
-                    Image(systemName: "calendar")
-                        .font(.title2)
-                        .frame(width: 28)
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Schedules")
+                        .font(.title2.bold())
+                    Text("Build time-based programming blocks and recurring lineups.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Text("\(model.schedules.count) schedules")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
 
-                    VStack(alignment: .leading, spacing: 4) {
+            Divider()
+
+            List(filteredSchedules) { schedule in
+                NavigationLink(destination: ScheduleDetailView(schedule: schedule)) {
+                    HStack(spacing: 14) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(PlexTheme.accent.opacity(0.12))
+                            Image(systemName: "calendar")
+                                .foregroundColor(PlexTheme.accent)
+                        }
+                        .frame(width: 36, height: 36)
+
+                        VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(schedule.id.replacingOccurrences(of: "-", with: " ").capitalized)
                                 .font(.headline)
@@ -5304,8 +5365,10 @@ struct SchedulesView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-                .padding(.vertical, 5)
+                    .padding(.vertical, 5)
+                }
             }
+            .listStyle(InsetListStyle())
         }
         .navigationTitle("Schedules")
         .searchable(text: $searchText, prompt: "Search schedules or blocks")
@@ -5797,6 +5860,7 @@ struct PlaylistsView: View {
                     .padding(.vertical, 5)
                 }
             }
+            .listStyle(InsetListStyle())
         }
         .navigationTitle("Playlists")
         .searchable(text: $searchText, prompt: "Search playlists")
@@ -5842,7 +5906,10 @@ struct PlaylistsView: View {
             Text("\(value)")
                 .font(.title3.bold())
         }
-        .frame(minWidth: 70, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(PlexTheme.softFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private func playlistBadge(_ text: String) -> some View {
@@ -6962,6 +7029,7 @@ struct AutomationView: View {
             }
         }
         .navigationTitle("Automation")
+        .groupBoxStyle(PlexCardGroupBoxStyle())
     }
 
     private var storeAutomationView: some View {
@@ -7608,6 +7676,7 @@ struct SettingsView: View {
         .task {
             await loadPlexSettings()
         }
+        .groupBoxStyle(PlexCardGroupBoxStyle())
     }
 
     private func loadPlexSettings() async {
