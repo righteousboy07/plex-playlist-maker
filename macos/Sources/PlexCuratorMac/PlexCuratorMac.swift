@@ -1967,6 +1967,9 @@ final class AppModel: ObservableObject {
             if let recentBuilds = try? await api.buildHistory(limit: 8) {
                 buildHistory = recentBuilds
             }
+            if let recentBackups = try? await api.backups(limit: 10) {
+                backups = recentBackups
+            }
             if BuildFlavor.current.supportsLaunchAgentManagement,
                let jobs = try? await api.automationJobs() {
                 automationJobs = jobs
@@ -3307,6 +3310,7 @@ struct DashboardView: View {
                     }
 
                     quickActions(status)
+                    commandCenter
 
                     if let lastBulkResult {
                         bulkResultSection(lastBulkResult)
@@ -3438,6 +3442,18 @@ struct DashboardView: View {
                 detail: "\(model.doctor?.failures ?? 0) failures • \(model.doctor?.warnings ?? 0) warnings",
                 icon: "heart.text.square"
             )
+            metricCard(
+                title: "Issues",
+                value: "\(model.issues.count)",
+                detail: model.issues.isEmpty ? "no recent app errors" : "recent errors retained",
+                icon: "exclamationmark.bubble"
+            )
+            metricCard(
+                title: "Backups",
+                value: "\(model.backups.count)",
+                detail: model.backups.first?.name ?? "no backup loaded",
+                icon: "externaldrive.badge.timemachine"
+            )
         }
     }
 
@@ -3568,6 +3584,12 @@ struct DashboardView: View {
                     NavigationLink(destination: HealthView()) {
                         Label("Health", systemImage: "heart.text.square")
                     }
+                    NavigationLink(destination: IssuesView()) {
+                        Label("Issues", systemImage: "exclamationmark.bubble")
+                    }
+                    NavigationLink(destination: BackupsView()) {
+                        Label("Backups", systemImage: "externaldrive.badge.timemachine")
+                    }
                     NavigationLink(destination: MediaOrganizerView()) {
                         Label("Media Organizer", systemImage: "folder.badge.gearshape")
                     }
@@ -3576,6 +3598,74 @@ struct DashboardView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var commandCenter: some View {
+        GroupBox("Command Center") {
+            VStack(spacing: 0) {
+                dashboardStatusRow(
+                    icon: "tv",
+                    title: "Enabled Stations",
+                    value: "\(model.stations.filter(\.enabled).count)",
+                    detail: "\(model.stations.count) configured"
+                )
+                Divider()
+                dashboardStatusRow(
+                    icon: "exclamationmark.bubble",
+                    title: "Recent Issues",
+                    value: "\(model.issues.count)",
+                    detail: model.issues.first?.message ?? "No recent app errors"
+                )
+                Divider()
+                dashboardStatusRow(
+                    icon: "externaldrive.badge.timemachine",
+                    title: "Latest Backup",
+                    value: model.backups.first.map { $0.manifest.appVersion.map { "v\($0)" } ?? "Saved" } ?? "None",
+                    detail: model.backups.first?.name ?? "Create a backup before major changes"
+                )
+                Divider()
+                let failedJobs = model.automationJobs.filter { ($0.lastExitCode ?? 0) != 0 }
+                dashboardStatusRow(
+                    icon: "clock.badge.checkmark",
+                    title: "Automation",
+                    value: failedJobs.isEmpty ? "Healthy" : "\(failedJobs.count) failed",
+                    detail: "\(loadedAutomationCount) of \(model.automationJobs.count) jobs loaded"
+                )
+                Divider()
+                dashboardStatusRow(
+                    icon: "clock.arrow.circlepath",
+                    title: "Recent Builds",
+                    value: "\(model.buildHistory.count)",
+                    detail: model.buildHistory.first?.displayDate ?? "No recorded builds yet"
+                )
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func dashboardStatusRow(
+        icon: String,
+        title: String,
+        value: String,
+        detail: String
+    ) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .frame(width: 22)
+                .foregroundColor(PlexTheme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Text(value)
+                .font(.subheadline.bold())
+        }
+        .padding(.vertical, 8)
     }
 
     private func bulkResultSection(_ result: RefreshAllResponse) -> some View {
