@@ -164,6 +164,9 @@ class PlaylistRenameRequest(BaseModel):
 class PlaylistItemMutationRequest(BaseModel):
     playlist_item_id: int = Field(gt=0)
 
+class PlaylistItemsMutationRequest(BaseModel):
+    playlist_item_ids: list[int] = Field(min_length=1, max_length=1000)
+
 class PlaylistItemMoveRequest(PlaylistItemMutationRequest):
     direction: str = Field(pattern="^(up|down)$")
 
@@ -1659,6 +1662,48 @@ def playlist_remove_item(
         "title": playlist.title,
         "removed_count": 1,
         "item_count": max(0, len(items) - 1),
+    }
+
+
+@app.delete("/api/v1/playlist/items")
+def playlist_remove_items(
+    name: str = Query(min_length=1),
+    request: PlaylistItemsMutationRequest = ...,
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    playlist = core.find_playlist(plex, name)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    if bool(getattr(playlist, "smart", False)):
+        raise HTTPException(status_code=422, detail="Smart playlists cannot be edited item-by-item.")
+
+    items = list(playlist.items())
+    available = {
+        int(getattr(item, "playlistItemID"))
+        for item in items
+        if getattr(item, "playlistItemID", None) is not None
+    }
+    requested = list(dict.fromkeys(request.playlist_item_ids))
+    missing = [value for value in requested if value not in available]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Playlist item IDs not found: {', '.join(map(str, missing[:10]))}",
+        )
+
+    try:
+        for playlist_item_id in requested:
+            key = f"{playlist.key}/items/{playlist_item_id}"
+            playlist._server.query(key, method=playlist._server._session.delete)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "title": playlist.title,
+        "removed_count": len(requested),
+        "item_count": max(0, len(items) - len(requested)),
     }
 
 
