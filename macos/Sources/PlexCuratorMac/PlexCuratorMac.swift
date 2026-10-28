@@ -4275,7 +4275,6 @@ struct StationEditorView: View {
                 }
             }
             .padding()
-            .formStyle(.grouped)
         }
         .task {
             if model.playlists.isEmpty {
