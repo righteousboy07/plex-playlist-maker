@@ -7696,6 +7696,28 @@ struct SettingsView: View {
                             Label("The local API and Plex server are responding.", systemImage: "checkmark.circle")
                                 .font(.caption)
                         }
+                        if model.status == nil {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Recovery steps")
+                                    .font(.subheadline.bold())
+                                Text(BuildFlavor.current.isAppStore
+                                     ? "Quit and reopen Plex Curator to restart its bundled backend. If the problem continues, review the application diagnostics and confirm access permissions."
+                                     : "Open Automation to check the API service, or quit and reopen Plex Curator. If the service still cannot start, inspect the installer health report in ~/Library/Logs/PlexCurator/installer-health.txt.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                if !BuildFlavor.current.isAppStore {
+                                    Button("Reveal Installer Health Report") {
+                                        let report = FileManager.default.homeDirectoryForCurrentUser
+                                            .appendingPathComponent("Library/Logs/PlexCurator/installer-health.txt")
+                                        if FileManager.default.fileExists(atPath: report.path) {
+                                            NSWorkspace.shared.activateFileViewerSelecting([report])
+                                        } else {
+                                            model.error = "Installer health report not found. Run the installer or review the application logs."
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if let report = model.doctor {
                             setting("Diagnostics", report.result)
                             setting("Warnings", String(report.warnings))
