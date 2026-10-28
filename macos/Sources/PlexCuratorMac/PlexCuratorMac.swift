@@ -803,6 +803,23 @@ final class APIClient {
             return try decoder.decode(T.self, from: data)
         } catch let e as APIClientError {
             throw e
+        } catch let decoding as DecodingError {
+            let path = decoding.codingPath.map(\.stringValue).joined(separator: ".")
+            let location = path.isEmpty ? "response root" : path
+            let detail: String
+            switch decoding {
+            case .keyNotFound(let key, let context):
+                detail = "missing key \\(key.stringValue) at \\(location): \\(context.debugDescription)"
+            case .typeMismatch(let type, let context):
+                detail = "expected \\(type) at \\(location): \\(context.debugDescription)"
+            case .valueNotFound(let type, let context):
+                detail = "missing \\(type) value at \\(location): \\(context.debugDescription)"
+            case .dataCorrupted(let context):
+                detail = "invalid data at \\(location): \\(context.debugDescription)"
+            @unknown default:
+                detail = decoding.localizedDescription
+            }
+            throw APIClientError.transport("Could not read \\(path.isEmpty ? \"API response\" : path): \\(detail)")
         } catch {
             throw APIClientError.transport(error.localizedDescription)
         }
@@ -1867,6 +1884,41 @@ final class AppModel: ObservableObject {
             self.error = error.localizedDescription
             return nil
         }
+    }
+
+    func setStationEnabled(_ station: Station, enabled: Bool) async -> Station? {
+        let request = StationUpdateRequest(
+            name: station.name,
+            description: station.description ?? "",
+            enabled: enabled,
+            playlist: station.playlist,
+            preset: station.preset,
+            yearMin: station.yearMin,
+            yearMax: station.yearMax,
+            kidsOnly: station.kidsOnly,
+            adult: station.adult,
+            perShow: station.perShow,
+            total: station.total,
+            avoidRecent: station.avoidRecent,
+            minShowGap: station.minShowGap,
+            seasonal: station.seasonal,
+            specialEvery: station.specialEvery,
+            interstitialPlaylists: station.interstitialPlaylists,
+            interstitialPools: station.interstitialPools,
+            interstitialSequence: station.interstitialSequence ?? [],
+            interstitialBreakPattern: station.interstitialBreakPattern ?? [],
+            interstitialEvery: station.interstitialEvery,
+            interstitialCount: station.interstitialCount,
+            runtimeBlockMinutes: station.runtimeBlockMinutes,
+            runtimeBlockCount: station.runtimeBlockCount,
+            unwatched: station.unwatched,
+            syncWatchProgress: station.syncWatchProgress,
+            includeShows: station.includeShows,
+            excludeShows: station.excludeShows
+        )
+        guard let updated = await updateStation(station, request: request) else { return nil }
+        message = "\\(updated.name) is now \\(updated.enabled ? \"enabled\" : \"disabled\")."
+        return updated
     }
 
     func cloneStation(_ station: Station, request: StationCloneRequest) async -> Station? {
@@ -3235,6 +3287,7 @@ struct StationsView: View {
             .listStyle(InsetListStyle())
         }
         .navigationTitle("Stations")
+        .tint(PlexTheme.accent)
         .searchable(text: $searchText, prompt: "Search stations or shows")
         .toolbar {
             Picker("Status", selection: $statusFilter) {
@@ -3268,6 +3321,7 @@ struct StationDetailView: View {
     @State private var showEditor = false
     @State private var showClone = false
     @State private var confirmDelete = false
+    @State private var changingEnabledState = false
 
     init(station: Station) {
         _station = State(initialValue: station)
@@ -3284,6 +3338,18 @@ struct StationDetailView: View {
                     Text(station.playlist).foregroundColor(.secondary)
                 }
                 Spacer()
+                Button(station.enabled ? "Disable" : "Enable") {
+                    changingEnabledState = true
+                    Task {
+                        if let updated = await model.setStationEnabled(station, enabled: !station.enabled) {
+                            station = updated
+                        }
+                        changingEnabledState = false
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(station.enabled ? Color.orange : Color.green)
+                .disabled(changingEnabledState)
                 Button("Edit") { showEditor = true }
                 Button("Duplicate") { showClone = true }
                 Button("Preview") { tab = 1; Task { await model.loadPreview(station) } }
@@ -5421,6 +5487,7 @@ struct SchedulesView: View {
             .listStyle(InsetListStyle())
         }
         .navigationTitle("Schedules")
+        .tint(PlexTheme.accent)
         .searchable(text: $searchText, prompt: "Search schedules or blocks")
         .toolbar {
             Button("Reload") {
@@ -5913,6 +5980,7 @@ struct PlaylistsView: View {
             .listStyle(InsetListStyle())
         }
         .navigationTitle("Playlists")
+        .tint(PlexTheme.accent)
         .searchable(text: $searchText, prompt: "Search playlists")
         .toolbar {
             Picker("Filter", selection: $filterMode) {
@@ -6144,6 +6212,8 @@ struct PlaylistDetailView: View {
                     .frame(width: 130)
 
                     Button("Reload") { Task { await load() } }
+                .buttonStyle(.borderedProminent)
+                .tint(PlexTheme.accent)
                 }
                 .overlay(alignment: .topTrailing) {
                     Text("\(filteredItems.count) shown")
