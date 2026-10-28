@@ -103,6 +103,9 @@ This project uses milestone tags for major Plex Curator releases.
 - Added a Backups center with Create, Reveal, Reload, and Restore controls in the macOS sidebar.
 - Added validated backup restoration that only accepts Plex Curator-owned files, checks SQLite integrity, rejects unsafe manifest paths, and automatically creates a pre-restore safety snapshot.
 - Added regression coverage for bulk playlist removal and safe backup restoration.
+- Fixed API decoding diagnostics so field paths and type errors render their real values instead of escaped Swift interpolation placeholders.
+- Added Save Selection As New Playlist for multi-select workflows while preserving source playlist order.
+- Expanded the Dashboard into a command center with Issues and Backups metrics, latest backup status, automation health, station counts, recent builds, and direct Issues/Backups navigation.
 - App Store Phase 2/3: embedded a signed sandbox-inheriting backend helper inside the Store app, added container-aware backend/config/log paths, separated Direct (8765) and Store (8766) localhost APIs for side-by-side installs, disabled external LaunchAgent behavior in Store mode, and added CI startup/signing verification for the bundled runtime.
 - Added a shared Direct/App Store distribution architecture: compile-time build flavors, App Sandbox entitlements, direct-only UI capability gating, a sandboxed App Store build/CI target, and an explicit App Store migration roadmap without forking the product codebase.
 - Added a native first-run onboarding wizard that walks fresh installs through Plex connection and verification, while existing configured users bypass it automatically.
