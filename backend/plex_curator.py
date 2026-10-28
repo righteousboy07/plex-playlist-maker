@@ -1435,6 +1435,22 @@ def create_backup(reason="manual"):
         backup_sqlite(STATE_DB, dest)
         copied.append(dest.name)
 
+    # Verify every listed backup payload before confirming success. A backup
+    # manifest alone is not proof that the data was copied intact.
+    for filename in copied:
+        destination = target / filename
+        if not destination.is_file():
+            raise RuntimeError(f"Backup payload missing: {filename}")
+        if filename == STATE_DB.name:
+            with sqlite3.connect(destination) as connection:
+                result = connection.execute("PRAGMA quick_check").fetchone()
+                if not result or result[0] != "ok":
+                    raise RuntimeError("Backup SQLite integrity check failed")
+        else:
+            source = CONFIG_DIR / filename
+            if source.stat().st_size != destination.stat().st_size:
+                raise RuntimeError(f"Backup payload size mismatch: {filename}")
+
     (target / "manifest.json").write_text(
         json.dumps({
             "app_version": APP_VERSION,
