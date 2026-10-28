@@ -251,6 +251,25 @@ struct ScheduleBuildRequest: Encodable {
     let replace: Bool
 }
 
+struct ScheduleBlockUpdateRequest: Encodable {
+    let name: String
+    let type: String
+    let preset: String?
+    let minutes: Int
+    let seasonal: String?
+}
+
+struct ScheduleUpdateRequest: Encodable {
+    let description: String
+    let playlist: String
+    let blocks: [ScheduleBlockUpdateRequest]
+}
+
+struct ScheduleUpdateResponse: Decodable {
+    let ok: Bool
+    let schedule: ScheduleSummary
+}
+
 struct ScheduleBlockPreview: Codable, Identifiable {
     var id: Int { index }
     let index: Int
@@ -966,6 +985,14 @@ final class APIClient {
     func schedules() async throws -> [ScheduleSummary] {
         let response: SchedulesResponse = try await request("/api/v1/schedules")
         return response.schedules
+    }
+
+    func updateSchedule(id: String, request value: ScheduleUpdateRequest) async throws -> ScheduleSummary {
+        let body = try encoder.encode(value)
+        let response: ScheduleUpdateResponse = try await request(
+            "/api/v1/schedules/\(id)", method: "PUT", body: body, authenticated: true
+        )
+        return response.schedule
     }
 
     func schedulePreview(
@@ -1960,6 +1987,19 @@ final class AppModel: ObservableObject {
             error = nil
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    func updateSchedule(_ schedule: ScheduleSummary, request: ScheduleUpdateRequest) async -> ScheduleSummary? {
+        do {
+            let updated = try await api.updateSchedule(id: schedule.id, request: request)
+            if let index = schedules.firstIndex(where: { $0.id == updated.id }) { schedules[index] = updated }
+            message = "Saved \(updated.id.replacingOccurrences(of: "-", with: " ").capitalized)."
+            error = nil
+            return updated
+        } catch {
+            self.error = error.localizedDescription
+            return nil
         }
     }
 
@@ -5519,7 +5559,7 @@ struct SchedulesView: View {
 
 struct ScheduleDetailView: View {
     @EnvironmentObject var model: AppModel
-    let schedule: ScheduleSummary
+    @State private var schedule: ScheduleSummary
 
     @State private var playlistName: String
     @State private var replaceExisting = true
@@ -5532,9 +5572,10 @@ struct ScheduleDetailView: View {
     @State private var preview: SchedulePreviewResponse?
     @State private var isLoading = false
     @State private var confirmBuild = false
+    @State private var showEditor = false
 
     init(schedule: ScheduleSummary) {
-        self.schedule = schedule
+        _schedule = State(initialValue: schedule)
         _playlistName = State(initialValue: schedule.playlist)
     }
 
@@ -5562,6 +5603,13 @@ struct ScheduleDetailView: View {
                             }
                         }
                         .font(.caption)
+                    }
+
+                    HStack {
+                        Button("Edit Schedule") { showEditor = true }
+                            .buttonStyle(.borderedProminent)
+                            .tint(PlexTheme.accent)
+                        Spacer()
                     }
 
                     GroupBox("Programming Blocks") {
@@ -5678,6 +5726,14 @@ struct ScheduleDetailView: View {
             .frame(minWidth: 520)
         }
         .navigationTitle(schedule.playlist)
+        .sheet(isPresented: $showEditor) {
+            ScheduleEditorView(schedule: schedule) { updated in
+                schedule = updated
+                playlistName = updated.playlist
+            }
+            .environmentObject(model)
+            .frame(minWidth: 640, minHeight: 620)
+        }
         .alert(isPresented: $confirmBuild) {
             Alert(
                 title: Text(replaceExisting ? "Build and replace playlist?" : "Build playlist?"),
@@ -5771,6 +5827,92 @@ struct ScheduleDetailView: View {
             model.error = nil
         } catch {
             model.error = error.localizedDescription
+        }
+    }
+}
+
+struct ScheduleEditorView: View {
+    @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    let original: ScheduleSummary
+    let onSaved: (ScheduleSummary) -> Void
+    @State private var description: String
+    @State private var playlist: String
+    @State private var blocks: [BlockDraft]
+    @State private var saving = false
+
+    struct BlockDraft: Identifiable {
+        let id = UUID()
+        var name: String
+        var type: String
+        var preset: String
+        var minutes: Int
+        var seasonal: String
+    }
+
+    init(schedule: ScheduleSummary, onSaved: @escaping (ScheduleSummary) -> Void) {
+        original = schedule
+        self.onSaved = onSaved
+        _description = State(initialValue: schedule.description)
+        _playlist = State(initialValue: schedule.playlist)
+        _blocks = State(initialValue: schedule.blocks.map {
+            BlockDraft(name: $0.name, type: $0.type ?? "cartoons", preset: $0.preset ?? "", minutes: $0.minutes, seasonal: $0.seasonal ?? "")
+        })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Edit Schedule").font(.title2.bold())
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button(saving ? "Saving…" : "Save") { save() }
+                    .buttonStyle(.borderedProminent).tint(PlexTheme.accent)
+                    .disabled(saving || playlist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || blocks.isEmpty)
+            }
+            Form {
+                TextField("Description", text: $description)
+                TextField("Plex playlist", text: $playlist)
+                Section("Programming Blocks") {
+                    ForEach($blocks) { $block in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                TextField("Block name", text: $block.name)
+                                Button(role: .destructive) { blocks.removeAll { $0.id == block.id } } label: { Image(systemName: "trash") }
+                                    .disabled(blocks.count == 1)
+                            }
+                            Picker("Type", selection: $block.type) { Text("Cartoons").tag("cartoons"); Text("Movie").tag("movie") }
+                            TextField("Preset", text: $block.preset)
+                            Stepper("Minutes: \(block.minutes)", value: $block.minutes, in: 1...1440, step: 5)
+                            Picker("Seasonal override", selection: $block.seasonal) {
+                                Text("Use default").tag(""); Text("Automatic").tag("auto"); Text("None").tag("none"); Text("Halloween").tag("halloween"); Text("Christmas").tag("christmas")
+                            }
+                        }.padding(.vertical, 6)
+                    }
+                    Button("Add Block") { blocks.append(BlockDraft(name: "New Block", type: "cartoons", preset: "all-cartoons", minutes: 60, seasonal: "")) }
+                }
+            }
+        }.padding(20)
+    }
+
+    private func save() {
+        saving = true
+        let request = ScheduleUpdateRequest(
+            description: description.trimmingCharacters(in: .whitespacesAndNewlines),
+            playlist: playlist.trimmingCharacters(in: .whitespacesAndNewlines),
+            blocks: blocks.map {
+                ScheduleBlockUpdateRequest(
+                    name: $0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Block" : $0.name.trimmingCharacters(in: .whitespacesAndNewlines),
+                    type: $0.type,
+                    preset: $0.preset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0.preset.trimmingCharacters(in: .whitespacesAndNewlines),
+                    minutes: $0.minutes,
+                    seasonal: $0.seasonal.isEmpty ? nil : $0.seasonal
+                )
+            }
+        )
+        Task {
+            if let updated = await model.updateSchedule(original, request: request) { onSaved(updated); dismiss() }
+            saving = false
         }
     }
 }
