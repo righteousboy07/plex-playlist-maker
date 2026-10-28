@@ -1584,6 +1584,51 @@ def playlist_delete(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"ok": True, "title": name}
 
+@app.post("/api/v1/playlist/deduplicate")
+def playlist_deduplicate(
+    name: str = Query(min_length=1),
+    _authorized: bool = Depends(require_api_key),
+):
+    plex = core.connect()
+    playlist = core.find_playlist(plex, name)
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found.")
+    if bool(getattr(playlist, "smart", False)):
+        raise HTTPException(status_code=422, detail="Smart playlists cannot be deduplicated.")
+
+    items = list(playlist.items())
+    seen = set()
+    duplicate_item_ids = []
+    for item in items:
+        rating_key = str(getattr(item, "ratingKey", "") or "")
+        playlist_item_id = getattr(item, "playlistItemID", None)
+        if not rating_key:
+            continue
+        if rating_key in seen:
+            if playlist_item_id is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f'Playlist item ID missing for duplicate "{getattr(item, "title", rating_key)}".',
+                )
+            duplicate_item_ids.append(playlist_item_id)
+        else:
+            seen.add(rating_key)
+
+    try:
+        for playlist_item_id in duplicate_item_ids:
+            key = f"{playlist.key}/items/{playlist_item_id}"
+            playlist._server.query(key, method=playlist._server._session.delete)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "title": playlist.title,
+        "removed_count": len(duplicate_item_ids),
+        "item_count": len(items) - len(duplicate_item_ids),
+    }
+
+
 @app.get("/api/v1/playlist")
 def playlist_detail_query(name: str = Query(min_length=1)):
     plex = core.connect()
