@@ -7657,6 +7657,44 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                GroupBox("Connection Health") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 10) {
+                            StatusBadge(
+                                text: model.status == nil ? "API Needs Attention" : "API Responding",
+                                good: model.status != nil
+                            )
+                            StatusBadge(
+                                text: model.status?.plex.connected == true ? "Plex Connected" : "Plex Needs Attention",
+                                good: model.status?.plex.connected == true
+                            )
+                            Spacer()
+                            Button("Run Diagnostics") {
+                                Task { await model.refreshHealth() }
+                            }
+                        }
+                        if model.status == nil {
+                            Label("The local backend has not returned a status. Confirm Plex Curator is installed, then check the API service in Automation or the application logs.", systemImage: "exclamationmark.triangle")
+                                .foregroundColor(.orange)
+                                .font(.caption)
+                        } else if model.status?.plex.connected != true {
+                            Label(model.status?.plex.error ?? "Plex could not be reached. Verify the server URL, token, and that Plex Media Server is running.", systemImage: "exclamationmark.triangle")
+                                .foregroundColor(.orange)
+                                .font(.caption)
+                                .textSelection(.enabled)
+                        } else {
+                            Label("The local API and Plex server are responding.", systemImage: "checkmark.circle")
+                                .font(.caption)
+                        }
+                        if let report = model.doctor {
+                            setting("Diagnostics", report.result)
+                            setting("Warnings", String(report.warnings))
+                            setting("Failures", String(report.failures))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 GroupBox("Local API") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
