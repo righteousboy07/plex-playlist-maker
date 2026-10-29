@@ -6260,6 +6260,9 @@ struct PlaylistDetailView: View {
     @State private var playlist: PlaylistSummary
 
     @State private var detail: PlaylistDetailResponse?
+    @State private var showRename = false
+    @State private var renameText = ""
+    @State private var confirmDelete = false
     @State private var searchText = ""
     @State private var itemFilter = 0
     @State private var isLoading = false
