@@ -2706,12 +2706,8 @@ enum PlexTheme {
     static let accent = Color(red: 0.96, green: 0.58, blue: 0.10)
     static let sidebar = Color(red: 0.055, green: 0.085, blue: 0.12)
     static let sidebarSecondary = Color(red: 0.075, green: 0.115, blue: 0.16)
-    static let contentBackground = Color(red: 0.975, green: 0.98, blue: 0.985)
-    static let contentPrimary = Color(red: 0.08, green: 0.10, blue: 0.13)
-    static let contentSecondary = Color(red: 0.30, green: 0.34, blue: 0.39)
-    static let sectionFill = Color.white
-    static let cardBorder = Color.black.opacity(0.10)
-    static let softFill = Color.black.opacity(0.045)
+    static let cardBorder = Color.black.opacity(0.07)
+    static let softFill = Color.black.opacity(0.035)
 }
 
 // MARK: - App
@@ -2876,7 +2872,6 @@ struct RootView: View {
         }
         .tint(PlexTheme.accent)
         .environment(\.colorScheme, .light)
-        .foregroundStyle(PlexTheme.contentPrimary)
     }
 
     private func checkOnboarding() async {
@@ -7713,176 +7708,82 @@ struct MovieCuratorView: View {
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Movie Curator")
-                        .font(.largeTitle.bold())
-                        .foregroundStyle(PlexTheme.contentPrimary)
-                    Text("Build a filtered Plex movie playlist from one aligned workspace.")
-                        .font(.subheadline)
-                        .foregroundStyle(PlexTheme.contentSecondary)
-                }
-                Spacer()
-                if !previewItems.isEmpty {
-                    Text("\(previewItems.count) matches")
-                        .font(.subheadline.bold())
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(PlexTheme.accent.opacity(0.14), in: Capsule())
-                        .foregroundStyle(PlexTheme.contentPrimary)
-                }
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 22)
-            .padding(.bottom, 16)
-
-            Divider()
-
-            HSplitView {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        GroupBox("Filters") {
-                            VStack(alignment: .leading, spacing: 12) {
-                                labeledField("Genre", placeholder: "Comedy, Horror, Drama…", text: $genre)
-
-                                HStack(spacing: 12) {
-                                    labeledField("Year minimum", placeholder: "1980", text: $yearMin)
-                                    labeledField("Year maximum", placeholder: "2026", text: $yearMax)
-                                }
-
-                                labeledField("Maximum runtime", placeholder: "Minutes", text: $maxRuntime)
-                                labeledField("Content ratings", placeholder: "G, PG, PG-13", text: $contentRatings)
-
-                                HStack(spacing: 12) {
-                                    labeledField("Minimum audience rating", placeholder: "0–10", text: $minAudience)
-                                    labeledField("Minimum critic rating", placeholder: "0–10", text: $minCritic)
-                                }
-
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Watch state")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(PlexTheme.contentPrimary)
-                                    Picker("Watch state", selection: $watchMode) {
-                                        Text("Any").tag(0)
-                                        Text("Unwatched").tag(1)
-                                        Text("Watched").tag(2)
-                                    }
-                                    .labelsHidden()
-                                    .pickerStyle(.segmented)
-                                }
-
-                                Toggle("Randomize results", isOn: $randomize)
-                                    .foregroundStyle(PlexTheme.contentPrimary)
-
-                                Stepper("Result limit: \(limit)", value: $limit, in: 1...500)
-                                    .foregroundStyle(PlexTheme.contentPrimary)
-                            }
-                            .padding(.vertical, 4)
-                        }
-                        .groupBoxStyle(PlexCardGroupBoxStyle())
-
-                        GroupBox("Playlist") {
-                            VStack(alignment: .leading, spacing: 12) {
-                                labeledField("Playlist name", placeholder: "Curated Movies", text: $playlistName)
-                                Toggle("Replace existing playlist with the same name", isOn: $replaceExisting)
-                                    .foregroundStyle(PlexTheme.contentPrimary)
-                            }
-                            .padding(.vertical, 4)
-                        }
-                        .groupBoxStyle(PlexCardGroupBoxStyle())
-
-                        if let validationMessage {
-                            Label(validationMessage, systemImage: "exclamationmark.triangle.fill")
-                                .font(.callout.weight(.semibold))
-                                .foregroundStyle(Color.red)
-                                .padding(12)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-                        }
-
-                        HStack(spacing: 10) {
-                            Button {
-                                Task { await preview() }
-                            } label: {
-                                Label("Preview", systemImage: "eye")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(PlexTheme.accent)
-
-                            Button {
-                                if validate() {
-                                    confirmCreate = true
-                                }
-                            } label: {
-                                Label(
-                                    replaceExisting ? "Create / Replace" : "Create Playlist",
-                                    systemImage: "rectangle.stack.badge.plus"
-                                )
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(previewItems.isEmpty)
-                        }
-                    }
-                    .padding(20)
-                }
-                .frame(minWidth: 390, idealWidth: 430, maxWidth: 500)
-                .background(PlexTheme.contentBackground)
-
-                VStack(spacing: 0) {
+        HSplitView {
+            Form {
+                Section("Filters") {
+                    TextField("Genre", text: $genre)
                     HStack {
-                        Text("Preview")
-                            .font(.title3.bold())
-                            .foregroundStyle(PlexTheme.contentPrimary)
-                        Spacer()
-                        if isLoading {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
+                        TextField("Year minimum", text: $yearMin)
+                        TextField("Year maximum", text: $yearMax)
                     }
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 16)
+                    TextField("Maximum runtime (minutes)", text: $maxRuntime)
+                    TextField("Content ratings (G, PG, PG-13)", text: $contentRatings)
+                    TextField("Minimum audience rating (0–10)", text: $minAudience)
+                    TextField("Minimum critic rating (0–10)", text: $minCritic)
 
-                    Divider()
+                    Picker("Watch state", selection: $watchMode) {
+                        Text("Any").tag(0)
+                        Text("Unwatched").tag(1)
+                        Text("Watched").tag(2)
+                    }
 
-                    Group {
-                        if isLoading && previewItems.isEmpty {
-                            ProgressView("Filtering movies…")
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if previewItems.isEmpty {
-                            VStack(spacing: 12) {
-                                Image(systemName: "film.stack")
-                                    .font(.system(size: 46))
-                                    .foregroundStyle(PlexTheme.accent)
-                                Text("Choose filters and preview your movie lineup.")
-                                    .font(.headline)
-                                    .foregroundStyle(PlexTheme.contentPrimary)
-                                Text("Matching movies will appear here in a consistent card grid.")
-                                    .font(.caption)
-                                    .foregroundStyle(PlexTheme.contentSecondary)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .padding(30)
-                        } else {
-                            ScrollView {
-                                LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
-                                    ForEach(previewItems) { item in
-                                        PlaylistMediaCard(item: item)
-                                    }
-                                }
-                                .padding(22)
-                            }
-                        }
+                    Toggle("Randomize results", isOn: $randomize)
+                    Stepper("Limit: \(limit)", value: $limit, in: 1...500)
+                }
+
+                Section("Playlist") {
+                    TextField("Playlist name", text: $playlistName)
+                    Toggle("Replace existing playlist", isOn: $replaceExisting)
+                }
+
+                if let validationMessage {
+                    Section {
+                        Text(validationMessage)
+                            .foregroundColor(.red)
                     }
                 }
-                .frame(minWidth: 520)
-                .background(PlexTheme.contentBackground)
+
+                Section {
+                    HStack {
+                        Button("Preview") { Task { await preview() } }
+                        Button(replaceExisting ? "Create / Replace" : "Create") {
+                            if validate() {
+                                confirmCreate = true
+                            }
+                        }
+                        .disabled(previewItems.isEmpty)
+                    }
+                }
             }
+            .frame(minWidth: 320, idealWidth: 360, maxWidth: 420)
+
+            Group {
+                if isLoading {
+                    ProgressView("Filtering movies…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if previewItems.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "film.stack")
+                            .font(.system(size: 42))
+                            .foregroundColor(.secondary)
+                        Text("Choose filters and preview your movie lineup.")
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
+                            ForEach(previewItems) { item in
+                                PlaylistMediaCard(item: item)
+                            }
+                        }
+                        .padding(20)
+                    }
+                }
+            }
+            .frame(minWidth: 500)
         }
-        .background(PlexTheme.contentBackground)
         .navigationTitle("Movie Curator")
-        .tint(PlexTheme.accent)
-        .foregroundStyle(PlexTheme.contentPrimary)
         .alert(isPresented: $confirmCreate) {
             Alert(
                 title: Text(replaceExisting ? "Create or replace playlist?" : "Create playlist?"),
@@ -7893,21 +7794,6 @@ struct MovieCuratorView: View {
                 secondaryButton: .cancel()
             )
         }
-    }
-
-    private func labeledField(
-        _ label: String,
-        placeholder: String,
-        text: Binding<String>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(PlexTheme.contentPrimary)
-            TextField(placeholder, text: text)
-                .textFieldStyle(.roundedBorder)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func parseInt(_ value: String, label: String) -> Int? {
