@@ -834,22 +834,28 @@ final class APIClient {
         } catch let e as APIClientError {
             throw e
         } catch let decoding as DecodingError {
-            let path = decoding.codingPath.map(\.stringValue).joined(separator: ".")
-            let location = path.isEmpty ? "response root" : path
             let detail: String
             switch decoding {
             case .keyNotFound(let key, let context):
-                detail = "missing key \\(key.stringValue) at \\(location): \\(context.debugDescription)"
+                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+                let location = path.isEmpty ? "response root" : path
+                detail = "missing key \(key.stringValue) at \(location): \(context.debugDescription)"
             case .typeMismatch(let type, let context):
-                detail = "expected \\(type) at \\(location): \\(context.debugDescription)"
+                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+                let location = path.isEmpty ? "response root" : path
+                detail = "expected \(type) at \(location): \(context.debugDescription)"
             case .valueNotFound(let type, let context):
-                detail = "missing \\(type) value at \\(location): \\(context.debugDescription)"
+                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+                let location = path.isEmpty ? "response root" : path
+                detail = "missing \(type) value at \(location): \(context.debugDescription)"
             case .dataCorrupted(let context):
-                detail = "invalid data at \\(location): \\(context.debugDescription)"
+                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+                let location = path.isEmpty ? "response root" : path
+                detail = "invalid data at \(location): \(context.debugDescription)"
             @unknown default:
                 detail = decoding.localizedDescription
             }
-            throw APIClientError.transport("Could not read \\(path.isEmpty ? \"API response\" : path): \\(detail)")
+            throw APIClientError.transport("Could not read API response: \(detail)")
         } catch {
             throw APIClientError.transport(error.localizedDescription)
         }
