@@ -3,7 +3,6 @@ import AppKit
 import Foundation
 import UserNotifications
 import Vision
-import UniformTypeIdentifiers
 
 // MARK: - API Models
 
@@ -170,11 +169,6 @@ struct PlaylistDeduplicateResponse: Decodable {
 struct PlaylistItemMoveRequest: Encodable {
     let playlistItemId: Int
     let direction: String
-}
-
-struct PlaylistItemReorderRequest: Encodable {
-    let playlistItemId: Int
-    let beforePlaylistItemId: Int
 }
 
 struct PlaylistItemsMutationRequest: Encodable {
@@ -1141,24 +1135,6 @@ final class APIClient {
         return try await request(
             components.string ?? "/api/v1/playlist/items",
             method: "DELETE",
-            body: body,
-            authenticated: true
-        )
-    }
-
-    func reorderPlaylistItem(name: String, playlistItemId: Int, beforePlaylistItemId: Int) async throws -> PlaylistMoveResponse {
-        var components = URLComponents()
-        components.path = "/api/v1/playlist/item/reorder"
-        components.queryItems = [URLQueryItem(name: "name", value: name)]
-        let body = try encoder.encode(
-            PlaylistItemReorderRequest(
-                playlistItemId: playlistItemId,
-                beforePlaylistItemId: beforePlaylistItemId
-            )
-        )
-        return try await request(
-            components.string ?? "/api/v1/playlist/item/reorder",
-            method: "POST",
             body: body,
             authenticated: true
         )
@@ -2396,28 +2372,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func reorderPlaylistItem(
-        playlistItemId: Int,
-        beforePlaylistItemId: Int,
-        in playlist: PlaylistSummary
-    ) async -> Bool {
-        do {
-            let result = try await api.reorderPlaylistItem(
-                name: playlist.title,
-                playlistItemId: playlistItemId,
-                beforePlaylistItemId: beforePlaylistItemId
-            )
-            if result.moved {
-                message = "Reordered \(playlist.title)."
-            }
-            error = nil
-            return true
-        } catch {
-            self.error = error.localizedDescription
-            return false
-        }
-    }
-
     func movePlaylistItem(_ item: MediaItem, in playlist: PlaylistSummary, direction: String) async -> Bool {
         guard let playlistItemId = item.playlistItemId else {
             error = "This playlist item does not include a Plex playlist item identifier."
@@ -2790,20 +2744,6 @@ struct RootView: View {
 
                 Section("System") {
                     NavigationLink(destination: HealthView()) { Label("Health", systemImage: "heart.text.square") }
-                    NavigationLink(destination: ActivityCenterView()) {
-                        HStack {
-                            Label("Activity", systemImage: "waveform.path.ecg")
-                            Spacer()
-                            if model.loading || model.mediaOrganizerScanJob?.isActive == true {
-                                Text("Active")
-                                    .font(.caption2.bold())
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(PlexTheme.accent.opacity(0.2))
-                                    .clipShape(Capsule())
-                            }
-                        }
-                    }
                     NavigationLink(destination: IssuesView()) {
                         HStack {
                             Label("Issues", systemImage: "exclamationmark.bubble")
@@ -7035,7 +6975,6 @@ struct PlaylistDetailView: View {
     @State private var confirmBulkRemove = false
     @State private var showSelectionCopy = false
     @State private var selectionCopyName = ""
-    @State private var draggedPlaylistItemId: Int?
 
     private var items: [MediaItem] {
         detail?.items ?? []
@@ -7173,14 +7112,8 @@ struct PlaylistDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
-                        if !playlist.smart && !selectionMode && items.count > 1 {
-                            Label("Drag any playlist card onto another card to move it before that item.", systemImage: "hand.draw")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
-                            ForEach(filteredItems) { item in
+                            ForEach(Array(filteredItems.enumerated()), id: \.offset) { _, item in
                                 PlaylistMediaCard(
                                     item: item,
                                     editable: !playlist.smart && item.playlistItemId != nil,
@@ -7201,36 +7134,6 @@ struct PlaylistDetailView: View {
                                     onMoveUp: { move(item, direction: "up") },
                                     onMoveDown: { move(item, direction: "down") },
                                     onRemove: { itemPendingRemoval = item }
-                                )
-                                .onDrag {
-                                    guard !playlist.smart,
-                                          !selectionMode,
-                                          let id = item.playlistItemId
-                                    else {
-                                        return NSItemProvider()
-                                    }
-                                    draggedPlaylistItemId = id
-                                    return NSItemProvider(object: String(id) as NSString)
-                                }
-                                .onDrop(
-                                    of: [UTType.plainText.identifier],
-                                    delegate: PlaylistItemDropDelegate(
-                                        targetItemId: item.playlistItemId,
-                                        draggedItemId: $draggedPlaylistItemId,
-                                        isEnabled: !playlist.smart && !selectionMode,
-                                        onMoveBefore: { draggedId, targetId in
-                                            guard draggedId != targetId else { return }
-                                            Task {
-                                                if await model.reorderPlaylistItem(
-                                                    playlistItemId: draggedId,
-                                                    beforePlaylistItemId: targetId,
-                                                    in: playlist
-                                                ) {
-                                                    await load()
-                                                }
-                                            }
-                                        }
-                                    )
                                 )
                             }
                         }
@@ -7505,36 +7408,6 @@ struct PlaylistDetailView: View {
         } catch {
             model.error = error.localizedDescription
         }
-    }
-}
-
-struct PlaylistItemDropDelegate: DropDelegate {
-    let targetItemId: Int?
-    @Binding var draggedItemId: Int?
-    let isEnabled: Bool
-    let onMoveBefore: (Int, Int) -> Void
-
-    func validateDrop(info: DropInfo) -> Bool {
-        isEnabled && targetItemId != nil && draggedItemId != nil
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        guard isEnabled,
-              let draggedItemId,
-              let targetItemId,
-              draggedItemId != targetItemId
-        else {
-            self.draggedItemId = nil
-            return false
-        }
-
-        onMoveBefore(draggedItemId, targetItemId)
-        self.draggedItemId = nil
-        return true
-    }
-
-    func dropExited(info: DropInfo) {
-        // Keep the drag state alive while moving between playlist cards.
     }
 }
 
@@ -8989,210 +8862,6 @@ struct LogsView: View {
             return .orange
         }
         return .primary
-    }
-}
-
-struct ActivityCenterView: View {
-    @EnvironmentObject var model: AppModel
-
-    private var failedAutomationJobs: [AutomationJob] {
-        model.automationJobs.filter { ($0.lastExitCode ?? 0) != 0 }
-    }
-
-    private var hasActiveWork: Bool {
-        model.loading || model.mediaOrganizerScanJob?.isActive == true
-    }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Activity Center")
-                            .font(.title2.bold())
-                        Text("Current operations, failures, and recently completed programming.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    StatusBadge(
-                        text: hasActiveWork ? "Work in Progress" : "Idle",
-                        good: !hasActiveWork
-                    )
-                    Button("Refresh") {
-                        Task {
-                            await model.refreshDashboard()
-                            if BuildFlavor.current.supportsAutomationManagement {
-                                await model.loadAutomation()
-                            }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(PlexTheme.accent)
-                }
-
-                GroupBox("Active Operations") {
-                    VStack(spacing: 0) {
-                        if model.loading {
-                            activityRow(
-                                icon: "arrow.triangle.2.circlepath",
-                                title: "Plex Curator operation",
-                                detail: "A refresh, build, apply, or synchronization operation is running.",
-                                trailing: AnyView(ProgressView().controlSize(.small))
-                            )
-                        }
-
-                        if let scan = model.mediaOrganizerScanJob, scan.isActive {
-                            if model.loading {
-                                Divider()
-                            }
-                            VStack(alignment: .leading, spacing: 9) {
-                                HStack {
-                                    Image(systemName: "folder.badge.gearshape")
-                                        .foregroundColor(PlexTheme.accent)
-                                        .frame(width: 24)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Media Organizer scan")
-                                            .font(.headline)
-                                        Text(scan.detail ?? scan.phase.capitalized)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    Button("Cancel", role: .destructive) {
-                                        Task { await model.cancelMediaOrganizerScan() }
-                                    }
-                                    .disabled(scan.cancelRequested)
-                                }
-
-                                if let total = scan.totalCount, total > 0 {
-                                    ProgressView(value: Double(scan.processedCount), total: Double(total))
-                                    Text("\(scan.processedCount) of \(total) files analyzed")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                } else {
-                                    ProgressView()
-                                    Text("\(scan.discoveredCount) files discovered")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            .padding(.vertical, 8)
-                        }
-
-                        if !hasActiveWork {
-                            Label("No long-running operations are active.", systemImage: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 8)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                if !failedAutomationJobs.isEmpty {
-                    GroupBox("Automation Needs Attention") {
-                        VStack(spacing: 0) {
-                            ForEach(Array(failedAutomationJobs.enumerated()), id: \.element.id) { index, job in
-                                HStack(spacing: 12) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundColor(.red)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(job.name)
-                                            .font(.headline)
-                                        Text("Last exit code: \(job.lastExitCode ?? -1)")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    if BuildFlavor.current.supportsAutomationManagement {
-                                        NavigationLink(destination: AutomationView()) {
-                                            Text("Open")
-                                        }
-                                    }
-                                }
-                                .padding(.vertical, 7)
-
-                                if index < failedAutomationJobs.count - 1 {
-                                    Divider()
-                                }
-                            }
-                        }
-                    }
-                }
-
-                GroupBox("Recent Completed Programming") {
-                    VStack(spacing: 0) {
-                        if model.buildHistory.isEmpty {
-                            Text("No completed station or schedule builds are recorded yet.")
-                                .foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 8)
-                        } else {
-                            ForEach(Array(model.buildHistory.prefix(12).enumerated()), id: \.element.id) { index, build in
-                                HStack(spacing: 12) {
-                                    Image(systemName: build.channelName.hasPrefix("schedule:") ? "calendar" : "tv")
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 24)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(build.displayChannel)
-                                            .font(.headline)
-                                        Text(build.playlistName)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    VStack(alignment: .trailing, spacing: 2) {
-                                        Text("\(build.itemCount) items")
-                                            .font(.caption.bold())
-                                        Text(build.displayDate)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                }
-                                .padding(.vertical, 7)
-
-                                if index < min(model.buildHistory.count, 12) - 1 {
-                                    Divider()
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(24)
-        }
-        .navigationTitle("Activity")
-        .tint(PlexTheme.accent)
-        .task {
-            await model.refreshDashboard()
-            if BuildFlavor.current.supportsAutomationManagement {
-                await model.loadAutomation()
-            }
-        }
-    }
-
-    private func activityRow(
-        icon: String,
-        title: String,
-        detail: String,
-        trailing: AnyView
-    ) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .foregroundColor(PlexTheme.accent)
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                Text(detail)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            Spacer()
-            trailing
-        }
-        .padding(.vertical, 8)
     }
 }
 
