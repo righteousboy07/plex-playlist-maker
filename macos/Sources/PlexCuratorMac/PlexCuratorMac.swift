@@ -159,34 +159,6 @@ struct PlaylistMutationResponse: Decodable {
     let title: String?
 }
 
-struct PlaylistDeduplicateResponse: Decodable {
-    let ok: Bool
-    let title: String
-    let removedCount: Int
-    let itemCount: Int
-}
-
-struct PlaylistItemMoveRequest: Encodable {
-    let playlistItemId: Int
-    let direction: String
-}
-
-struct PlaylistItemsMutationRequest: Encodable {
-    let playlistItemIds: [Int]
-}
-
-struct PlaylistSelectionCopyRequest: Encodable {
-    let currentName: String
-    let newName: String
-    let playlistItemIds: [Int]
-}
-
-struct PlaylistMoveResponse: Decodable {
-    let ok: Bool
-    let title: String
-    let moved: Bool
-}
-
 struct MovieFilterRequest: Encodable {
     let library: String
     let genre: String?
@@ -339,12 +311,8 @@ struct ScheduleBuildResponse: Codable {
 }
 
 struct MediaItem: Codable, Identifiable {
-    var id: String {
-        if let playlistItemId { return "playlist-\(playlistItemId)" }
-        return ratingKey.isEmpty ? "\(position ?? 0)-\(title ?? "")" : ratingKey
-    }
+    var id: String { ratingKey.isEmpty ? "\(position ?? 0)-\(title ?? "")" : ratingKey }
     let ratingKey: String
-    let playlistItemId: Int?
     let type: String?
     let title: String?
     let year: Int?
@@ -512,42 +480,6 @@ struct RefreshAllResponse: Codable {
     let ok: Bool
     let dryRun: Bool
     let results: [RefreshAllResult]
-}
-
-struct BackupManifest: Codable, Hashable {
-    let appVersion: String?
-    let createdAt: String?
-    let reason: String?
-    let sourceConfigDir: String?
-    let files: [String]?
-}
-
-struct BackupEntry: Codable, Identifiable, Hashable {
-    var id: String { name }
-    let name: String
-    let path: String
-    let manifest: BackupManifest
-}
-
-struct BackupsResponse: Codable {
-    let backups: [BackupEntry]
-}
-
-struct BackupRequest: Encodable {
-    let reason: String
-}
-
-struct BackupMutationResponse: Codable {
-    let ok: Bool
-    let path: String
-    let name: String
-}
-
-struct BackupRestoreResponse: Codable {
-    let ok: Bool
-    let restoredBackup: String
-    let preRestoreBackup: String
-    let files: [String]
 }
 
 struct LogResponse: Codable {
@@ -902,28 +834,22 @@ final class APIClient {
         } catch let e as APIClientError {
             throw e
         } catch let decoding as DecodingError {
+            let path = decoding.codingPath.map(\.stringValue).joined(separator: ".")
+            let location = path.isEmpty ? "response root" : path
             let detail: String
             switch decoding {
             case .keyNotFound(let key, let context):
-                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
-                let location = path.isEmpty ? "response root" : path
-                detail = "missing key \(key.stringValue) at \(location): \(context.debugDescription)"
+                detail = "missing key \\(key.stringValue) at \\(location): \\(context.debugDescription)"
             case .typeMismatch(let type, let context):
-                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
-                let location = path.isEmpty ? "response root" : path
-                detail = "expected \(type) at \(location): \(context.debugDescription)"
+                detail = "expected \\(type) at \\(location): \\(context.debugDescription)"
             case .valueNotFound(let type, let context):
-                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
-                let location = path.isEmpty ? "response root" : path
-                detail = "missing \(type) value at \(location): \(context.debugDescription)"
+                detail = "missing \\(type) value at \\(location): \\(context.debugDescription)"
             case .dataCorrupted(let context):
-                let path = context.codingPath.map(\.stringValue).joined(separator: ".")
-                let location = path.isEmpty ? "response root" : path
-                detail = "invalid data at \(location): \(context.debugDescription)"
+                detail = "invalid data at \\(location): \\(context.debugDescription)"
             @unknown default:
                 detail = decoding.localizedDescription
             }
-            throw APIClientError.transport("Could not read API response: \(detail)")
+            throw APIClientError.transport("Could not read \\(path.isEmpty ? \"API response\" : path): \\(detail)")
         } catch {
             throw APIClientError.transport(error.localizedDescription)
         }
@@ -1066,93 +992,6 @@ final class APIClient {
         components.path = "/api/v1/playlist"
         components.queryItems = [URLQueryItem(name: "name", value: name)]
         return try await request(components.string ?? "/api/v1/playlist")
-    }
-
-    func deduplicatePlaylist(name: String) async throws -> PlaylistDeduplicateResponse {
-        var components = URLComponents()
-        components.path = "/api/v1/playlist/deduplicate"
-        components.queryItems = [URLQueryItem(name: "name", value: name)]
-        return try await request(
-            components.string ?? "/api/v1/playlist/deduplicate",
-            method: "POST",
-            authenticated: true
-        )
-    }
-
-    func copyPlaylistSelection(
-        currentName: String,
-        newName: String,
-        playlistItemIds: [Int]
-    ) async throws -> PlaylistSummary {
-        let body = try encoder.encode(
-            PlaylistSelectionCopyRequest(
-                currentName: currentName,
-                newName: newName,
-                playlistItemIds: playlistItemIds
-            )
-        )
-        let response: PlaylistMutationResponse = try await request(
-            "/api/v1/playlist/copy-selection",
-            method: "POST",
-            body: body,
-            authenticated: true
-        )
-        guard let playlist = response.playlist else { throw APIClientError.invalidResponse }
-        return playlist
-    }
-
-    func copyPlaylist(currentName: String, newName: String) async throws -> PlaylistSummary {
-        let body = try encoder.encode(PlaylistRenameRequest(currentName: currentName, newName: newName))
-        let response: PlaylistMutationResponse = try await request(
-            "/api/v1/playlist/copy",
-            method: "POST",
-            body: body,
-            authenticated: true
-        )
-        guard let playlist = response.playlist else { throw APIClientError.invalidResponse }
-        return playlist
-    }
-
-    func removePlaylistItem(name: String, playlistItemId: Int) async throws -> PlaylistDeduplicateResponse {
-        var components = URLComponents()
-        components.path = "/api/v1/playlist/item"
-        components.queryItems = [
-            URLQueryItem(name: "name", value: name),
-            URLQueryItem(name: "playlist_item_id", value: String(playlistItemId))
-        ]
-        return try await request(
-            components.string ?? "/api/v1/playlist/item",
-            method: "DELETE",
-            authenticated: true
-        )
-    }
-
-    func removePlaylistItems(name: String, playlistItemIds: [Int]) async throws -> PlaylistDeduplicateResponse {
-        var components = URLComponents()
-        components.path = "/api/v1/playlist/items"
-        components.queryItems = [URLQueryItem(name: "name", value: name)]
-        let body = try encoder.encode(PlaylistItemsMutationRequest(playlistItemIds: playlistItemIds))
-        return try await request(
-            components.string ?? "/api/v1/playlist/items",
-            method: "DELETE",
-            body: body,
-            authenticated: true
-        )
-    }
-
-    func movePlaylistItem(name: String, playlistItemId: Int, direction: String) async throws -> PlaylistMoveResponse {
-        var components = URLComponents()
-        components.path = "/api/v1/playlist/item/move"
-        components.queryItems = [URLQueryItem(name: "name", value: name)]
-        let body = try encoder.encode(
-            PlaylistItemMoveRequest(playlistItemId: playlistItemId, direction: direction)
-        )
-        return try await request(
-            components.string ?? "/api/v1/playlist/item/move",
-            method: "POST",
-            body: body,
-            authenticated: true
-        )
     }
 
     func artworkURL(ratingKey: String, width: Int = 240, height: Int = 360) -> URL? {
@@ -1446,30 +1285,6 @@ final class APIClient {
             body: body,
             authenticated: true,
             timeout: 300
-        )
-    }
-
-    func backups(limit: Int = 20) async throws -> [BackupEntry] {
-        let response: BackupsResponse = try await request("/api/v1/backups?limit=\(limit)")
-        return response.backups
-    }
-
-    func createBackup(reason: String) async throws -> BackupMutationResponse {
-        let body = try encoder.encode(BackupRequest(reason: reason))
-        return try await request(
-            "/api/v1/backups",
-            method: "POST",
-            body: body,
-            authenticated: true
-        )
-    }
-
-    func restoreBackup(name: String) async throws -> BackupRestoreResponse {
-        let escaped = name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name
-        return try await request(
-            "/api/v1/backups/\(escaped)/restore",
-            method: "POST",
-            authenticated: true
         )
     }
 
@@ -1907,12 +1722,6 @@ private struct DirectPlexSetup {
 }
 
 @MainActor
-struct AppIssue: Identifiable, Hashable {
-    let id = UUID()
-    let createdAt: Date
-    let message: String
-}
-
 final class AppModel: ObservableObject {
     @Published var status: StatusResponse?
     @Published var plexConfig: PlexConfigStatus?
@@ -1920,7 +1729,6 @@ final class AppModel: ObservableObject {
     @Published var doctor: DoctorResponse?
     @Published var history: [HistoryItem] = []
     @Published var buildHistory: [BuildHistoryItem] = []
-    @Published var backups: [BackupEntry] = []
     @Published var preview: PreviewResponse?
     @Published var diff: DiffResponse?
     @Published var log: LogResponse?
@@ -1932,30 +1740,11 @@ final class AppModel: ObservableObject {
     @Published var mediaOrganizerScanning = false
     @Published var mediaOrganizerPresets: [MediaOrganizerPreset] = []
     @Published var analyzedMediaItems: [String: MediaOrganizerItem] = [:]
-    @Published var issues: [AppIssue] = []
-    @Published var error: String? {
-        didSet {
-            guard let value = error?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !value.isEmpty else { return }
-            recordIssue(value)
-        }
-    }
+    @Published var error: String?
     @Published var message: String?
     @Published var loading = false
 
     let api = APIClient()
-
-    private func recordIssue(_ message: String) {
-        if issues.first?.message == message { return }
-        issues.insert(AppIssue(createdAt: Date(), message: message), at: 0)
-        if issues.count > 50 {
-            issues.removeLast(issues.count - 50)
-        }
-    }
-
-    func clearIssues() {
-        issues.removeAll()
-    }
 
     func bootstrap() async { await refreshDashboard() }
 
@@ -1972,9 +1761,6 @@ final class AppModel: ObservableObject {
 
             if let recentBuilds = try? await api.buildHistory(limit: 8) {
                 buildHistory = recentBuilds
-            }
-            if let recentBackups = try? await api.backups(limit: 10) {
-                backups = recentBackups
             }
             if BuildFlavor.current.supportsLaunchAgentManagement,
                let jobs = try? await api.automationJobs() {
@@ -2282,118 +2068,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func deduplicatePlaylist(_ playlist: PlaylistSummary) async -> Int? {
-        do {
-            let result = try await api.deduplicatePlaylist(name: playlist.title)
-            if let index = playlists.firstIndex(where: { $0.id == playlist.id }) {
-                let current = playlists[index]
-                playlists[index] = PlaylistSummary(
-                    title: current.title,
-                    itemCount: result.itemCount,
-                    ratingKey: current.ratingKey,
-                    playlistType: current.playlistType,
-                    smart: current.smart,
-                    updatedAt: current.updatedAt
-                )
-            }
-            message = result.removedCount == 0
-                ? "No duplicate entries found in \(playlist.title)."
-                : "Removed \(result.removedCount) duplicate entr\(result.removedCount == 1 ? "y" : "ies") from \(playlist.title)."
-            error = nil
-            return result.removedCount
-        } catch {
-            self.error = error.localizedDescription
-            return nil
-        }
-    }
-
-    func copyPlaylistSelection(
-        _ playlist: PlaylistSummary,
-        ids: [Int],
-        to newName: String
-    ) async -> PlaylistSummary? {
-        do {
-            let created = try await api.copyPlaylistSelection(
-                currentName: playlist.title,
-                newName: newName,
-                playlistItemIds: ids
-            )
-            playlists.append(created)
-            playlists.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-            message = "Created \(created.title) from \(ids.count) selected item\(ids.count == 1 ? "" : "s")."
-            error = nil
-            return created
-        } catch {
-            self.error = error.localizedDescription
-            return nil
-        }
-    }
-
-    func copyPlaylist(_ playlist: PlaylistSummary, to newName: String) async -> PlaylistSummary? {
-        do {
-            let created = try await api.copyPlaylist(currentName: playlist.title, newName: newName)
-            playlists.append(created)
-            playlists.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-            message = "Created \(created.title) from \(playlist.title)."
-            error = nil
-            return created
-        } catch {
-            self.error = error.localizedDescription
-            return nil
-        }
-    }
-
-    func removePlaylistItem(_ item: MediaItem, from playlist: PlaylistSummary) async -> Bool {
-        guard let playlistItemId = item.playlistItemId else {
-            error = "This playlist item does not include a Plex playlist item identifier."
-            return false
-        }
-        do {
-            _ = try await api.removePlaylistItem(name: playlist.title, playlistItemId: playlistItemId)
-            message = "Removed \(item.displayTitle) from \(playlist.title)."
-            error = nil
-            return true
-        } catch {
-            self.error = error.localizedDescription
-            return false
-        }
-    }
-
-    func removePlaylistItems(ids: [Int], from playlist: PlaylistSummary) async -> Bool {
-        guard !ids.isEmpty else { return false }
-        do {
-            let result = try await api.removePlaylistItems(name: playlist.title, playlistItemIds: ids)
-            message = "Removed \(result.removedCount) selected entr\(result.removedCount == 1 ? "y" : "ies") from \(playlist.title)."
-            error = nil
-            return true
-        } catch {
-            self.error = error.localizedDescription
-            return false
-        }
-    }
-
-    func movePlaylistItem(_ item: MediaItem, in playlist: PlaylistSummary, direction: String) async -> Bool {
-        guard let playlistItemId = item.playlistItemId else {
-            error = "This playlist item does not include a Plex playlist item identifier."
-            return false
-        }
-        do {
-            let result = try await api.movePlaylistItem(
-                name: playlist.title,
-                playlistItemId: playlistItemId,
-                direction: direction
-            )
-            if result.moved {
-                message = "Moved \(item.displayTitle) \(direction)."
-            }
-            error = nil
-            return true
-        } catch {
-            self.error = error.localizedDescription
-            return false
-        }
-    }
-
     func loadPlaylists() async {
         do {
             playlists = try await api.playlists()
@@ -2591,42 +2265,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func loadBackups() async {
-        do {
-            backups = try await api.backups(limit: 50)
-            error = nil
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-
-    func createBackup(reason: String = "manual-gui") async -> Bool {
-        do {
-            _ = try await api.createBackup(reason: reason)
-            message = "Backup created."
-            await loadBackups()
-            return true
-        } catch {
-            self.error = error.localizedDescription
-            return false
-        }
-    }
-
-    func restoreBackup(_ backup: BackupEntry) async -> Bool {
-        do {
-            let result = try await api.restoreBackup(name: backup.name)
-            message = "Restored \(backup.name). Safety backup: \(result.preRestoreBackup)."
-            await refreshDashboard()
-            await loadSchedules()
-            await loadPlaylists()
-            await loadBackups()
-            return true
-        } catch {
-            self.error = error.localizedDescription
-            return false
-        }
-    }
-
     func loadAutomation() async {
         do {
             automationJobs = try await api.automationJobs()
@@ -2744,23 +2382,6 @@ struct RootView: View {
 
                 Section("System") {
                     NavigationLink(destination: HealthView()) { Label("Health", systemImage: "heart.text.square") }
-                    NavigationLink(destination: IssuesView()) {
-                        HStack {
-                            Label("Issues", systemImage: "exclamationmark.bubble")
-                            Spacer()
-                            if !model.issues.isEmpty {
-                                Text("\(model.issues.count)")
-                                    .font(.caption2.bold())
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(PlexTheme.accent.opacity(0.2))
-                                    .clipShape(Capsule())
-                            }
-                        }
-                    }
-                    NavigationLink(destination: BackupsView()) {
-                        Label("Backups", systemImage: "externaldrive.badge.timemachine")
-                    }
                     if BuildFlavor.current.supportsAutomationManagement {
                         NavigationLink(destination: AutomationView()) { Label("Automation", systemImage: "clock.badge.checkmark") }
                     }
@@ -3316,7 +2937,6 @@ struct DashboardView: View {
                     }
 
                     quickActions(status)
-                    commandCenter
 
                     if let lastBulkResult {
                         bulkResultSection(lastBulkResult)
@@ -3448,18 +3068,6 @@ struct DashboardView: View {
                 detail: "\(model.doctor?.failures ?? 0) failures • \(model.doctor?.warnings ?? 0) warnings",
                 icon: "heart.text.square"
             )
-            metricCard(
-                title: "Issues",
-                value: "\(model.issues.count)",
-                detail: model.issues.isEmpty ? "no recent app errors" : "recent errors retained",
-                icon: "exclamationmark.bubble"
-            )
-            metricCard(
-                title: "Backups",
-                value: "\(model.backups.count)",
-                detail: model.backups.first?.name ?? "no backup loaded",
-                icon: "externaldrive.badge.timemachine"
-            )
         }
     }
 
@@ -3590,12 +3198,6 @@ struct DashboardView: View {
                     NavigationLink(destination: HealthView()) {
                         Label("Health", systemImage: "heart.text.square")
                     }
-                    NavigationLink(destination: IssuesView()) {
-                        Label("Issues", systemImage: "exclamationmark.bubble")
-                    }
-                    NavigationLink(destination: BackupsView()) {
-                        Label("Backups", systemImage: "externaldrive.badge.timemachine")
-                    }
                     NavigationLink(destination: MediaOrganizerView()) {
                         Label("Media Organizer", systemImage: "folder.badge.gearshape")
                     }
@@ -3604,74 +3206,6 @@ struct DashboardView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-    }
-
-    private var commandCenter: some View {
-        GroupBox("Command Center") {
-            VStack(spacing: 0) {
-                dashboardStatusRow(
-                    icon: "tv",
-                    title: "Enabled Stations",
-                    value: "\(model.stations.filter(\.enabled).count)",
-                    detail: "\(model.stations.count) configured"
-                )
-                Divider()
-                dashboardStatusRow(
-                    icon: "exclamationmark.bubble",
-                    title: "Recent Issues",
-                    value: "\(model.issues.count)",
-                    detail: model.issues.first?.message ?? "No recent app errors"
-                )
-                Divider()
-                dashboardStatusRow(
-                    icon: "externaldrive.badge.timemachine",
-                    title: "Latest Backup",
-                    value: model.backups.first.map { $0.manifest.appVersion.map { "v\($0)" } ?? "Saved" } ?? "None",
-                    detail: model.backups.first?.name ?? "Create a backup before major changes"
-                )
-                Divider()
-                let failedJobs = model.automationJobs.filter { ($0.lastExitCode ?? 0) != 0 }
-                dashboardStatusRow(
-                    icon: "clock.badge.checkmark",
-                    title: "Automation",
-                    value: failedJobs.isEmpty ? "Healthy" : "\(failedJobs.count) failed",
-                    detail: "\(loadedAutomationCount) of \(model.automationJobs.count) jobs loaded"
-                )
-                Divider()
-                dashboardStatusRow(
-                    icon: "clock.arrow.circlepath",
-                    title: "Recent Builds",
-                    value: "\(model.buildHistory.count)",
-                    detail: model.buildHistory.first?.displayDate ?? "No recorded builds yet"
-                )
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func dashboardStatusRow(
-        icon: String,
-        title: String,
-        value: String,
-        detail: String
-    ) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .frame(width: 22)
-                .foregroundColor(PlexTheme.accent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                Text(detail)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Text(value)
-                .font(.subheadline.bold())
-        }
-        .padding(.vertical, 8)
     }
 
     private func bulkResultSection(_ result: RefreshAllResponse) -> some View {
@@ -3818,69 +3352,32 @@ struct StationsView: View {
             Divider()
 
             List(filteredStations) { station in
-                HStack(spacing: 10) {
-                    NavigationLink(destination: StationDetailView(station: station)) {
-                        HStack(spacing: 12) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(PlexTheme.accent.opacity(station.enabled ? 0.14 : 0.06))
-                                Image(systemName: station.enabled ? "play.tv.fill" : "pause.tv")
-                                    .foregroundColor(station.enabled ? PlexTheme.accent : .secondary)
-                            }
-                            .frame(width: 36, height: 36)
+                NavigationLink(destination: StationDetailView(station: station)) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(PlexTheme.accent.opacity(station.enabled ? 0.14 : 0.06))
+                            Image(systemName: station.enabled ? "play.tv.fill" : "pause.tv")
+                                .foregroundColor(station.enabled ? PlexTheme.accent : .secondary)
+                        }
+                        .frame(width: 36, height: 36)
 
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(station.name).font(.headline)
-                                Text(station.description ?? station.playlist)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 3) {
-                                Text("\(station.total) items")
-                                Text(station.enabled ? "Enabled" : "Disabled")
-                                    .font(.caption2)
-                                    .foregroundColor(station.enabled ? .green : .secondary)
-                            }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(station.name).font(.headline)
+                            Text(station.description ?? station.playlist)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
                         }
-                        .padding(.vertical, 5)
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 3) {
+                            Text("\(station.total) items")
+                            Text(station.enabled ? "Enabled" : "Disabled")
+                                .font(.caption2)
+                                .foregroundColor(station.enabled ? .green : .secondary)
+                        }
                     }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        Task { _ = await model.setStationEnabled(station, enabled: !station.enabled) }
-                    } label: {
-                        Label(
-                            station.enabled ? "Disable" : "Enable",
-                            systemImage: station.enabled ? "pause.fill" : "play.fill"
-                        )
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(station.enabled ? Color.orange : Color.green)
-                    .help(station.enabled ? "Disable this station" : "Enable this station")
-
-                    Menu {
-                        Button {
-                            Task { await model.loadPreview(station) }
-                        } label: {
-                            Label("Load Preview", systemImage: "eye")
-                        }
-                        Button {
-                            Task { await model.dryRun(station) }
-                        } label: {
-                            Label("Dry Run", systemImage: "testtube.2")
-                        }
-                        Button {
-                            Task { await model.loadDiff(station) }
-                        } label: {
-                            Label("Load Diff", systemImage: "arrow.left.arrow.right")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .menuStyle(.borderlessButton)
-                    .help("More station actions")
+                    .padding(.vertical, 5)
                 }
             }
             .listStyle(InsetListStyle())
@@ -4347,7 +3844,6 @@ struct StationEditorView: View {
     @State private var excludeShows: String
     @State private var validationMessage: String?
     @State private var editorSection = 0
-    @State private var confirmDiscard = false
 
     init(station: Station, onSaved: @escaping (Station) -> Void) {
         original = station
@@ -4400,53 +3896,6 @@ struct StationEditorView: View {
         _syncWatchProgress = State(initialValue: station.syncWatchProgress)
         _includeShows = State(initialValue: station.includeShows.joined(separator: "\n"))
         _excludeShows = State(initialValue: station.excludeShows.joined(separator: "\n"))
-    }
-
-    private var isDirty: Bool {
-        let originalPools = (original.interstitialPools.isEmpty
-            ? original.interstitialPlaylists.map {
-                InterstitialPool(playlist: $0, type: "general", weight: 1)
-            }
-            : original.interstitialPools
-        ).sorted { $0.playlist.localizedCaseInsensitiveCompare($1.playlist) == .orderedAscending }
-
-        let currentPools = interstitialPlaylists.sorted().map {
-            InterstitialPool(
-                playlist: $0,
-                type: interstitialTypes[$0] ?? "general",
-                weight: max(1, interstitialWeights[$0] ?? 1)
-            )
-        }
-
-        let currentSequence = orderedBreaksEnabled ? interstitialSequence : []
-        let currentPattern = cyclicBreaksEnabled ? interstitialBreakPattern : []
-
-        return name.trimmingCharacters(in: .whitespacesAndNewlines) != original.name
-            || description != (original.description ?? "")
-            || enabled != original.enabled
-            || playlist.trimmingCharacters(in: .whitespacesAndNewlines) != original.playlist
-            || preset != original.preset
-            || parsedYear(yearMin) != original.yearMin
-            || parsedYear(yearMax) != original.yearMax
-            || kidsOnly != original.kidsOnly
-            || adult != original.adult
-            || perShow != original.perShow
-            || total != original.total
-            || avoidRecent != original.avoidRecent
-            || minShowGap != original.minShowGap
-            || seasonal != original.seasonal
-            || specialEvery != original.specialEvery
-            || currentPools != originalPools
-            || currentSequence != (original.interstitialSequence ?? [])
-            || currentPattern != (original.interstitialBreakPattern ?? [])
-            || interstitialEvery != original.interstitialEvery
-            || interstitialCount != original.interstitialCount
-            || runtimeBlockMinutes != original.runtimeBlockMinutes
-            || runtimeBlockCount != original.runtimeBlockCount
-            || unwatched != original.unwatched
-            || syncWatchProgress != original.syncWatchProgress
-            || lines(includeShows) != original.includeShows
-            || lines(excludeShows) != original.excludeShows
     }
 
     private var videoPlaylists: [PlaylistSummary] {
@@ -4623,26 +4072,13 @@ struct StationEditorView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text("Edit Station").font(.title2.bold())
-                        if isDirty {
-                            Text("Unsaved Changes")
-                                .font(.caption2.bold())
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(PlexTheme.accent.opacity(0.16))
-                                .clipShape(Capsule())
-                        }
-                    }
+                    Text("Edit Station").font(.title2.bold())
                     Text(original.name).font(.caption).foregroundColor(.secondary)
                 }
                 Spacer()
-                Button("Cancel") { attemptDismiss() }
+                Button("Cancel") { dismiss() }
                 Button("Save") { save() }
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .tint(PlexTheme.accent)
-                    .disabled(!isDirty)
             }.padding()
 
             Divider()
@@ -5016,24 +4452,6 @@ struct StationEditorView: View {
             if model.playlists.isEmpty {
                 await model.loadPlaylists()
             }
-        }
-        .confirmationDialog(
-            "Discard unsaved station changes?",
-            isPresented: $confirmDiscard,
-            titleVisibility: .visible
-        ) {
-            Button("Discard Changes", role: .destructive) { dismiss() }
-            Button("Keep Editing", role: .cancel) { }
-        } message: {
-            Text("Your changes to this station have not been saved.")
-        }
-    }
-
-    private func attemptDismiss() {
-        if isDirty {
-            confirmDiscard = true
-        } else {
-            dismiss()
         }
     }
 
@@ -6481,30 +5899,6 @@ struct ScheduleEditorView: View {
     @State private var playlist: String
     @State private var blocks: [BlockDraft]
     @State private var saving = false
-    @State private var confirmDiscard = false
-
-    private var totalMinutes: Int {
-        blocks.reduce(0) { $0 + $1.minutes }
-    }
-
-    private var isDirty: Bool {
-        let normalizedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedPlaylist = playlist.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalizedDescription == original.description,
-              normalizedPlaylist == original.playlist,
-              blocks.count == original.blocks.count else {
-            return true
-        }
-
-        return zip(blocks, original.blocks).contains { pair in
-            let (draft, saved) = pair
-            return draft.name.trimmingCharacters(in: .whitespacesAndNewlines) != saved.name
-                || draft.type != (saved.type ?? "cartoons")
-                || draft.preset.trimmingCharacters(in: .whitespacesAndNewlines) != (saved.preset ?? "")
-                || draft.minutes != saved.minutes
-                || draft.seasonal != (saved.seasonal ?? "")
-        }
-    }
 
     struct BlockDraft: Identifiable {
         let id = UUID()
@@ -6528,27 +5922,12 @@ struct ScheduleEditorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 8) {
-                        Text("Edit Schedule").font(.title2.bold())
-                        if isDirty {
-                            Text("Unsaved Changes")
-                                .font(.caption2.bold())
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(PlexTheme.accent.opacity(0.16))
-                                .clipShape(Capsule())
-                        }
-                    }
-                    Text("Total runtime: \(formattedScheduleDuration(totalMinutes))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+                Text("Edit Schedule").font(.title2.bold())
                 Spacer()
-                Button("Cancel") { attemptDismiss() }
+                Button("Cancel") { dismiss() }
                 Button(saving ? "Saving…" : "Save") { save() }
                     .buttonStyle(.borderedProminent).tint(PlexTheme.accent)
-                    .disabled(saving || !isDirty || playlist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || blocks.isEmpty)
+                    .disabled(saving || playlist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || blocks.isEmpty)
             }
             Form {
                 TextField("Description", text: $description)
@@ -6558,39 +5937,8 @@ struct ScheduleEditorView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 TextField("Block name", text: $block.name)
-                                Spacer(minLength: 8)
-                                if let index = blocks.firstIndex(where: { $0.id == block.id }) {
-                                    Button {
-                                        moveBlock(at: index, by: -1)
-                                    } label: {
-                                        Image(systemName: "arrow.up")
-                                    }
-                                    .disabled(index == 0)
-                                    .help("Move block up")
-
-                                    Button {
-                                        moveBlock(at: index, by: 1)
-                                    } label: {
-                                        Image(systemName: "arrow.down")
-                                    }
-                                    .disabled(index == blocks.count - 1)
-                                    .help("Move block down")
-
-                                    Button {
-                                        duplicateBlock(at: index)
-                                    } label: {
-                                        Image(systemName: "plus.square.on.square")
-                                    }
-                                    .help("Duplicate block")
-                                }
-
-                                Button(role: .destructive) {
-                                    blocks.removeAll { $0.id == block.id }
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
-                                .disabled(blocks.count == 1)
-                                .help("Remove block")
+                                Button(role: .destructive) { blocks.removeAll { $0.id == block.id } } label: { Image(systemName: "trash") }
+                                    .disabled(blocks.count == 1)
                             }
                             Picker("Type", selection: $block.type) { Text("Cartoons").tag("cartoons"); Text("Movie").tag("movie") }
                             TextField("Preset", text: $block.preset)
@@ -6603,53 +5951,7 @@ struct ScheduleEditorView: View {
                     Button("Add Block") { blocks.append(BlockDraft(name: "New Block", type: "cartoons", preset: "all-cartoons", minutes: 60, seasonal: "")) }
                 }
             }
-        }
-        .padding(20)
-        .confirmationDialog(
-            "Discard unsaved schedule changes?",
-            isPresented: $confirmDiscard,
-            titleVisibility: .visible
-        ) {
-            Button("Discard Changes", role: .destructive) { dismiss() }
-            Button("Keep Editing", role: .cancel) { }
-        } message: {
-            Text("Your changes to this schedule have not been saved.")
-        }
-    }
-
-    private func formattedScheduleDuration(_ minutes: Int) -> String {
-        let hours = minutes / 60
-        let remainder = minutes % 60
-        if hours == 0 { return "\(remainder) min" }
-        if remainder == 0 { return "\(hours) hr" + (hours == 1 ? "" : "s") }
-        return "\(hours) hr \(remainder) min"
-    }
-
-    private func moveBlock(at index: Int, by offset: Int) {
-        let destination = index + offset
-        guard blocks.indices.contains(index), blocks.indices.contains(destination) else { return }
-        blocks.swapAt(index, destination)
-    }
-
-    private func duplicateBlock(at index: Int) {
-        guard blocks.indices.contains(index) else { return }
-        let source = blocks[index]
-        let copy = BlockDraft(
-            name: source.name + " Copy",
-            type: source.type,
-            preset: source.preset,
-            minutes: source.minutes,
-            seasonal: source.seasonal
-        )
-        blocks.insert(copy, at: min(index + 1, blocks.count))
-    }
-
-    private func attemptDismiss() {
-        if isDirty {
-            confirmDiscard = true
-        } else {
-            dismiss()
-        }
+        }.padding(20)
     }
 
     private func save() {
@@ -6958,23 +6260,9 @@ struct PlaylistDetailView: View {
     @State private var playlist: PlaylistSummary
 
     @State private var detail: PlaylistDetailResponse?
-    @State private var showRename = false
-    @State private var renameText = ""
-    @State private var confirmDelete = false
     @State private var searchText = ""
     @State private var itemFilter = 0
     @State private var isLoading = false
-    @State private var confirmDeduplicate = false
-    @State private var isDeduplicating = false
-    @State private var showCopy = false
-    @State private var copyName = ""
-    @State private var itemPendingRemoval: MediaItem?
-    @State private var mutatingPlaylistItemId: Int?
-    @State private var selectionMode = false
-    @State private var selectedPlaylistItemIds: Set<Int> = []
-    @State private var confirmBulkRemove = false
-    @State private var showSelectionCopy = false
-    @State private var selectionCopyName = ""
 
     private var items: [MediaItem] {
         detail?.items ?? []
@@ -7114,27 +6402,7 @@ struct PlaylistDetailView: View {
 
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
                             ForEach(Array(filteredItems.enumerated()), id: \.offset) { _, item in
-                                PlaylistMediaCard(
-                                    item: item,
-                                    editable: !playlist.smart && item.playlistItemId != nil,
-                                    canMoveUp: (item.position ?? 1) > 1,
-                                    canMoveDown: (item.position ?? detail.itemCount) < detail.itemCount,
-                                    isMutating: mutatingPlaylistItemId == item.playlistItemId,
-                                    selectionMode: selectionMode,
-                                    isSelected: item.playlistItemId.map { selectedPlaylistItemIds.contains($0) } ?? false,
-                                    onToggleSelection: {
-                                        if let id = item.playlistItemId {
-                                            if selectedPlaylistItemIds.contains(id) {
-                                                selectedPlaylistItemIds.remove(id)
-                                            } else {
-                                                selectedPlaylistItemIds.insert(id)
-                                            }
-                                        }
-                                    },
-                                    onMoveUp: { move(item, direction: "up") },
-                                    onMoveDown: { move(item, direction: "down") },
-                                    onRemove: { itemPendingRemoval = item }
-                                )
+                                PlaylistMediaCard(item: item)
                             }
                         }
                     }
@@ -7150,42 +6418,6 @@ struct PlaylistDetailView: View {
                     }
                     .frame(width: 130)
 
-                    if !playlist.smart {
-                        Button(selectionMode ? "Done Selecting" : "Select") {
-                            selectionMode.toggle()
-                            if !selectionMode {
-                                selectedPlaylistItemIds.removeAll()
-                            }
-                        }
-
-                        if selectionMode {
-                            Button("Select All Visible") {
-                                selectedPlaylistItemIds = Set(filteredItems.compactMap(\.playlistItemId))
-                            }
-                            Button("Save Selection As New") {
-                                selectionCopyName = playlist.title + " Selection"
-                                showSelectionCopy = true
-                            }
-                            .disabled(selectedPlaylistItemIds.isEmpty)
-
-                            Button("Remove Selected", role: .destructive) {
-                                confirmBulkRemove = true
-                            }
-                            .disabled(selectedPlaylistItemIds.isEmpty)
-                        }
-                    }
-
-                    if duplicateExtraCount > 0 && !playlist.smart {
-                        Button(isDeduplicating ? "Cleaning…" : "Remove Duplicates") {
-                            confirmDeduplicate = true
-                        }
-                        .disabled(isDeduplicating)
-                    }
-                    Button("Save As New") {
-                        copyName = playlist.title + " Copy"
-                        showCopy = true
-                    }
-                    .disabled(playlist.smart || items.isEmpty)
                     Button("Rename") { renameText = playlist.title; showRename = true }
                         .disabled(playlist.smart)
                     Button("Delete", role: .destructive) { confirmDelete = true }
@@ -7208,68 +6440,6 @@ struct PlaylistDetailView: View {
             }
         }
         .navigationTitle(playlist.title)
-        .sheet(isPresented: $showSelectionCopy) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Save Selection As New Playlist").font(.title2.bold())
-                Text("\(selectedPlaylistItemIds.count) selected item\(selectedPlaylistItemIds.count == 1 ? "" : "s") will be copied in current playlist order.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField("New playlist name", text: $selectionCopyName)
-                    .textFieldStyle(.roundedBorder)
-                HStack {
-                    Spacer()
-                    Button("Cancel") { showSelectionCopy = false }
-                    Button("Create Playlist") {
-                        let ids = Array(selectedPlaylistItemIds)
-                        let name = selectionCopyName.trimmingCharacters(in: .whitespacesAndNewlines)
-                        Task {
-                            if !name.isEmpty,
-                               await model.copyPlaylistSelection(playlist, ids: ids, to: name) != nil {
-                                showSelectionCopy = false
-                            }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(PlexTheme.accent)
-                    .disabled(
-                        selectedPlaylistItemIds.isEmpty
-                        || selectionCopyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    )
-                }
-            }
-            .padding(20)
-            .frame(width: 460)
-        }
-        .sheet(isPresented: $showCopy) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Save As New Playlist").font(.title2.bold())
-                Text("Create a new Plex playlist with the current items and order.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                TextField("New playlist name", text: $copyName)
-                    .textFieldStyle(.roundedBorder)
-                HStack {
-                    Spacer()
-                    Button("Cancel") { showCopy = false }
-                    Button("Create Copy") {
-                        Task {
-                            let value = copyName.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !value.isEmpty, await model.copyPlaylist(playlist, to: value) != nil {
-                                showCopy = false
-                            }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(PlexTheme.accent)
-                    .disabled(
-                        copyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || copyName.trimmingCharacters(in: .whitespacesAndNewlines) == playlist.title
-                    )
-                }
-            }
-            .padding(20)
-            .frame(width: 440)
-        }
         .sheet(isPresented: $showRename) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Rename Playlist").font(.title2.bold())
@@ -7295,62 +6465,6 @@ struct PlaylistDetailView: View {
             .padding(20)
             .frame(width: 420)
         }
-        .confirmationDialog(
-            "Remove \(selectedPlaylistItemIds.count) selected item\(selectedPlaylistItemIds.count == 1 ? "" : "s")?",
-            isPresented: $confirmBulkRemove,
-            titleVisibility: .visible
-        ) {
-            Button("Remove Selected", role: .destructive) {
-                let ids = Array(selectedPlaylistItemIds)
-                Task {
-                    if await model.removePlaylistItems(ids: ids, from: playlist) {
-                        selectedPlaylistItemIds.removeAll()
-                        selectionMode = false
-                        await load()
-                    }
-                }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Only playlist entries are removed. The underlying media files remain untouched.")
-        }
-        .confirmationDialog(
-            "Remove item from \(playlist.title)?",
-            isPresented: Binding(
-                get: { itemPendingRemoval != nil },
-                set: { if !$0 { itemPendingRemoval = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Remove from Playlist", role: .destructive) {
-                guard let item = itemPendingRemoval else { return }
-                itemPendingRemoval = nil
-                mutate(item) {
-                    await model.removePlaylistItem(item, from: playlist)
-                }
-            }
-            Button("Cancel", role: .cancel) { itemPendingRemoval = nil }
-        } message: {
-            Text("This removes only the playlist entry. The media file remains in Plex.")
-        }
-        .confirmationDialog(
-            "Remove duplicate entries from \(playlist.title)?",
-            isPresented: $confirmDeduplicate,
-            titleVisibility: .visible
-        ) {
-            Button("Remove \(duplicateExtraCount) Duplicate\(duplicateExtraCount == 1 ? "" : "s")") {
-                isDeduplicating = true
-                Task {
-                    if await model.deduplicatePlaylist(playlist) != nil {
-                        await load()
-                    }
-                    isDeduplicating = false
-                }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("Plex Curator keeps the first occurrence of each media item and removes only repeated playlist entries. Media files are not deleted.")
-        }
         .confirmationDialog("Delete \(playlist.title)?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete Playlist", role: .destructive) {
                 Task { if await model.deletePlaylist(playlist) { dismiss() } }
@@ -7360,23 +6474,6 @@ struct PlaylistDetailView: View {
             Text("This removes the playlist from Plex. The underlying media files are not deleted.")
         }
         .task { await load() }
-    }
-
-    private func move(_ item: MediaItem, direction: String) {
-        mutate(item) {
-            await model.movePlaylistItem(item, in: playlist, direction: direction)
-        }
-    }
-
-    private func mutate(_ item: MediaItem, operation: @escaping () async -> Bool) {
-        guard mutatingPlaylistItemId == nil else { return }
-        mutatingPlaylistItemId = item.playlistItemId
-        Task {
-            if await operation() {
-                await load()
-            }
-            mutatingPlaylistItemId = nil
-        }
     }
 
     private func detailMetric(_ label: String, _ value: String) -> some View {
@@ -7414,16 +6511,6 @@ struct PlaylistDetailView: View {
 struct PlaylistMediaCard: View {
     @EnvironmentObject var model: AppModel
     let item: MediaItem
-    var editable = false
-    var canMoveUp = false
-    var canMoveDown = false
-    var isMutating = false
-    var selectionMode = false
-    var isSelected = false
-    var onToggleSelection: (() -> Void)? = nil
-    var onMoveUp: (() -> Void)? = nil
-    var onMoveDown: (() -> Void)? = nil
-    var onRemove: (() -> Void)? = nil
 
     private var artworkHeight: CGFloat {
         item.type == "episode" ? 120 : 260
@@ -7439,19 +6526,6 @@ struct PlaylistMediaCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if selectionMode && editable {
-                Button {
-                    onToggleSelection?()
-                } label: {
-                    Label(
-                        isSelected ? "Selected" : "Select",
-                        systemImage: isSelected ? "checkmark.circle.fill" : "circle"
-                    )
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(isSelected ? PlexTheme.accent : .secondary)
-            }
-
             ZStack {
                 RoundedRectangle(cornerRadius: 9)
                     .fill(Color.secondary.opacity(0.12))
@@ -7512,42 +6586,6 @@ struct PlaylistMediaCard: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(3)
-            }
-
-            if editable {
-                Divider()
-                HStack(spacing: 8) {
-                    Button {
-                        onMoveUp?()
-                    } label: {
-                        Image(systemName: "arrow.up")
-                    }
-                    .disabled(!canMoveUp || isMutating)
-                    .help("Move up")
-
-                    Button {
-                        onMoveDown?()
-                    } label: {
-                        Image(systemName: "arrow.down")
-                    }
-                    .disabled(!canMoveDown || isMutating)
-                    .help("Move down")
-
-                    Spacer()
-
-                    if isMutating {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Button(role: .destructive) {
-                            onRemove?()
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .help("Remove from playlist")
-                    }
-                }
-                .buttonStyle(.bordered)
             }
         }
         .padding(10)
@@ -8862,257 +7900,6 @@ struct LogsView: View {
             return .orange
         }
         return .primary
-    }
-}
-
-struct BackupsView: View {
-    @EnvironmentObject var model: AppModel
-    @State private var restoreCandidate: BackupEntry?
-    @State private var creating = false
-    @State private var restoring = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Backups")
-                        .font(.title2.bold())
-                    Text("Protect and restore Plex Curator configuration and state.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                Button(creating ? "Creating…" : "Create Backup") {
-                    creating = true
-                    Task {
-                        _ = await model.createBackup()
-                        creating = false
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(PlexTheme.accent)
-                .disabled(creating || restoring)
-
-                Button("Reload") {
-                    Task { await model.loadBackups() }
-                }
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
-
-            Divider()
-
-            if model.backups.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "externaldrive.badge.plus")
-                        .font(.system(size: 44))
-                        .foregroundColor(.secondary)
-                    Text("No backups found.")
-                        .font(.headline)
-                    Text("Create a backup before major station, schedule, or configuration changes.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(model.backups) { backup in
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(backup.name)
-                                    .font(.headline)
-                                Text(backup.manifest.reason ?? "Backup")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            Spacer()
-
-                            if let version = backup.manifest.appVersion {
-                                Text("v\(version)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-
-                            Button("Reveal") {
-                                NSWorkspace.shared.activateFileViewerSelecting([
-                                    URL(fileURLWithPath: backup.path)
-                                ])
-                            }
-
-                            Button("Restore") {
-                                restoreCandidate = backup
-                            }
-                            .disabled(restoring)
-                        }
-
-                        HStack(spacing: 12) {
-                            if let created = backup.manifest.createdAt {
-                                Text(created.replacingOccurrences(of: "T", with: " "))
-                            }
-                            if let files = backup.manifest.files {
-                                Text("\(files.count) files")
-                            }
-                        }
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 5)
-                }
-                .listStyle(.inset)
-            }
-        }
-        .navigationTitle("Backups")
-        .tint(PlexTheme.accent)
-        .task {
-            await model.loadBackups()
-        }
-        .confirmationDialog(
-            restoreCandidate.map { "Restore \($0.name)?" } ?? "Restore backup?",
-            isPresented: Binding(
-                get: { restoreCandidate != nil },
-                set: { if !$0 { restoreCandidate = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("Restore Backup", role: .destructive) {
-                guard let backup = restoreCandidate else { return }
-                restoreCandidate = nil
-                restoring = true
-                Task {
-                    _ = await model.restoreBackup(backup)
-                    restoring = false
-                }
-            }
-            Button("Cancel", role: .cancel) {
-                restoreCandidate = nil
-            }
-        } message: {
-            Text("Plex Curator creates a safety backup of the current configuration before restoring. Plex media files and Plex playlists are not deleted.")
-        }
-    }
-}
-
-struct IssuesView: View {
-    @EnvironmentObject var model: AppModel
-
-    private var diagnosticProblems: [DoctorCheck] {
-        (model.doctor?.checks ?? []).filter {
-            let status = $0.status.lowercased()
-            return status != "pass" && status != "ok" && status != "healthy"
-        }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Issues")
-                        .font(.title2.bold())
-                    Text("Recent app errors and current diagnostic warnings.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                Button("Run Diagnostics") {
-                    Task { await model.refreshHealth() }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(PlexTheme.accent)
-
-                Button("Clear History") {
-                    model.clearIssues()
-                }
-                .disabled(model.issues.isEmpty)
-            }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
-
-            Divider()
-
-            if model.issues.isEmpty && diagnosticProblems.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.system(size: 44))
-                        .foregroundColor(.green)
-                    Text("No issues need attention.")
-                        .font(.headline)
-                    Text("New API, decoding, playlist, station, schedule, and automation errors will appear here.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 460)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List {
-                    if !model.issues.isEmpty {
-                        Section("Recent App Errors") {
-                            ForEach(model.issues) { issue in
-                                HStack(alignment: .top, spacing: 12) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundColor(.orange)
-                                        .padding(.top, 2)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(issue.message)
-                                            .textSelection(.enabled)
-                                        Text(issue.createdAt.formatted(date: .abbreviated, time: .standard))
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    Button("Copy") {
-                                        copy(issue.message)
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-                    }
-
-                    if !diagnosticProblems.isEmpty {
-                        Section("Current Diagnostics") {
-                            ForEach(diagnosticProblems) { check in
-                                HStack(alignment: .top, spacing: 12) {
-                                    Image(systemName: "wrench.and.screwdriver.fill")
-                                        .foregroundColor(check.status.lowercased().contains("fail") ? .red : .orange)
-                                        .padding(.top, 2)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        HStack {
-                                            Text(check.label)
-                                                .font(.headline)
-                                            Text(check.status.uppercased())
-                                                .font(.caption2.bold())
-                                                .foregroundColor(.secondary)
-                                        }
-                                        Text(check.detail)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                            .textSelection(.enabled)
-                                    }
-                                    Spacer()
-                                    Button("Copy") {
-                                        copy("\(check.label) — \(check.status)\n\(check.detail)")
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                                .padding(.vertical, 4)
-                            }
-                        }
-                    }
-                }
-                .listStyle(.inset)
-            }
-        }
-        .navigationTitle("Issues")
-        .tint(PlexTheme.accent)
-    }
-
-    private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        model.message = "Copied issue details."
     }
 }
 
