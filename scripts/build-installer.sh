@@ -61,6 +61,40 @@ mkdir -p "$WORK" "$BACKEND_DIST" \
 echo "Building SwiftUI app..."
 PLEX_CURATOR_VERSION="$VERSION" bash "$ROOT/macos/scripts/build-app.sh"
 
+echo "Verifying packaged GUI architecture..."
+APP_BIN="$ROOT/macos/dist/Plex Curator.app/Contents/MacOS/PlexCuratorMac"
+/usr/bin/file "$APP_BIN"
+case "$ARCH" in
+  x86_64)
+    /usr/bin/file "$APP_BIN" | /usr/bin/grep -q "x86_64" || {
+      echo "Intel installer contains a non-x86_64 GUI executable." >&2
+      exit 1
+    }
+    ;;
+  arm64)
+    /usr/bin/file "$APP_BIN" | /usr/bin/grep -q "arm64" || {
+      echo "Apple Silicon installer contains a non-arm64 GUI executable." >&2
+      exit 1
+    }
+    ;;
+esac
+
+echo "Smoke-testing packaged GUI launch..."
+GUI_STDOUT="$WORK/gui-smoke.out.log"
+GUI_STDERR="$WORK/gui-smoke.err.log"
+"$APP_BIN" >"$GUI_STDOUT" 2>"$GUI_STDERR" &
+GUI_PID=$!
+/bin/sleep 5
+if ! /bin/kill -0 "$GUI_PID" >/dev/null 2>&1; then
+  echo "Plex Curator GUI exited during launch smoke test." >&2
+  /bin/cat "$GUI_STDOUT" >&2 || true
+  /bin/cat "$GUI_STDERR" >&2 || true
+  wait "$GUI_PID" 2>/dev/null || true
+  exit 1
+fi
+/bin/kill "$GUI_PID" >/dev/null 2>&1 || true
+wait "$GUI_PID" 2>/dev/null || true
+
 echo "Building self-contained backend executables..."
 python3 -m venv "$PYENV"
 "$PYENV/bin/python" -m pip install --upgrade pip
