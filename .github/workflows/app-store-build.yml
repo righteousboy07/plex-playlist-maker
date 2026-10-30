@@ -20,9 +20,14 @@ jobs:
   build:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: ".node-version"
+      - name: Node version
+        run: node --version
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.12"
           architecture: arm64
@@ -43,7 +48,7 @@ jobs:
           codesign -d --entitlements :- "$APP" 2>&1 | grep -q "com.apple.security.app-sandbox"
           codesign -d --entitlements :- "$HELPER" 2>&1 | grep -q "com.apple.security.inherit"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: plex-curator-app-store-scaffold
           path: macos/dist/app-store/Plex Curator.app
