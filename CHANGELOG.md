@@ -90,6 +90,9 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- 13.2.22: fix Automation decoding when `lastExitCode` is returned as either an integer or numeric string.
+- 13.2.22: move main content to a warm porcelain/white surface palette with dark ink text for substantially stronger contrast.
+- 13.2.22: replace Movie Curator's split-view layout with a centered, top-aligned two-column workspace.
 - 13.2.21 Intel recovery: restored the macOS client to the exact v13.2.18 release baseline and added architecture plus live GUI-startup smoke tests to installer CI.
 - Increased main-content text contrast with explicit high-contrast theme tokens for primary and secondary copy.
 - Rebuilt Movie Curator around an aligned page shell with a consistent header, padded filter/playlist cards, and a properly aligned preview pane.
