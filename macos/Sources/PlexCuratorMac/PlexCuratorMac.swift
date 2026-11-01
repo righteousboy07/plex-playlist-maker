@@ -159,6 +159,24 @@ struct PlaylistMutationResponse: Decodable {
     let title: String?
 }
 
+struct PlaylistDeduplicateResponse: Decodable {
+    let ok: Bool
+    let title: String
+    let removedCount: Int
+    let itemCount: Int
+}
+
+struct PlaylistItemMoveRequest: Encodable {
+    let playlistItemId: Int
+    let direction: String
+}
+
+struct PlaylistMoveResponse: Decodable {
+    let ok: Bool
+    let title: String
+    let moved: Bool
+}
+
 struct MovieFilterRequest: Encodable {
     let library: String
     let genre: String?
@@ -311,8 +329,12 @@ struct ScheduleBuildResponse: Codable {
 }
 
 struct MediaItem: Codable, Identifiable {
-    var id: String { ratingKey.isEmpty ? "\(position ?? 0)-\(title ?? "")" : ratingKey }
+    var id: String {
+        if let playlistItemId { return "playlist-\(playlistItemId)" }
+        return ratingKey.isEmpty ? "\(position ?? 0)-\(title ?? "")" : ratingKey
+    }
     let ratingKey: String
+    let playlistItemId: Int?
     let type: String?
     let title: String?
     let year: Int?
@@ -1025,6 +1047,58 @@ final class APIClient {
         components.path = "/api/v1/playlist"
         components.queryItems = [URLQueryItem(name: "name", value: name)]
         return try await request(components.string ?? "/api/v1/playlist")
+    }
+
+    func deduplicatePlaylist(name: String) async throws -> PlaylistDeduplicateResponse {
+        var components = URLComponents()
+        components.path = "/api/v1/playlist/deduplicate"
+        components.queryItems = [URLQueryItem(name: "name", value: name)]
+        return try await request(
+            components.string ?? "/api/v1/playlist/deduplicate",
+            method: "POST",
+            authenticated: true
+        )
+    }
+
+    func copyPlaylist(currentName: String, newName: String) async throws -> PlaylistSummary {
+        let body = try encoder.encode(PlaylistRenameRequest(currentName: currentName, newName: newName))
+        let response: PlaylistMutationResponse = try await request(
+            "/api/v1/playlist/copy",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+        guard let playlist = response.playlist else { throw APIClientError.invalidResponse }
+        return playlist
+    }
+
+    func removePlaylistItem(name: String, playlistItemId: Int) async throws -> PlaylistDeduplicateResponse {
+        var components = URLComponents()
+        components.path = "/api/v1/playlist/item"
+        components.queryItems = [
+            URLQueryItem(name: "name", value: name),
+            URLQueryItem(name: "playlist_item_id", value: String(playlistItemId))
+        ]
+        return try await request(
+            components.string ?? "/api/v1/playlist/item",
+            method: "DELETE",
+            authenticated: true
+        )
+    }
+
+    func movePlaylistItem(name: String, playlistItemId: Int, direction: String) async throws -> PlaylistMoveResponse {
+        var components = URLComponents()
+        components.path = "/api/v1/playlist/item/move"
+        components.queryItems = [URLQueryItem(name: "name", value: name)]
+        let body = try encoder.encode(
+            PlaylistItemMoveRequest(playlistItemId: playlistItemId, direction: direction)
+        )
+        return try await request(
+            components.string ?? "/api/v1/playlist/item/move",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
     }
 
     func artworkURL(ratingKey: String, width: Int = 240, height: Int = 360) -> URL? {
@@ -2093,6 +2167,83 @@ final class AppModel: ObservableObject {
             try await api.deletePlaylist(name: playlist.title)
             playlists.removeAll { $0.id == playlist.id }
             message = "Deleted playlist \(playlist.title)."
+            error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    func deduplicatePlaylist(_ playlist: PlaylistSummary) async -> Int? {
+        do {
+            let result = try await api.deduplicatePlaylist(name: playlist.title)
+            if let index = playlists.firstIndex(where: { $0.id == playlist.id }) {
+                let current = playlists[index]
+                playlists[index] = PlaylistSummary(
+                    title: current.title,
+                    itemCount: result.itemCount,
+                    ratingKey: current.ratingKey,
+                    playlistType: current.playlistType,
+                    smart: current.smart,
+                    updatedAt: current.updatedAt
+                )
+            }
+            message = result.removedCount == 0
+                ? "No duplicate entries found in \(playlist.title)."
+                : "Removed \(result.removedCount) duplicate entr\(result.removedCount == 1 ? "y" : "ies") from \(playlist.title)."
+            error = nil
+            return result.removedCount
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func copyPlaylist(_ playlist: PlaylistSummary, to newName: String) async -> PlaylistSummary? {
+        do {
+            let created = try await api.copyPlaylist(currentName: playlist.title, newName: newName)
+            playlists.append(created)
+            playlists.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            message = "Created \(created.title) from \(playlist.title)."
+            error = nil
+            return created
+        } catch {
+            self.error = error.localizedDescription
+            return nil
+        }
+    }
+
+    func removePlaylistItem(_ item: MediaItem, from playlist: PlaylistSummary) async -> Bool {
+        guard let playlistItemId = item.playlistItemId else {
+            error = "This playlist item does not include a Plex playlist item identifier."
+            return false
+        }
+        do {
+            _ = try await api.removePlaylistItem(name: playlist.title, playlistItemId: playlistItemId)
+            message = "Removed \(item.displayTitle) from \(playlist.title)."
+            error = nil
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    func movePlaylistItem(_ item: MediaItem, in playlist: PlaylistSummary, direction: String) async -> Bool {
+        guard let playlistItemId = item.playlistItemId else {
+            error = "This playlist item does not include a Plex playlist item identifier."
+            return false
+        }
+        do {
+            let result = try await api.movePlaylistItem(
+                name: playlist.title,
+                playlistItemId: playlistItemId,
+                direction: direction
+            )
+            if result.moved {
+                message = "Moved \(item.displayTitle) \(direction)."
+            }
             error = nil
             return true
         } catch {
@@ -3396,32 +3547,69 @@ struct StationsView: View {
             Divider()
 
             List(filteredStations) { station in
-                NavigationLink(destination: StationDetailView(station: station)) {
-                    HStack(spacing: 12) {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(PlexTheme.accent.opacity(station.enabled ? 0.14 : 0.06))
-                            Image(systemName: station.enabled ? "play.tv.fill" : "pause.tv")
-                                .foregroundColor(station.enabled ? PlexTheme.accent : .secondary)
-                        }
-                        .frame(width: 36, height: 36)
+                HStack(spacing: 10) {
+                    NavigationLink(destination: StationDetailView(station: station)) {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(PlexTheme.accent.opacity(station.enabled ? 0.14 : 0.06))
+                                Image(systemName: station.enabled ? "play.tv.fill" : "pause.tv")
+                                    .foregroundColor(station.enabled ? PlexTheme.accent : .secondary)
+                            }
+                            .frame(width: 36, height: 36)
 
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(station.name).font(.headline)
-                            Text(station.description ?? station.playlist)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(station.name).font(.headline)
+                                Text(station.description ?? station.playlist)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 3) {
+                                Text("\(station.total) items")
+                                Text(station.enabled ? "Enabled" : "Disabled")
+                                    .font(.caption2)
+                                    .foregroundColor(station.enabled ? .green : .secondary)
+                            }
                         }
-                        Spacer()
-                        VStack(alignment: .trailing, spacing: 3) {
-                            Text("\(station.total) items")
-                            Text(station.enabled ? "Enabled" : "Disabled")
-                                .font(.caption2)
-                                .foregroundColor(station.enabled ? .green : .secondary)
-                        }
+                        .padding(.vertical, 5)
                     }
-                    .padding(.vertical, 5)
+                    .buttonStyle(.plain)
+
+                    Button {
+                        Task { _ = await model.setStationEnabled(station, enabled: !station.enabled) }
+                    } label: {
+                        Label(
+                            station.enabled ? "Disable" : "Enable",
+                            systemImage: station.enabled ? "pause.fill" : "play.fill"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(station.enabled ? Color.orange : Color.green)
+                    .help(station.enabled ? "Disable this station" : "Enable this station")
+
+                    Menu {
+                        Button {
+                            Task { await model.loadPreview(station) }
+                        } label: {
+                            Label("Load Preview", systemImage: "eye")
+                        }
+                        Button {
+                            Task { await model.dryRun(station) }
+                        } label: {
+                            Label("Dry Run", systemImage: "testtube.2")
+                        }
+                        Button {
+                            Task { await model.loadDiff(station) }
+                        } label: {
+                            Label("Load Diff", systemImage: "arrow.left.arrow.right")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .help("More station actions")
                 }
             }
             .listStyle(InsetListStyle())
@@ -5544,6 +5732,7 @@ struct MediaOrganizerRow: View {
 struct SchedulesView: View {
     @EnvironmentObject var model: AppModel
     @State private var searchText = ""
+    @State private var scheduleToEdit: ScheduleSummary?
 
     private var filteredSchedules: [ScheduleSummary] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -5584,7 +5773,8 @@ struct SchedulesView: View {
             Divider()
 
             List(filteredSchedules) { schedule in
-                NavigationLink(destination: ScheduleDetailView(schedule: schedule)) {
+                HStack(spacing: 10) {
+                    NavigationLink(destination: ScheduleDetailView(schedule: schedule)) {
                     HStack(spacing: 14) {
                         ZStack {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -5622,6 +5812,16 @@ struct SchedulesView: View {
                     }
                 }
                     .padding(.vertical, 5)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        scheduleToEdit = schedule
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Edit this schedule")
                 }
             }
             .listStyle(InsetListStyle())
@@ -5641,6 +5841,14 @@ struct SchedulesView: View {
             async let schedules: Void = model.loadSchedules()
             async let automation: Void = model.loadAutomation()
             _ = await (schedules, automation)
+        }
+        .sheet(item: $scheduleToEdit) { schedule in
+            ScheduleEditorView(schedule: schedule) { _ in
+                Task { await model.loadSchedules() }
+                scheduleToEdit = nil
+            }
+            .environmentObject(model)
+            .frame(minWidth: 700, minHeight: 720)
         }
     }
 
@@ -6310,6 +6518,12 @@ struct PlaylistDetailView: View {
     @State private var searchText = ""
     @State private var itemFilter = 0
     @State private var isLoading = false
+    @State private var confirmDeduplicate = false
+    @State private var isDeduplicating = false
+    @State private var showCopy = false
+    @State private var copyName = ""
+    @State private var itemPendingRemoval: MediaItem?
+    @State private var mutatingPlaylistItemId: Int?
 
     private var items: [MediaItem] {
         detail?.items ?? []
@@ -6449,7 +6663,16 @@ struct PlaylistDetailView: View {
 
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
                             ForEach(Array(filteredItems.enumerated()), id: \.offset) { _, item in
-                                PlaylistMediaCard(item: item)
+                                PlaylistMediaCard(
+                                    item: item,
+                                    editable: !playlist.smart && item.playlistItemId != nil,
+                                    canMoveUp: (item.position ?? 1) > 1,
+                                    canMoveDown: (item.position ?? detail.itemCount) < detail.itemCount,
+                                    isMutating: mutatingPlaylistItemId == item.playlistItemId,
+                                    onMoveUp: { move(item, direction: "up") },
+                                    onMoveDown: { move(item, direction: "down") },
+                                    onRemove: { itemPendingRemoval = item }
+                                )
                             }
                         }
                     }
@@ -6465,6 +6688,17 @@ struct PlaylistDetailView: View {
                     }
                     .frame(width: 130)
 
+                    if duplicateExtraCount > 0 && !playlist.smart {
+                        Button(isDeduplicating ? "Cleaning…" : "Remove Duplicates") {
+                            confirmDeduplicate = true
+                        }
+                        .disabled(isDeduplicating)
+                    }
+                    Button("Save As New") {
+                        copyName = playlist.title + " Copy"
+                        showCopy = true
+                    }
+                    .disabled(playlist.smart || items.isEmpty)
                     Button("Rename") { renameText = playlist.title; showRename = true }
                         .disabled(playlist.smart)
                     Button("Delete", role: .destructive) { confirmDelete = true }
@@ -6487,6 +6721,36 @@ struct PlaylistDetailView: View {
             }
         }
         .navigationTitle(playlist.title)
+        .sheet(isPresented: $showCopy) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Save As New Playlist").font(.title2.bold())
+                Text("Create a new Plex playlist with the current items and order.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                TextField("New playlist name", text: $copyName)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showCopy = false }
+                    Button("Create Copy") {
+                        Task {
+                            let value = copyName.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !value.isEmpty, await model.copyPlaylist(playlist, to: value) != nil {
+                                showCopy = false
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+                    .disabled(
+                        copyName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || copyName.trimmingCharacters(in: .whitespacesAndNewlines) == playlist.title
+                    )
+                }
+            }
+            .padding(20)
+            .frame(width: 440)
+        }
         .sheet(isPresented: $showRename) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Rename Playlist").font(.title2.bold())
@@ -6512,6 +6776,43 @@ struct PlaylistDetailView: View {
             .padding(20)
             .frame(width: 420)
         }
+        .confirmationDialog(
+            "Remove item from \(playlist.title)?",
+            isPresented: Binding(
+                get: { itemPendingRemoval != nil },
+                set: { if !$0 { itemPendingRemoval = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove from Playlist", role: .destructive) {
+                guard let item = itemPendingRemoval else { return }
+                itemPendingRemoval = nil
+                mutate(item) {
+                    await model.removePlaylistItem(item, from: playlist)
+                }
+            }
+            Button("Cancel", role: .cancel) { itemPendingRemoval = nil }
+        } message: {
+            Text("This removes only the playlist entry. The media file remains in Plex.")
+        }
+        .confirmationDialog(
+            "Remove duplicate entries from \(playlist.title)?",
+            isPresented: $confirmDeduplicate,
+            titleVisibility: .visible
+        ) {
+            Button("Remove \(duplicateExtraCount) Duplicate\(duplicateExtraCount == 1 ? "" : "s")") {
+                isDeduplicating = true
+                Task {
+                    if await model.deduplicatePlaylist(playlist) != nil {
+                        await load()
+                    }
+                    isDeduplicating = false
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Plex Curator keeps the first occurrence of each media item and removes only repeated playlist entries. Media files are not deleted.")
+        }
         .confirmationDialog("Delete \(playlist.title)?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete Playlist", role: .destructive) {
                 Task { if await model.deletePlaylist(playlist) { dismiss() } }
@@ -6521,6 +6822,23 @@ struct PlaylistDetailView: View {
             Text("This removes the playlist from Plex. The underlying media files are not deleted.")
         }
         .task { await load() }
+    }
+
+    private func move(_ item: MediaItem, direction: String) {
+        mutate(item) {
+            await model.movePlaylistItem(item, in: playlist, direction: direction)
+        }
+    }
+
+    private func mutate(_ item: MediaItem, operation: @escaping () async -> Bool) {
+        guard mutatingPlaylistItemId == nil else { return }
+        mutatingPlaylistItemId = item.playlistItemId
+        Task {
+            if await operation() {
+                await load()
+            }
+            mutatingPlaylistItemId = nil
+        }
     }
 
     private func detailMetric(_ label: String, _ value: String) -> some View {
@@ -6558,6 +6876,13 @@ struct PlaylistDetailView: View {
 struct PlaylistMediaCard: View {
     @EnvironmentObject var model: AppModel
     let item: MediaItem
+    var editable = false
+    var canMoveUp = false
+    var canMoveDown = false
+    var isMutating = false
+    var onMoveUp: (() -> Void)? = nil
+    var onMoveDown: (() -> Void)? = nil
+    var onRemove: (() -> Void)? = nil
 
     private var artworkHeight: CGFloat {
         item.type == "episode" ? 120 : 260
@@ -6633,6 +6958,42 @@ struct PlaylistMediaCard: View {
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .lineLimit(3)
+            }
+
+            if editable {
+                Divider()
+                HStack(spacing: 8) {
+                    Button {
+                        onMoveUp?()
+                    } label: {
+                        Image(systemName: "arrow.up")
+                    }
+                    .disabled(!canMoveUp || isMutating)
+                    .help("Move up")
+
+                    Button {
+                        onMoveDown?()
+                    } label: {
+                        Image(systemName: "arrow.down")
+                    }
+                    .disabled(!canMoveDown || isMutating)
+                    .help("Move down")
+
+                    Spacer()
+
+                    if isMutating {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Button(role: .destructive) {
+                            onRemove?()
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .help("Remove from playlist")
+                    }
+                }
+                .buttonStyle(.bordered)
             }
         }
         .padding(10)
