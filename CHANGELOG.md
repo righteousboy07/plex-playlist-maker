@@ -90,6 +90,9 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- 13.2.23: add direct Enable/Disable controls and quick actions to the Stations list.
+- 13.2.23: expose Schedule editing directly from the Schedules list while retaining the full detail editor.
+- 13.2.23: restore regular-playlist item editing with Move Up/Down, Remove, Save As New, and duplicate cleanup controls.
 - 13.2.22: fix Automation decoding when `lastExitCode` is returned as either an integer or numeric string.
 - 13.2.22: move main content to a warm porcelain/white surface palette with dark ink text for substantially stronger contrast.
 - 13.2.22: replace Movie Curator's split-view layout with a centered, top-aligned two-column workspace.
