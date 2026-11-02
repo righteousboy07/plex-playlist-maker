@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.13"
+API_VERSION = "1.14"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = (
     core.APP_DIR / "plex-curator-launchd"
