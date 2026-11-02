@@ -78,7 +78,7 @@ STORE_AUTOMATION_JOBS = {
     },
     "kids-scary-wishlist": {
         "calendar": {"weekday": 1, "hour": 9, "minute": 0},
-        "args": ["wishlist-check", str(core.EXAMPLES_DIR / "kids-scary-missing-wishlist.txt")],
+        "args": ["wishlist-check", str(KIDS_SCARY_WISHLIST)],
         "description": "Sunday at 9:00 AM",
     },
     "stations-nightly": {
