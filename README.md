@@ -122,7 +122,7 @@ The native macOS app now includes:
 - playlist usage classification, sorting, filtering, and duplicate/runtime diagnostics
 - movie curation and wishlist tools
 - schedule programming
-- Media Organizer scans with progress, cancellation, exclusions, presets, review frames, and safe apply workflows
+- Media Organizer scans with progress, cancellation, exclusions, presets, review frames, safe apply workflows, and recursive RAR extraction that preserves source folder hierarchy
 - automation/LaunchAgent management
 - searchable History with station filtering and copy/export support
 - searchable Logs with job selection, stdout/stderr selection, severity highlighting, line limits, copy, and Finder reveal
@@ -341,6 +341,23 @@ plex-curator media-preset-save "Movie Cleanup" \
   --exclude "*/sample/*"
 plex-curator media-preset-delete <preset-id>
 ```
+
+RAR import preview, preserving the source parent/child hierarchy under a new destination:
+
+```bash
+plex-curator media-rar-import "/path/to/source" \
+  --destination "/path/to/destination"
+```
+
+Extract and copy supported video files:
+
+```bash
+plex-curator media-rar-import "/path/to/source" \
+  --destination "/path/to/destination" \
+  --apply
+```
+
+Use `--include-all-files` to copy every extracted file instead of only supported video formats. Existing destination files are skipped and the original RAR archives are never deleted. The workflow uses an available `unar`, `unrar`, `bsdtar`, or `tar` extractor.
 
 ### LaunchAgent automation manager
 

@@ -11,6 +11,7 @@ import random
 import re
 import shutil
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sqlite3
 import sys
@@ -57,7 +58,7 @@ LOG_DIR = runtime_path(
 )
 EXAMPLES_DIR = runtime_path("PLEX_CURATOR_EXAMPLES_DIR", APP_DIR / "examples")
 DEFAULT_LOG_RETENTION_DAYS = 30
-APP_VERSION = "13.2.24"
+APP_VERSION = "13.2.25"
 
 VIDEO_EXTENSIONS = {
     ".mp4", ".m4v", ".mov", ".mkv", ".avi", ".wmv", ".webm", ".mpg", ".mpeg", ".ts"
@@ -1314,6 +1315,281 @@ def apply_media_organization(
     manifest = write_media_organizer_manifest(result, applied=True)
     result["manifest"] = str(manifest)
     return result
+
+
+def _find_rar_executable(name, extra_paths=()):
+    discovered = shutil.which(name)
+    if discovered:
+        return discovered
+    for candidate in extra_paths:
+        path = Path(candidate)
+        if path.exists() and os.access(path, os.X_OK):
+            return str(path)
+    return None
+
+def find_rar_extractor():
+    """Return the first supported RAR extractor available on this Mac."""
+    candidates = (
+        ("unar", _find_rar_executable("unar", (
+            "/opt/homebrew/bin/unar",
+            "/usr/local/bin/unar",
+            "/usr/bin/unar",
+        ))),
+        ("unrar", _find_rar_executable("unrar", (
+            "/opt/homebrew/bin/unrar",
+            "/usr/local/bin/unrar",
+            "/usr/bin/unrar",
+        ))),
+        ("bsdtar", _find_rar_executable("bsdtar", (
+            "/usr/bin/bsdtar",
+            "/opt/homebrew/bin/bsdtar",
+            "/usr/local/bin/bsdtar",
+        ))),
+        ("tar", _find_rar_executable("tar", (
+            "/usr/bin/tar",
+        ))),
+    )
+    for name, path in candidates:
+        if path:
+            return {"name": name, "path": path}
+    return None
+
+def _is_primary_rar_archive(path):
+    """Avoid processing every volume in modern .partNN.rar split archives."""
+    name = Path(path).name.casefold()
+    match = re.search(r"\.part(\d+)\.rar$", name)
+    if not match:
+        return True
+    try:
+        return int(match.group(1)) == 1
+    except ValueError:
+        return True
+
+def iter_rar_archives(root, recursive=True):
+    root = Path(root).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise SystemExit(f"RAR import source folder not found: {root}")
+    iterator = root.rglob("*") if recursive else root.glob("*")
+    archives = []
+    for path in iterator:
+        try:
+            if (
+                path.is_file()
+                and path.suffix.casefold() == ".rar"
+                and _is_primary_rar_archive(path)
+            ):
+                archives.append(path)
+        except OSError:
+            continue
+    return sorted(archives)
+
+def plan_rar_import(root, destination, recursive=True, media_only=True):
+    root = Path(root).expanduser().resolve()
+    destination_root = Path(destination).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise SystemExit(f"RAR import source folder not found: {root}")
+    if root == destination_root:
+        raise SystemExit("RAR import destination must be different from the source folder.")
+
+    extractor = find_rar_extractor()
+    archives = []
+    for archive in iter_rar_archives(root, recursive=recursive):
+        relative_parent = archive.parent.relative_to(root)
+        target_root = destination_root / relative_parent
+        archives.append({
+            "source": str(archive),
+            "relative_parent": "" if str(relative_parent) == "." else str(relative_parent),
+            "target_root": str(target_root),
+            "archive_name": archive.name,
+        })
+
+    return {
+        "root": str(root),
+        "destination": str(destination_root),
+        "recursive": bool(recursive),
+        "media_only": bool(media_only),
+        "archive_count": len(archives),
+        "extractor": extractor["name"] if extractor else None,
+        "extractor_available": extractor is not None,
+        "archives": archives,
+    }
+
+def _run_rar_extractor(archive, output_dir, extractor):
+    archive = Path(archive)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    name = extractor["name"]
+    executable = extractor["path"]
+
+    if name == "unar":
+        command = [executable, "-quiet", "-o", str(output_dir), str(archive)]
+    elif name == "unrar":
+        command = [executable, "x", "-idq", "-o+", str(archive), str(output_dir) + os.sep]
+    else:
+        command = [executable, "-xf", str(archive), "-C", str(output_dir)]
+
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=60 * 60,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        if len(detail) > 1200:
+            detail = detail[-1200:]
+        raise RuntimeError(
+            f'Could not extract "{archive.name}" with {name}'
+            + (f": {detail}" if detail else ".")
+        )
+
+def _copy_extracted_tree(extracted_root, target_root, media_only=True):
+    extracted_root = Path(extracted_root).resolve()
+    target_root = Path(target_root).resolve()
+    copied = []
+    skipped = []
+
+    for source in sorted(extracted_root.rglob("*")):
+        if not source.is_file():
+            continue
+        if source.name in {".DS_Store"} or source.name.startswith("._"):
+            continue
+        if media_only and source.suffix.casefold() not in VIDEO_EXTENSIONS:
+            continue
+
+        try:
+            relative = source.resolve().relative_to(extracted_root)
+        except ValueError:
+            skipped.append({
+                "source": str(source),
+                "reason": "unsafe-extracted-path",
+            })
+            continue
+
+        target = target_root / relative
+        if target.exists():
+            skipped.append({
+                "source": str(source),
+                "target": str(target),
+                "reason": "target-exists",
+            })
+            continue
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        copied.append({
+            "source": str(source),
+            "target": str(target),
+            "relative_path": str(relative),
+        })
+
+    return copied, skipped
+
+def apply_rar_import(plan):
+    extractor = find_rar_extractor()
+    if not extractor:
+        raise SystemExit(
+            "No RAR extractor is available. Install The Unarchiver/unar or unrar, "
+            "then reopen Plex Curator."
+        )
+
+    copied = []
+    skipped = []
+    errors = []
+    completed_archives = 0
+
+    for item in plan.get("archives", []):
+        archive = Path(item["source"])
+        if not archive.exists():
+            errors.append({**item, "error": "archive-missing"})
+            continue
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="plex-curator-rar-") as temp_dir:
+                _run_rar_extractor(archive, temp_dir, extractor)
+                archive_copied, archive_skipped = _copy_extracted_tree(
+                    temp_dir,
+                    item["target_root"],
+                    media_only=plan.get("media_only", True),
+                )
+                copied.extend([
+                    {**value, "archive": str(archive)}
+                    for value in archive_copied
+                ])
+                skipped.extend([
+                    {**value, "archive": str(archive)}
+                    for value in archive_skipped
+                ])
+                completed_archives += 1
+        except Exception as exc:
+            errors.append({**item, "error": str(exc)})
+
+    result = {
+        **plan,
+        "extractor": extractor["name"],
+        "extractor_available": True,
+        "completed_archive_count": completed_archives,
+        "copied_count": len(copied),
+        "skipped_count": len(skipped),
+        "error_count": len(errors),
+        "copied_items": copied,
+        "skipped_items": skipped,
+        "errors": errors,
+    }
+    ensure_config()
+    EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    manifest = EXPORT_DIR / f"media-rar-import-{stamp}.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                **result,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            indent=2,
+            ensure_ascii=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+    result["manifest"] = str(manifest)
+    return result
+
+def cmd_media_rar_import(args):
+    plan = plan_rar_import(
+        args.path,
+        args.destination,
+        recursive=not args.no_recursive,
+        media_only=not args.include_all_files,
+    )
+
+    if not args.apply:
+        if args.json:
+            print(json.dumps({**plan, "read_only": True}, indent=2, ensure_ascii=False))
+        else:
+            print(f'Source:      {plan["root"]}')
+            print(f'Destination: {plan["destination"]}')
+            print(f'RAR files:   {plan["archive_count"]}')
+            print(f'Extractor:   {plan["extractor"] or "not found"}')
+            print()
+            for item in plan["archives"]:
+                relative = item["relative_parent"] or "(root)"
+                print(f'{item["archive_name"]} -> {relative}')
+            print()
+            print("DRY RUN: no archives were extracted and no files were copied.")
+        return
+
+    result = apply_rar_import(plan)
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(f'Archives completed: {result["completed_archive_count"]}')
+        print(f'Files copied:       {result["copied_count"]}')
+        print(f'Files skipped:      {result["skipped_count"]}')
+        print(f'Errors:             {result["error_count"]}')
+        print(f'Manifest:           {result["manifest"]}')
+    if result["error_count"]:
+        raise SystemExit(1)
+
 
 def print_media_organizer_plan(plan):
     print(f'Source:      {plan["root"]}')
@@ -4381,6 +4657,15 @@ def build_parser():
     p.add_argument("--include-low-confidence", action="store_true", help="Also apply low-confidence filename guesses.")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_media_organize)
+
+    p = sp.add_parser("media-rar-import", help="Preview or extract RAR archives while preserving the source folder hierarchy.")
+    p.add_argument("path", help="Source folder containing RAR files, including nested folders.")
+    p.add_argument("--destination", required=True, help="Destination root where the source hierarchy will be recreated.")
+    p.add_argument("--no-recursive", action="store_true", help="Only scan the top-level source folder.")
+    p.add_argument("--include-all-files", action="store_true", help="Copy every extracted file instead of only supported video files.")
+    p.add_argument("--apply", action="store_true", help="Extract archives and copy files to the destination.")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_media_rar_import)
 
     p = sp.add_parser("media-preset-list", help="List saved Media Organizer exclusion presets.")
     p.add_argument("--json", action="store_true")

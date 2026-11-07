@@ -137,6 +137,12 @@ class MediaOrganizerApplyRequest(MediaOrganizerRequest):
     delete_excluded: bool = False
     overrides: list[MediaOrganizerOverride] = Field(default_factory=list)
 
+class MediaRarImportRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+    destination: str = Field(min_length=1, max_length=4096)
+    recursive: bool = True
+    media_only: bool = True
+
 class BackupRequest(BaseModel):
     reason: str = Field(default="api", min_length=1, max_length=80)
 
@@ -1259,6 +1265,37 @@ def media_organizer_apply(
             include_low_confidence=request.include_low_confidence,
             delete_excluded=request.delete_excluded,
         )
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+@app.post("/api/v1/media-organizer/rar-import/preview")
+def media_rar_import_preview(request: MediaRarImportRequest):
+    try:
+        return {
+            **core.plan_rar_import(
+                request.path,
+                request.destination,
+                recursive=request.recursive,
+                media_only=request.media_only,
+            ),
+            "read_only": True,
+        }
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+@app.post("/api/v1/media-organizer/rar-import/apply")
+def media_rar_import_apply(
+    request: MediaRarImportRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        plan = core.plan_rar_import(
+            request.path,
+            request.destination,
+            recursive=request.recursive,
+            media_only=request.media_only,
+        )
+        return core.apply_rar_import(plan)
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

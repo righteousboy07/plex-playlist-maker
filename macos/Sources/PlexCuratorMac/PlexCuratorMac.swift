@@ -730,6 +730,38 @@ struct MediaOrganizerResponse: Codable {
     let manifest: String?
 }
 
+struct MediaRarImportRequest: Encodable {
+    let path: String
+    let destination: String
+    let recursive: Bool
+    let mediaOnly: Bool
+}
+
+struct MediaRarImportArchive: Codable, Identifiable, Hashable {
+    var id: String { source }
+    let source: String
+    let relativeParent: String
+    let targetRoot: String
+    let archiveName: String
+}
+
+struct MediaRarImportResponse: Codable {
+    let root: String
+    let destination: String
+    let recursive: Bool
+    let mediaOnly: Bool
+    let archiveCount: Int
+    let extractor: String?
+    let extractorAvailable: Bool
+    let archives: [MediaRarImportArchive]
+    let readOnly: Bool?
+    let completedArchiveCount: Int?
+    let copiedCount: Int?
+    let skippedCount: Int?
+    let errorCount: Int?
+    let manifest: String?
+}
+
 struct APIErrorResponse: Codable { let detail: String }
 struct PreviewRequest: Codable { let total: Int? }
 struct RefreshRequest: Codable { let total: Int?; let dryRun: Bool; let force: Bool }
@@ -1383,6 +1415,51 @@ final class APIClient {
         )
     }
 
+    func previewMediaRarImport(
+        path: String,
+        destination: String,
+        recursive: Bool,
+        mediaOnly: Bool
+    ) async throws -> MediaRarImportResponse {
+        let body = try encoder.encode(
+            MediaRarImportRequest(
+                path: path,
+                destination: destination,
+                recursive: recursive,
+                mediaOnly: mediaOnly
+            )
+        )
+        return try await request(
+            "/api/v1/media-organizer/rar-import/preview",
+            method: "POST",
+            body: body,
+            timeout: 120
+        )
+    }
+
+    func applyMediaRarImport(
+        path: String,
+        destination: String,
+        recursive: Bool,
+        mediaOnly: Bool
+    ) async throws -> MediaRarImportResponse {
+        let body = try encoder.encode(
+            MediaRarImportRequest(
+                path: path,
+                destination: destination,
+                recursive: recursive,
+                mediaOnly: mediaOnly
+            )
+        )
+        return try await request(
+            "/api/v1/media-organizer/rar-import/apply",
+            method: "POST",
+            body: body,
+            authenticated: true,
+            timeout: 3600
+        )
+    }
+
     func history(stationID: String? = nil, limit: Int = 150) async throws -> [HistoryItem] {
         let safeLimit = max(1, min(limit, 1000))
         var path = "/api/v1/history?limit=\(safeLimit)"
@@ -1867,6 +1944,7 @@ final class AppModel: ObservableObject {
     @Published var playlists: [PlaylistSummary] = []
     @Published var schedules: [ScheduleSummary] = []
     @Published var mediaOrganizer: MediaOrganizerResponse?
+    @Published var mediaRarImport: MediaRarImportResponse?
     @Published var mediaOrganizerScanJob: MediaOrganizerScanJob?
     @Published var mediaOrganizerScanning = false
     @Published var mediaOrganizerPresets: [MediaOrganizerPreset] = []
@@ -2449,6 +2527,57 @@ final class AppModel: ObservableObject {
             message = "Media Organizer moved \(moved) file\(moved == 1 ? "" : "s"); skipped \(skipped); deleted \(deleted) excluded."
             error = nil
             return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
+    }
+
+    func previewMediaRarImport(
+        path: String,
+        destination: String,
+        recursive: Bool,
+        mediaOnly: Bool
+    ) async {
+        loading = true
+        defer { loading = false }
+        do {
+            let result = try await api.previewMediaRarImport(
+                path: path,
+                destination: destination,
+                recursive: recursive,
+                mediaOnly: mediaOnly
+            )
+            mediaRarImport = result
+            message = "RAR scan found \(result.archiveCount) archive\(result.archiveCount == 1 ? "" : "s")."
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    func applyMediaRarImport(
+        path: String,
+        destination: String,
+        recursive: Bool,
+        mediaOnly: Bool
+    ) async -> Bool {
+        loading = true
+        defer { loading = false }
+        do {
+            let result = try await api.applyMediaRarImport(
+                path: path,
+                destination: destination,
+                recursive: recursive,
+                mediaOnly: mediaOnly
+            )
+            mediaRarImport = result
+            let copied = result.copiedCount ?? 0
+            let skipped = result.skippedCount ?? 0
+            let errors = result.errorCount ?? 0
+            message = "RAR import copied \(copied) file\(copied == 1 ? "" : "s"); skipped \(skipped); errors \(errors)."
+            error = nil
+            return errors == 0
         } catch {
             self.error = error.localizedDescription
             return false
@@ -4832,6 +4961,11 @@ struct MediaOrganizerView: View {
     @State private var selectedPresetID = ""
     @State private var presetName = ""
     @State private var presetDescription = ""
+    @State private var rarSourcePath = ""
+    @State private var rarDestinationPath = ""
+    @State private var rarRecursive = true
+    @State private var rarMediaOnly = true
+    @State private var confirmRarApply = false
 
     private var plan: MediaOrganizerResponse? { model.mediaOrganizer }
 
@@ -5151,6 +5285,91 @@ struct MediaOrganizerView: View {
                 .disabled(model.mediaOrganizerScanning)
             }
 
+            GroupBox("RAR Import · Extract & Preserve Folders") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Scan a folder tree for .rar archives, extract them, and copy the contents into a new location while recreating the original parent/child folder hierarchy.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+
+                    HStack {
+                        TextField("RAR source folder", text: $rarSourcePath)
+                            .disabled(BuildFlavor.current.isAppStore)
+                        Button("Browse…") { chooseFolder { rarSourcePath = $0 } }
+                    }
+
+                    HStack {
+                        TextField("RAR destination folder", text: $rarDestinationPath)
+                            .disabled(BuildFlavor.current.isAppStore)
+                        Button("Browse…") { chooseFolder { rarDestinationPath = $0 } }
+                    }
+
+                    HStack(spacing: 18) {
+                        Toggle("Scan subfolders", isOn: $rarRecursive)
+                        Toggle("Copy supported video files only", isOn: $rarMediaOnly)
+                        Spacer()
+
+                        Button {
+                            Task { await previewRarImport() }
+                        } label: {
+                            Label("Preview RAR Import", systemImage: "archivebox")
+                        }
+                        .disabled(
+                            rarSourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                            rarDestinationPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                            model.loading
+                        )
+                    }
+
+                    if let rarPlan = model.mediaRarImport {
+                        Divider()
+                        HStack {
+                            Label("\(rarPlan.archiveCount) RAR archive\(rarPlan.archiveCount == 1 ? "" : "s")", systemImage: "archivebox.fill")
+                            if let extractor = rarPlan.extractor {
+                                Label("Extractor: \(extractor)", systemImage: "checkmark.circle")
+                            } else {
+                                Label("RAR extractor not found", systemImage: "exclamationmark.triangle.fill")
+                                    .foregroundColor(.orange)
+                            }
+                            Spacer()
+                            Button(role: .destructive) {
+                                confirmRarApply = true
+                            } label: {
+                                Label("Extract & Copy", systemImage: "arrow.down.doc")
+                            }
+                            .disabled(rarPlan.archiveCount == 0 || !rarPlan.extractorAvailable || model.loading)
+                        }
+                        .font(.callout)
+
+                        if !rarPlan.archives.isEmpty {
+                            ScrollView {
+                                LazyVStack(alignment: .leading, spacing: 5) {
+                                    ForEach(rarPlan.archives.prefix(100)) { archive in
+                                        HStack {
+                                            Text(archive.archiveName)
+                                                .lineLimit(1)
+                                            Image(systemName: "arrow.right")
+                                                .foregroundColor(.secondary)
+                                            Text(archive.relativeParent.isEmpty ? "(destination root)" : archive.relativeParent)
+                                                .foregroundColor(.secondary)
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                            Spacer()
+                                        }
+                                        .font(.caption)
+                                    }
+                                }
+                            }
+                            .frame(maxHeight: 120)
+                        }
+                    }
+
+                    Text("Existing destination files are skipped, never overwritten. Original RAR files are left in place.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(4)
+            }
+
             if let scanJob = model.mediaOrganizerScanJob {
                 GroupBox("Scan Progress") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -5378,6 +5597,25 @@ struct MediaOrganizerView: View {
                 await model.loadMediaOrganizerPresets()
             }
         }
+        .alert("Extract RAR archives and copy files?", isPresented: $confirmRarApply) {
+            Button("Cancel", role: .cancel) {}
+            Button("Extract & Copy", role: .destructive) {
+                Task {
+                    guard authorizedForRarOperation() else { return }
+                    let ok = await model.applyMediaRarImport(
+                        path: rarSourcePath.trimmingCharacters(in: .whitespacesAndNewlines),
+                        destination: rarDestinationPath.trimmingCharacters(in: .whitespacesAndNewlines),
+                        recursive: rarRecursive,
+                        mediaOnly: rarMediaOnly
+                    )
+                    if ok {
+                        await previewRarImport()
+                    }
+                }
+            }
+        } message: {
+            Text("Plex Curator will extract each RAR to a temporary folder, recreate its source parent/child path under the destination, and copy extracted files there. Existing files will be skipped and the original archives will remain untouched.")
+        }
         .alert("Apply file organization?", isPresented: $confirmApply) {
             Button("Cancel", role: .cancel) {}
             Button("Move & Rename", role: .destructive) {
@@ -5464,6 +5702,40 @@ struct MediaOrganizerView: View {
             recursive: recursive,
             excludePatterns: excludePatterns
         )
+    }
+
+    private func previewRarImport() async {
+        guard authorizedForRarOperation() else { return }
+        await model.previewMediaRarImport(
+            path: rarSourcePath.trimmingCharacters(in: .whitespacesAndNewlines),
+            destination: rarDestinationPath.trimmingCharacters(in: .whitespacesAndNewlines),
+            recursive: rarRecursive,
+            mediaOnly: rarMediaOnly
+        )
+    }
+
+    private func authorizedForRarOperation() -> Bool {
+        let source = rarSourcePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let destination = rarDestinationPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty, !destination.isEmpty else {
+            model.error = "Choose both a RAR source folder and destination folder."
+            return false
+        }
+        guard source != destination else {
+            model.error = "Choose a RAR destination that is different from the source folder."
+            return false
+        }
+
+        guard BuildFlavor.current.isAppStore else { return true }
+        guard SecurityScopedMediaAccess.shared.isAuthorized(path: source) else {
+            model.error = "Choose the RAR source folder with Browse so Plex Curator can access it in the App Store sandbox."
+            return false
+        }
+        guard SecurityScopedMediaAccess.shared.isAuthorized(path: destination) else {
+            model.error = "Choose the RAR destination folder with Browse so Plex Curator can access it in the App Store sandbox."
+            return false
+        }
+        return true
     }
 
     private func authorizedForStoreOperation() -> Bool {

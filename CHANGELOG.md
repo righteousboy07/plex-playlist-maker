@@ -2,6 +2,15 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.25
+
+- Added Media Organizer RAR import with recursive archive discovery and source-folder hierarchy preservation.
+- Added preview/apply controls in the macOS app with separate source and destination folder pickers.
+- Extracted files are staged in temporary folders, copied without overwriting existing destination files, and original RAR archives are left untouched.
+- Preserves child folders stored inside archives and defaults to copying supported video formats only, with an option to include all extracted files.
+- Added focused backend tests for hierarchy mapping, child-folder preservation, media filtering, and overwrite protection.
+
+
 ## 13.2.18
 
 - Restored clear Enable/Disable controls on Station detail screens while preserving every other station setting during the toggle.
