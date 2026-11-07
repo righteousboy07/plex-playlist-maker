@@ -90,6 +90,8 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Media Organizer: add a preview-first RAR Archive Import workflow that scans nested folders, preserves source parent hierarchy and archive child folders, and copies extracted media to a chosen destination.
+- Media Organizer: support multipart `.part01.rar` sets, collision-safe copies, unsafe path blocking, and multiple RAR extractors (`unrar`, 7-Zip, `unar`/`lsar`, and `bsdtar`).
 - 13.2.24: add an explicit Edit action for regular playlists from the Playlists list.
 - 13.2.24: move Kids Scary Wishlist into the Library section directly beneath Playlists.
 - 13.2.24: make Kids Scary Wishlist persistent and editable with Add, Edit, Delete, and Save behavior.
