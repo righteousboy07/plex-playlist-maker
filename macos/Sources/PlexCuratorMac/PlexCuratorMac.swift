@@ -636,11 +636,13 @@ struct MediaOrganizerRequest: Encodable {
     let destination: String?
     let recursive: Bool
     let excludePatterns: [String]
+    let folderMode: String
 }
 
 struct MediaOrganizerAnalyzeRequest: Encodable {
     let source: String
     let destination: String?
+    let folderMode: String
 }
 
 struct MediaOrganizerOverrideRequest: Encodable {
@@ -654,8 +656,10 @@ struct MediaOrganizerApplyRequest: Encodable {
     let destination: String?
     let recursive: Bool
     let excludePatterns: [String]
+    let folderMode: String
     let includeLowConfidence: Bool
     let deleteExcluded: Bool
+    let rescanPlex: Bool
     let overrides: [MediaOrganizerOverrideRequest]
 }
 
@@ -702,6 +706,7 @@ struct MediaOrganizerResponse: Codable {
     let root: String
     let destination: String
     let recursive: Bool
+    let folderMode: String?
     let totalFound: Int?
     let count: Int
     let excludedCount: Int?
@@ -714,6 +719,9 @@ struct MediaOrganizerResponse: Codable {
     let deletedExcludedCount: Int?
     let errorCount: Int?
     let manifest: String?
+    let plexRescanRequested: Bool?
+    let plexLibrariesRefreshed: [String]?
+    let plexRescanErrors: [String]?
 }
 
 struct APIErrorResponse: Codable { let detail: String }
@@ -1257,14 +1265,16 @@ final class APIClient {
         path: String,
         destination: String?,
         recursive: Bool,
-        excludePatterns: [String]
+        excludePatterns: [String],
+        folderMode: String
     ) async throws -> MediaOrganizerScanJob {
         let body = try encoder.encode(
             MediaOrganizerRequest(
                 path: path,
                 destination: destination,
                 recursive: recursive,
-                excludePatterns: excludePatterns
+                excludePatterns: excludePatterns,
+                folderMode: folderMode
             )
         )
         return try await request(
@@ -1294,14 +1304,16 @@ final class APIClient {
         path: String,
         destination: String?,
         recursive: Bool,
-        excludePatterns: [String]
+        excludePatterns: [String],
+        folderMode: String
     ) async throws -> MediaOrganizerResponse {
         let body = try encoder.encode(
             MediaOrganizerRequest(
                 path: path,
                 destination: destination,
                 recursive: recursive,
-                excludePatterns: excludePatterns
+                excludePatterns: excludePatterns,
+                folderMode: folderMode
             )
         )
         return try await request(
@@ -1314,12 +1326,14 @@ final class APIClient {
 
     func analyzeMediaOrganizerItem(
         source: String,
-        destination: String?
+        destination: String?,
+        folderMode: String
     ) async throws -> MediaOrganizerItem {
         let body = try encoder.encode(
             MediaOrganizerAnalyzeRequest(
                 source: source,
-                destination: destination
+                destination: destination,
+                folderMode: folderMode
             )
         )
         return try await request(
@@ -1334,8 +1348,10 @@ final class APIClient {
         path: String,
         destination: String?,
         recursive: Bool,
+        folderMode: String,
         includeLowConfidence: Bool,
         deleteExcluded: Bool,
+        rescanPlex: Bool,
         excludePatterns: [String],
         overrides: [MediaOrganizerOverrideRequest]
     ) async throws -> MediaOrganizerResponse {
@@ -1345,8 +1361,10 @@ final class APIClient {
                 destination: destination,
                 recursive: recursive,
                 excludePatterns: excludePatterns,
+                folderMode: folderMode,
                 includeLowConfidence: includeLowConfidence,
                 deleteExcluded: deleteExcluded,
+                rescanPlex: rescanPlex,
                 overrides: overrides
             )
         )
@@ -2320,7 +2338,8 @@ final class AppModel: ObservableObject {
         path: String,
         destination: String?,
         recursive: Bool,
-        excludePatterns: [String]
+        excludePatterns: [String],
+        folderMode: String
     ) async {
         analyzedMediaItems.removeAll()
         mediaOrganizer = nil
@@ -2333,7 +2352,8 @@ final class AppModel: ObservableObject {
                 path: path,
                 destination: destination,
                 recursive: recursive,
-                excludePatterns: excludePatterns
+                excludePatterns: excludePatterns,
+                folderMode: folderMode
             )
             mediaOrganizerScanJob = job
             error = nil
@@ -2381,12 +2401,14 @@ final class AppModel: ObservableObject {
 
     func analyzeMediaOrganizerItem(
         source: String,
-        destination: String?
+        destination: String?,
+        folderMode: String
     ) async -> MediaOrganizerItem? {
         do {
             let item = try await api.analyzeMediaOrganizerItem(
                 source: source,
-                destination: destination
+                destination: destination,
+                folderMode: folderMode
             )
             analyzedMediaItems[source] = item
             error = nil
@@ -2401,8 +2423,10 @@ final class AppModel: ObservableObject {
         path: String,
         destination: String?,
         recursive: Bool,
+        folderMode: String,
         includeLowConfidence: Bool,
         deleteExcluded: Bool,
+        rescanPlex: Bool,
         excludePatterns: [String],
         overrides: [MediaOrganizerOverrideRequest]
     ) async -> Bool {
@@ -2413,8 +2437,10 @@ final class AppModel: ObservableObject {
                 path: path,
                 destination: destination,
                 recursive: recursive,
+                folderMode: folderMode,
                 includeLowConfidence: includeLowConfidence,
                 deleteExcluded: deleteExcluded,
+                rescanPlex: rescanPlex,
                 excludePatterns: excludePatterns,
                 overrides: overrides
             )
@@ -2422,7 +2448,15 @@ final class AppModel: ObservableObject {
             let moved = result.appliedCount ?? 0
             let skipped = result.skippedCount ?? 0
             let deleted = result.deletedExcludedCount ?? 0
-            message = "Media Organizer moved \(moved) file\(moved == 1 ? "" : "s"); skipped \(skipped); deleted \(deleted) excluded."
+            let rescanText: String
+            if result.plexRescanRequested == true {
+                let refreshed = result.plexLibrariesRefreshed?.count ?? 0
+                let rescanErrors = result.plexRescanErrors?.count ?? 0
+                rescanText = " Plex refresh requested for \(refreshed) librar\(refreshed == 1 ? "y" : "ies")\(rescanErrors > 0 ? " with \(rescanErrors) error(s)" : "")."
+            } else {
+                rescanText = ""
+            }
+            message = "Media Organizer changed \(moved) file\(moved == 1 ? "" : "s"); skipped \(skipped); deleted \(deleted) excluded." + rescanText
             error = nil
             return true
         } catch {
