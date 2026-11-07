@@ -5023,10 +5023,9 @@ struct MediaOrganizerView: View {
         deleteExcluded = false
     }
 
-    var body: some View {
-        ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
+
+    private var organizerHeader: some View {
+        HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Media Organizer")
                         .font(.largeTitle.bold())
@@ -5035,8 +5034,10 @@ struct MediaOrganizerView: View {
                 }
                 Spacer()
             }
+    }
 
-            GroupBox("1 · Select Media Folders") {
+    private var mediaFolderSelectionSection: some View {
+        GroupBox("1 · Select Media Folders") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         TextField("Source folder", text: $sourcePath)
@@ -5228,8 +5229,11 @@ struct MediaOrganizerView: View {
                 .padding(4)
                 .disabled(model.mediaOrganizerScanning)
             }
+    }
 
-            if let scanJob = model.mediaOrganizerScanJob {
+    @ViewBuilder
+    private var mediaScanProgressSection: some View {
+        if let scanJob = model.mediaOrganizerScanJob {
                 GroupBox("Scan Progress") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -5298,8 +5302,11 @@ struct MediaOrganizerView: View {
                     .padding(4)
                 }
             }
+    }
 
-            if let plan {
+    @ViewBuilder
+    private var mediaPlanSection: some View {
+        if let plan {
                 HStack(spacing: 12) {
                     organizerMetric("Videos", plan.count)
                     organizerMetric("Excluded", excludedCount)
@@ -5435,20 +5442,16 @@ struct MediaOrganizerView: View {
                 }
                 }
                 }
-            } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "folder")
-                        .font(.system(size: 42))
-                        .foregroundColor(.secondary)
-                    Text("Choose a Media Folder")
-                        .font(.title2.bold())
-                    Text("Curator will inspect supported videos and propose organized Station IDs, Bumpers, Commercials, Promos, and General folders.")
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 520)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+    }
+
+    var body: some View {
+        ScrollView {
+        VStack(alignment: .leading, spacing: 16) {
+            organizerHeader
+            mediaFolderSelectionSection
+            mediaScanProgressSection
+            mediaPlanSection
         }
         .padding(24)
         .frame(maxWidth: 1100, alignment: .leading)
