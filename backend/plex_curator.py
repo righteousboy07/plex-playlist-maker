@@ -1166,12 +1166,16 @@ def plan_media_organization(
             }
         )
         folder_name = INTERSTITIAL_TYPE_FOLDERS[identity["type"]]
-        target_dir = media_target_directory(
-            source,
-            destination_root,
-            folder_mode,
-            identity["type"],
-            identity["title"],
+        target_dir = (
+            source.parent
+            if str(folder_mode or "type").strip().casefold() == "none" and not destination
+            else media_target_directory(
+                source,
+                destination_root,
+                folder_mode,
+                identity["type"],
+                identity["title"],
+            )
         )
         base_target = target_dir / f'{identity["title"]}{source.suffix.casefold()}'
 
@@ -1243,12 +1247,16 @@ def analyze_media_organizer_file(source, destination=None, folder_mode="type"):
         else {"status": "not-needed", "frames": []}
     )
     folder_name = INTERSTITIAL_TYPE_FOLDERS[identity["type"]]
-    target_dir = media_target_directory(
-        source,
-        destination_root,
-        folder_mode,
-        identity["type"],
-        identity["title"],
+    target_dir = (
+        source.parent
+        if str(folder_mode or "type").strip().casefold() == "none" and not destination
+        else media_target_directory(
+            source,
+            destination_root,
+            folder_mode,
+            identity["type"],
+            identity["title"],
+        )
     )
     target = target_dir / f'{identity["title"]}{source.suffix.casefold()}'
     return {
