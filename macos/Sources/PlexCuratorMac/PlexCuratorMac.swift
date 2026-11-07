@@ -5651,179 +5651,194 @@ struct ArchiveImportView: View {
     @State private var applying = false
     @State private var confirmImport = false
 
+    private var archiveHeader: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("RAR Archive Import")
+                .font(.largeTitle.bold())
+            Text("Unpack RAR archives from a folder tree, preserve the source hierarchy, and copy extracted media into a new destination.")
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var archiveSourceSection: some View {
+        GroupBox("1 · Source and Destination") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    TextField("Source folder containing RAR files", text: $sourcePath)
+                        .disabled(BuildFlavor.current.isAppStore)
+                    Button("Browse…") { chooseFolder { sourcePath = $0 } }
+                }
+
+                HStack {
+                    TextField("Destination folder", text: $destinationPath)
+                        .disabled(BuildFlavor.current.isAppStore)
+                    Button("Browse…") { chooseFolder { destinationPath = $0 } }
+                }
+
+                Toggle("Scan subfolders recursively", isOn: $recursive)
+                Toggle("Copy media and companion files only", isOn: $mediaOnly)
+                    .help("Copies supported video files plus subtitles/NFO files. Turn off to copy every extracted file.")
+
+                if let status {
+                    if status.available {
+                        Label(
+                            "RAR extraction available via \(status.extractor ?? "system extractor")",
+                            systemImage: "checkmark.circle"
+                        )
+                        .foregroundColor(.green)
+                    } else {
+                        Label(
+                            "No supported RAR extractor was found. Install unar, unrar, or 7-Zip.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .foregroundColor(.orange)
+                    }
+                }
+
+                Text("Example: Source/Show/Season 1/archive.rar → Destination/Show/Season 1/<files from archive>. Child folders stored inside the archive are preserved too.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                HStack {
+                    Button {
+                        Task { await loadPreview() }
+                    } label: {
+                        Label("Scan RAR Archives", systemImage: "magnifyingglass")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+                    .disabled(
+                        loading
+                        || sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || destinationPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || status?.available == false
+                    )
+
+                    if loading {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+
+                    Spacer()
+                }
+            }
+            .padding(4)
+        }
+    }
+
+    @ViewBuilder
+    private var archivePreviewSection: some View {
+        if let preview {
+            HStack(spacing: 12) {
+                metric("Archives", preview.archiveCount)
+                metric("Ready", preview.readyCount)
+                metric("Blocked", preview.blockedCount)
+                Spacer()
+                Text("Extractor: \(preview.extractor)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            GroupBox("2 · Preview Import Layout") {
+                if preview.items.isEmpty {
+                    Text("No primary .rar archives were found.")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 100)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(preview.items) { item in
+                            archivePreviewRow(item)
+                        }
+                    }
+                }
+            }
+
+            GroupBox("3 · Import") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("RAR archives remain untouched. Extracted files are copied to the destination; existing files are never overwritten.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Button(role: .destructive) {
+                        confirmImport = true
+                    } label: {
+                        Label(
+                            applying ? "Importing…" : "Extract & Copy \(preview.readyCount) Archive\(preview.readyCount == 1 ? "" : "s")",
+                            systemImage: "square.and.arrow.down"
+                        )
+                    }
+                    .disabled(applying || preview.readyCount == 0)
+                }
+                .padding(4)
+            }
+
+            if let copied = preview.copiedCount, copied > 0 {
+                Label("Copied \(copied) extracted file\(copied == 1 ? "" : "s").", systemImage: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+            }
+
+            if let errors = preview.errors, !errors.isEmpty {
+                GroupBox("Import Errors") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(errors) { item in
+                            Text("\(URL(fileURLWithPath: item.archive).lastPathComponent): \(item.error)")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func archivePreviewRow(_ item: ArchiveImportItem) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Image(systemName: item.status == "blocked" ? "exclamationmark.triangle.fill" : "archivebox")
+                    .foregroundColor(item.status == "blocked" ? .red : .secondary)
+                Text(URL(fileURLWithPath: item.archive).lastPathComponent)
+                    .font(.headline)
+                Spacer()
+                Text("\(item.fileCount) file\(item.fileCount == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Text("Source parent: \(item.relativeParent.isEmpty ? "(source root)" : item.relativeParent)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text("Destination: \(item.destinationParent)")
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+
+            if item.status == "blocked" {
+                Text("Blocked: archive contains unsafe paths and will not be extracted.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.red)
+            } else if !item.files.isEmpty {
+                Text(item.files.prefix(6).joined(separator: " • "))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+                if item.files.count > 6 {
+                    Text("+ \(item.files.count - 6) more")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(10)
+        .background(PlexTheme.softFill, in: RoundedRectangle(cornerRadius: 8))
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("RAR Archive Import")
-                        .font(.largeTitle.bold())
-                    Text("Unpack RAR archives from a folder tree, preserve the source hierarchy, and copy extracted media into a new destination.")
-                        .foregroundColor(.secondary)
-                }
-
-                GroupBox("1 · Source and Destination") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            TextField("Source folder containing RAR files", text: $sourcePath)
-                                .disabled(BuildFlavor.current.isAppStore)
-                            Button("Browse…") { chooseFolder { sourcePath = $0 } }
-                        }
-
-                        HStack {
-                            TextField("Destination folder", text: $destinationPath)
-                                .disabled(BuildFlavor.current.isAppStore)
-                            Button("Browse…") { chooseFolder { destinationPath = $0 } }
-                        }
-
-                        Toggle("Scan subfolders recursively", isOn: $recursive)
-                        Toggle("Copy media and companion files only", isOn: $mediaOnly)
-                            .help("Copies supported video files plus subtitles/NFO files. Turn off to copy every extracted file.")
-
-                        if let status {
-                            if status.available {
-                                Label(
-                                    "RAR extraction available via \(status.extractor ?? "system extractor")",
-                                    systemImage: "checkmark.circle"
-                                )
-                                .foregroundColor(.green)
-                            } else {
-                                Label(
-                                    "No supported RAR extractor was found. Install unar, unrar, or 7-Zip.",
-                                    systemImage: "exclamationmark.triangle.fill"
-                                )
-                                .foregroundColor(.orange)
-                            }
-                        }
-
-                        Text("Example: Source/Show/Season 1/archive.rar → Destination/Show/Season 1/<files from archive>. Child folders stored inside the archive are preserved too.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        HStack {
-                            Button {
-                                Task { await loadPreview() }
-                            } label: {
-                                Label("Scan RAR Archives", systemImage: "magnifyingglass")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(PlexTheme.accent)
-                            .disabled(
-                                loading
-                                || sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                || destinationPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                || status?.available == false
-                            )
-
-                            if loading {
-                                ProgressView()
-                                    .controlSize(.small)
-                            }
-
-                            Spacer()
-                        }
-                    }
-                    .padding(4)
-                }
-
-                if let preview {
-                    HStack(spacing: 12) {
-                        metric("Archives", preview.archiveCount)
-                        metric("Ready", preview.readyCount)
-                        metric("Blocked", preview.blockedCount)
-                        Spacer()
-                        Text("Extractor: \(preview.extractor)")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-
-                    GroupBox("2 · Preview Import Layout") {
-                        if preview.items.isEmpty {
-                            Text("No primary .rar archives were found.")
-                                .foregroundColor(.secondary)
-                                .frame(maxWidth: .infinity, minHeight: 100)
-                        } else {
-                            LazyVStack(alignment: .leading, spacing: 10) {
-                                ForEach(preview.items) { item in
-                                    VStack(alignment: .leading, spacing: 5) {
-                                        HStack {
-                                            Image(systemName: item.status == "blocked" ? "exclamationmark.triangle.fill" : "archivebox")
-                                                .foregroundColor(item.status == "blocked" ? .red : .secondary)
-                                            Text(URL(fileURLWithPath: item.archive).lastPathComponent)
-                                                .font(.headline)
-                                            Spacer()
-                                            Text("\(item.fileCount) file\(item.fileCount == 1 ? "" : "s")")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-
-                                        Text("Source parent: \(item.relativeParent.isEmpty ? "(source root)" : item.relativeParent)")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-
-                                        Text("Destination: \(item.destinationParent)")
-                                            .font(.caption.monospaced())
-                                            .textSelection(.enabled)
-
-                                        if item.status == "blocked" {
-                                            Text("Blocked: archive contains unsafe paths and will not be extracted.")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundColor(.red)
-                                        } else if !item.files.isEmpty {
-                                            Text(item.files.prefix(6).joined(separator: " • "))
-                                                .font(.caption2)
-                                                .foregroundColor(.secondary)
-                                                .lineLimit(3)
-                                            if item.files.count > 6 {
-                                                Text("+ \(item.files.count - 6) more")
-                                                    .font(.caption2)
-                                                    .foregroundColor(.secondary)
-                                            }
-                                        }
-                                    }
-                                    .padding(10)
-                                    .background(PlexTheme.softFill, in: RoundedRectangle(cornerRadius: 8))
-                                }
-                            }
-                        }
-                    }
-
-                    GroupBox("3 · Import") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("RAR archives remain untouched. Extracted files are copied to the destination; existing files are never overwritten.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-
-                            Button(role: .destructive) {
-                                confirmImport = true
-                            } label: {
-                                Label(
-                                    applying ? "Importing…" : "Extract & Copy \(preview.readyCount) Archive\(preview.readyCount == 1 ? "" : "s")",
-                                    systemImage: "square.and.arrow.down"
-                                )
-                            }
-                            .disabled(applying || preview.readyCount == 0)
-                        }
-                        .padding(4)
-                    }
-
-                    if let copied = preview.copiedCount, copied > 0 {
-                        Label("Copied \(copied) extracted file\(copied == 1 ? "" : "s").", systemImage: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                    }
-
-                    if let errors = preview.errors, !errors.isEmpty {
-                        GroupBox("Import Errors") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(errors) { item in
-                                    Text("\(URL(fileURLWithPath: item.archive).lastPathComponent): \(item.error)")
-                                        .font(.caption)
-                                        .foregroundColor(.red)
-                                        .textSelection(.enabled)
-                                }
-                            }
-                        }
-                    }
-                }
+                archiveHeader
+                archiveSourceSection
+                archivePreviewSection
             }
             .padding(24)
             .frame(maxWidth: 1050, alignment: .topLeading)
