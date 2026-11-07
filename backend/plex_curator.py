@@ -1317,18 +1317,53 @@ def apply_media_organization(
     return result
 
 
+def _find_rar_executable(name, extra_paths=()):
+    discovered = shutil.which(name)
+    if discovered:
+        return discovered
+    for candidate in extra_paths:
+        path = Path(candidate)
+        if path.exists() and os.access(path, os.X_OK):
+            return str(path)
+    return None
+
 def find_rar_extractor():
     """Return the first supported RAR extractor available on this Mac."""
     candidates = (
-        ("unar", shutil.which("unar")),
-        ("unrar", shutil.which("unrar")),
-        ("bsdtar", shutil.which("bsdtar")),
-        ("tar", shutil.which("tar")),
+        ("unar", _find_rar_executable("unar", (
+            "/opt/homebrew/bin/unar",
+            "/usr/local/bin/unar",
+            "/usr/bin/unar",
+        ))),
+        ("unrar", _find_rar_executable("unrar", (
+            "/opt/homebrew/bin/unrar",
+            "/usr/local/bin/unrar",
+            "/usr/bin/unrar",
+        ))),
+        ("bsdtar", _find_rar_executable("bsdtar", (
+            "/usr/bin/bsdtar",
+            "/opt/homebrew/bin/bsdtar",
+            "/usr/local/bin/bsdtar",
+        ))),
+        ("tar", _find_rar_executable("tar", (
+            "/usr/bin/tar",
+        ))),
     )
     for name, path in candidates:
         if path:
             return {"name": name, "path": path}
     return None
+
+def _is_primary_rar_archive(path):
+    """Avoid processing every volume in modern .partNN.rar split archives."""
+    name = Path(path).name.casefold()
+    match = re.search(r"\.part(\d+)\.rar$", name)
+    if not match:
+        return True
+    try:
+        return int(match.group(1)) == 1
+    except ValueError:
+        return True
 
 def iter_rar_archives(root, recursive=True):
     root = Path(root).expanduser().resolve()
@@ -1338,7 +1373,11 @@ def iter_rar_archives(root, recursive=True):
     archives = []
     for path in iterator:
         try:
-            if path.is_file() and path.suffix.casefold() == ".rar":
+            if (
+                path.is_file()
+                and path.suffix.casefold() == ".rar"
+                and _is_primary_rar_archive(path)
+            ):
                 archives.append(path)
         except OSError:
             continue
