@@ -237,6 +237,20 @@ struct WishlistResponse: Codable {
     let entries: [WishlistEntry]
 }
 
+struct WishlistItemRequest: Encodable, Hashable {
+    let title: String
+    let year: Int?
+}
+
+struct WishlistUpdateRequest: Encodable {
+    let entries: [WishlistItemRequest]
+}
+
+struct WishlistUpdateResponse: Decodable {
+    let ok: Bool
+    let count: Int
+}
+
 struct ScheduleBlockDefinition: Codable, Identifiable, Hashable {
     var id: Int { index }
     let index: Int
@@ -1189,6 +1203,16 @@ final class APIClient {
 
     func kidsScaryWishlist() async throws -> WishlistResponse {
         try await request("/api/v1/wishlist/kids-scary")
+    }
+
+    func saveKidsScaryWishlist(_ entries: [WishlistItemRequest]) async throws -> WishlistUpdateResponse {
+        let body = try encoder.encode(WishlistUpdateRequest(entries: entries))
+        return try await request(
+            "/api/v1/wishlist/kids-scary",
+            method: "PUT",
+            body: body,
+            authenticated: true
+        )
     }
 
     func mediaOrganizerPresets() async throws -> [MediaOrganizerPreset] {
@@ -2562,13 +2586,13 @@ struct RootView: View {
                     NavigationLink(destination: StationsView()) { Label("Stations", systemImage: "tv") }
                     NavigationLink(destination: SchedulesView()) { Label("Schedules", systemImage: "calendar") }
                     NavigationLink(destination: PlaylistsView()) { Label("Playlists", systemImage: "rectangle.stack") }
+                    NavigationLink(destination: KidsScaryWishlistView()) { Label("Kids Scary Wishlist", systemImage: "checklist") }
                     NavigationLink(destination: HistoryView()) { Label("History", systemImage: "clock.arrow.circlepath") }
                 }
 
                 Section("Tools") {
                     NavigationLink(destination: MediaOrganizerView()) { Label("Media Organizer", systemImage: "folder.badge.gearshape") }
                     NavigationLink(destination: MovieCuratorView()) { Label("Movie Curator", systemImage: "film.stack") }
-                    NavigationLink(destination: KidsScaryWishlistView()) { Label("Kids Scary Wishlist", systemImage: "checklist") }
                 }
 
                 Section("System") {
@@ -6384,50 +6408,59 @@ struct PlaylistsView: View {
             Divider()
 
             List(filteredPlaylists) { playlist in
-                NavigationLink(destination: PlaylistDetailView(playlist: playlist)) {
-                    HStack(spacing: 12) {
-                        Image(systemName: playlist.smart ? "sparkles.rectangle.stack" : "rectangle.stack")
-                            .font(.title2)
-                            .frame(width: 28)
+                HStack(spacing: 10) {
+                    NavigationLink(destination: PlaylistDetailView(playlist: playlist)) {
+                        HStack(spacing: 12) {
+                            Image(systemName: playlist.smart ? "sparkles.rectangle.stack" : "rectangle.stack")
+                                .font(.title2)
+                                .frame(width: 28)
 
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(playlist.title)
-                                .font(.headline)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(playlist.title)
+                                    .font(.headline)
 
-                            HStack(spacing: 8) {
-                                Text("\(playlist.itemCount ?? 0) items")
-                                if let type = playlist.playlistType {
-                                    Text(type.capitalized)
+                                HStack(spacing: 8) {
+                                    Text("\(playlist.itemCount ?? 0) items")
+                                    if let type = playlist.playlistType {
+                                        Text(type.capitalized)
+                                    }
+                                    if let updated = formattedUpdatedAt(playlist.updatedAt) {
+                                        Text("Updated \(updated)")
+                                    }
                                 }
-                                if let updated = formattedUpdatedAt(playlist.updatedAt) {
-                                    Text("Updated \(updated)")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                                HStack(spacing: 6) {
+                                    if stationOutputNames.contains(playlist.title) {
+                                        playlistBadge("Station")
+                                    }
+                                    if scheduleOutputNames.contains(playlist.title) {
+                                        playlistBadge("Schedule")
+                                    }
+                                    if interstitialPoolNames.contains(playlist.title) {
+                                        playlistBadge("Interstitial")
+                                    }
+                                    if playlist.smart {
+                                        playlistBadge("Smart")
+                                    }
+                                    if (playlist.itemCount ?? 0) == 0 {
+                                        playlistBadge("Empty")
+                                    }
                                 }
                             }
-                            .font(.caption)
-                            .foregroundColor(.secondary)
 
-                            HStack(spacing: 6) {
-                                if stationOutputNames.contains(playlist.title) {
-                                    playlistBadge("Station")
-                                }
-                                if scheduleOutputNames.contains(playlist.title) {
-                                    playlistBadge("Schedule")
-                                }
-                                if interstitialPoolNames.contains(playlist.title) {
-                                    playlistBadge("Interstitial")
-                                }
-                                if playlist.smart {
-                                    playlistBadge("Smart")
-                                }
-                                if (playlist.itemCount ?? 0) == 0 {
-                                    playlistBadge("Empty")
-                                }
-                            }
+                            Spacer()
                         }
-
-                        Spacer()
+                        .padding(.vertical, 5)
                     }
-                    .padding(.vertical, 5)
+                    .buttonStyle(.plain)
+
+                    NavigationLink(destination: PlaylistDetailView(playlist: playlist)) {
+                        Label(playlist.smart ? "View" : "Edit", systemImage: playlist.smart ? "eye" : "pencil")
+                    }
+                    .buttonStyle(.bordered)
+                    .help(playlist.smart ? "View this smart playlist" : "Edit this playlist")
                 }
             }
             .listStyle(InsetListStyle())
@@ -7361,10 +7394,28 @@ struct MovieCuratorView: View {
 struct KidsScaryWishlistView: View {
     @EnvironmentObject var model: AppModel
 
+    struct Draft: Identifiable, Hashable {
+        let id: UUID
+        var title: String
+        var year: Int?
+
+        init(id: UUID = UUID(), title: String, year: Int?) {
+            self.id = id
+            self.title = title
+            self.year = year
+        }
+    }
+
     @State private var response: WishlistResponse?
+    @State private var drafts: [Draft] = []
     @State private var searchText = ""
     @State private var filter = 0
     @State private var isLoading = false
+    @State private var isSaving = false
+    @State private var editorPresented = false
+    @State private var editingID: UUID?
+    @State private var editorTitle = ""
+    @State private var editorYear = ""
 
     private var filteredEntries: [WishlistEntry] {
         guard let entries = response?.entries else { return [] }
@@ -7400,6 +7451,14 @@ struct KidsScaryWishlistView: View {
                     metric("MISSING", response.missingCount)
                     metric("TOTAL", response.totalCount)
                     Spacer()
+                    Button {
+                        beginAdd()
+                    } label: {
+                        Label("Add Movie", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+
                     Button("Reload") { Task { await load() } }
                 }
                 .padding()
@@ -7411,7 +7470,26 @@ struct KidsScaryWishlistView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(filteredEntries) { entry in
-                    WishlistRow(entry: entry)
+                    HStack(spacing: 12) {
+                        WishlistRow(entry: entry)
+
+                        Spacer(minLength: 10)
+
+                        Button {
+                            beginEdit(entry)
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button(role: .destructive) {
+                            delete(entry)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Remove from wishlist")
+                    }
                 }
             }
         }
@@ -7425,6 +7503,47 @@ struct KidsScaryWishlistView: View {
             }
             .pickerStyle(SegmentedPickerStyle())
             .frame(width: 230)
+
+            Button {
+                beginAdd()
+            } label: {
+                Label("Add", systemImage: "plus")
+            }
+        }
+        .sheet(isPresented: $editorPresented) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(editingID == nil ? "Add Wishlist Movie" : "Edit Wishlist Movie")
+                    .font(.title2.bold())
+
+                TextField("Movie title", text: $editorTitle)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("Year (optional)", text: $editorYear)
+                    .textFieldStyle(.roundedBorder)
+
+                Text("The year helps Plex Curator distinguish remakes with the same title.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                HStack {
+                    Spacer()
+                    Button("Cancel") {
+                        editorPresented = false
+                    }
+                    Button(isSaving ? "Saving…" : "Save") {
+                        saveEditor()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+                    .disabled(
+                        isSaving
+                        || editorTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || (!editorYear.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && Int(editorYear) == nil)
+                    )
+                }
+            }
+            .padding(22)
+            .frame(width: 440)
         }
         .task { await load() }
     }
@@ -7436,11 +7555,85 @@ struct KidsScaryWishlistView: View {
         }
     }
 
+    private func beginAdd() {
+        editingID = nil
+        editorTitle = ""
+        editorYear = ""
+        editorPresented = true
+    }
+
+    private func beginEdit(_ entry: WishlistEntry) {
+        if let draft = drafts.first(where: {
+            $0.title.caseInsensitiveCompare(entry.requestedTitle) == .orderedSame
+                && $0.year == entry.requestedYear
+        }) {
+            editingID = draft.id
+        } else {
+            let draft = Draft(title: entry.requestedTitle, year: entry.requestedYear)
+            drafts.append(draft)
+            editingID = draft.id
+        }
+        editorTitle = entry.requestedTitle
+        editorYear = entry.requestedYear.map(String.init) ?? ""
+        editorPresented = true
+    }
+
+    private func saveEditor() {
+        let title = editorTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let yearText = editorYear.trimmingCharacters(in: .whitespacesAndNewlines)
+        let year = yearText.isEmpty ? nil : Int(yearText)
+
+        if let editingID,
+           let index = drafts.firstIndex(where: { $0.id == editingID }) {
+            drafts[index].title = title
+            drafts[index].year = year
+        } else {
+            drafts.append(Draft(title: title, year: year))
+        }
+
+        Task {
+            await persist()
+            editorPresented = false
+        }
+    }
+
+    private func delete(_ entry: WishlistEntry) {
+        drafts.removeAll {
+            $0.title.caseInsensitiveCompare(entry.requestedTitle) == .orderedSame
+                && $0.year == entry.requestedYear
+        }
+        Task { await persist() }
+    }
+
+    private func persist() async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            let entries = drafts.map {
+                WishlistItemRequest(
+                    title: $0.title.trimmingCharacters(in: .whitespacesAndNewlines),
+                    year: $0.year
+                )
+            }
+            let result = try await model.api.saveKidsScaryWishlist(entries)
+            model.message = "Saved Kids Scary Wishlist (\(result.count) movies)."
+            model.error = nil
+            await load()
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
     private func load() async {
         isLoading = true
         defer { isLoading = false }
         do {
-            response = try await model.api.kidsScaryWishlist()
+            let loaded = try await model.api.kidsScaryWishlist()
+            response = loaded
+            drafts = loaded.entries.map {
+                Draft(title: $0.requestedTitle, year: $0.requestedYear)
+            }
             model.error = nil
         } catch {
             model.error = error.localizedDescription

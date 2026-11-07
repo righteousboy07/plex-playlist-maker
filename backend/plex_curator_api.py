@@ -23,14 +23,15 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.13"
+API_VERSION = "1.14"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = (
     core.APP_DIR / "plex-curator-launchd"
     if (core.APP_DIR / "plex-curator-launchd").exists()
     else core.APP_DIR / "launchd-manager.py"
 )
-KIDS_SCARY_WISHLIST = core.EXAMPLES_DIR / "kids-scary-missing-wishlist.txt"
+KIDS_SCARY_WISHLIST = core.CONFIG_DIR / "kids-scary-wishlist.txt"
+KIDS_SCARY_WISHLIST_SEED = core.EXAMPLES_DIR / "kids-scary-missing-wishlist.txt"
 TITLE_ALIASES_FILE = core.EXAMPLES_DIR / "title-aliases.json"
 
 app = FastAPI(
@@ -77,7 +78,7 @@ STORE_AUTOMATION_JOBS = {
     },
     "kids-scary-wishlist": {
         "calendar": {"weekday": 1, "hour": 9, "minute": 0},
-        "args": ["wishlist-check", str(core.EXAMPLES_DIR / "kids-scary-missing-wishlist.txt")],
+        "args": ["wishlist-check", str(KIDS_SCARY_WISHLIST)],
         "description": "Sunday at 9:00 AM",
     },
     "stations-nightly": {
@@ -156,6 +157,13 @@ class MovieFilterRequest(BaseModel):
 class MoviePlaylistRequest(MovieFilterRequest):
     playlist: str = Field(min_length=1, max_length=120)
     replace: bool = True
+
+class WishlistItemRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+    year: Optional[int] = Field(default=None, ge=1880, le=2200)
+
+class WishlistUpdateRequest(BaseModel):
+    entries: list[WishlistItemRequest] = Field(default_factory=list, max_length=1000)
 
 class PlaylistRenameRequest(BaseModel):
     current_name: str = Field(min_length=1, max_length=120)
@@ -1492,6 +1500,29 @@ def movies_create_playlist(
         "item_count": len(items),
     }
 
+def ensure_kids_scary_wishlist_file():
+    core.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if KIDS_SCARY_WISHLIST.exists():
+        return
+    if KIDS_SCARY_WISHLIST_SEED.exists():
+        KIDS_SCARY_WISHLIST.write_text(
+            KIDS_SCARY_WISHLIST_SEED.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+    else:
+        KIDS_SCARY_WISHLIST.write_text("", encoding="utf-8")
+
+
+def serialize_wishlist_entries(entries):
+    lines = []
+    for entry in entries:
+        title = entry.title.strip()
+        if not title:
+            continue
+        lines.append(f"{title} | {entry.year}" if entry.year else title)
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 @app.get("/api/v1/wishlist/kids-scary")
 def kids_scary_wishlist():
     plex = core.connect()
@@ -1499,6 +1530,8 @@ def kids_scary_wishlist():
         section = core.get_section(plex, "Movies")
     except SystemExit as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    ensure_kids_scary_wishlist_file()
 
     entries = []
     found_count = 0
@@ -1531,6 +1564,38 @@ def kids_scary_wishlist():
         "total_count": len(entries),
         "entries": entries,
     }
+
+@app.put("/api/v1/wishlist/kids-scary")
+def update_kids_scary_wishlist(
+    request: WishlistUpdateRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    ensure_kids_scary_wishlist_file()
+
+    normalized = []
+    seen = set()
+    for entry in request.entries:
+        title = entry.title.strip()
+        if not title:
+            continue
+        key = (title.casefold(), entry.year)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(WishlistItemRequest(title=title, year=entry.year))
+
+    try:
+        tmp = KIDS_SCARY_WISHLIST.with_suffix(".tmp")
+        tmp.write_text(serialize_wishlist_entries(normalized), encoding="utf-8")
+        tmp.replace(KIDS_SCARY_WISHLIST)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not save wishlist: {exc}") from exc
+
+    return {
+        "ok": True,
+        "count": len(normalized),
+    }
+
 
 @app.get("/api/v1/playlists")
 def playlists():

@@ -90,6 +90,10 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- 13.2.24: add an explicit Edit action for regular playlists from the Playlists list.
+- 13.2.24: move Kids Scary Wishlist into the Library section directly beneath Playlists.
+- 13.2.24: make Kids Scary Wishlist persistent and editable with Add, Edit, Delete, and Save behavior.
+- 13.2.24: store the editable wishlist in the user config directory and seed it from the bundled default list on first use.
 - 13.2.23: add direct Enable/Disable controls and quick actions to the Stations list.
 - 13.2.23: expose Schedule editing directly from the Schedules list while retaining the full detail editor.
 - 13.2.23: restore regular-playlist item editing with Move Up/Down, Remove, Save As New, and duplicate cleanup controls.
