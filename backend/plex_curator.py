@@ -1038,6 +1038,25 @@ def unique_media_target(target, reserved):
     reserved.add(str(candidate).casefold())
     return candidate
 
+
+def media_alpha_folder(title):
+    cleaned = str(title or "").strip()
+    if not cleaned:
+        return "#"
+    first = cleaned[0].upper()
+    return first if "A" <= first <= "Z" else "#"
+
+
+def media_target_directory(source, destination_root, folder_mode, media_type, title):
+    mode = str(folder_mode or "type").strip().casefold()
+    if mode == "none":
+        return destination_root
+    if mode == "alpha":
+        return destination_root / media_alpha_folder(title)
+    if mode == "type":
+        return destination_root / INTERSTITIAL_TYPE_FOLDERS[media_type]
+    raise SystemExit(f'Unknown Media Organizer folder mode "{folder_mode}".')
+
 def plan_media_organization(
     root,
     destination=None,
@@ -1046,6 +1065,7 @@ def plan_media_organization(
     extract_review_frames=True,
     metadata_workers=1,
     exclude_patterns=None,
+    folder_mode="type",
     progress_callback=None,
     cancel_check=None,
 ):
@@ -1146,7 +1166,13 @@ def plan_media_organization(
             }
         )
         folder_name = INTERSTITIAL_TYPE_FOLDERS[identity["type"]]
-        target_dir = destination_root / folder_name
+        target_dir = media_target_directory(
+            source,
+            destination_root,
+            folder_mode,
+            identity["type"],
+            identity["title"],
+        )
         base_target = target_dir / f'{identity["title"]}{source.suffix.casefold()}'
 
         if source.resolve() == base_target.resolve():
@@ -1154,7 +1180,7 @@ def plan_media_organization(
             action = "unchanged"
         else:
             target = unique_media_target(base_target, reserved)
-            action = "move"
+            action = "rename" if target.parent == source.parent else "move"
 
         plans.append({
             "source": str(source),
@@ -1163,7 +1189,11 @@ def plan_media_organization(
             "proposed_name": target.name,
             "title": identity["title"],
             "type": identity["type"],
-            "folder": folder_name,
+            "folder": (
+                target.parent.name
+                if target.parent != destination_root
+                else ""
+            ),
             "confidence": identity["confidence"],
             "title_source": identity["title_source"],
             "metadata_title": identity["metadata_title"],
@@ -1184,6 +1214,7 @@ def plan_media_organization(
         "root": str(root),
         "destination": str(destination_root),
         "recursive": bool(recursive),
+        "folder_mode": str(folder_mode or "type").strip().casefold(),
         "exclude_patterns": normalize_exclude_patterns(exclude_patterns),
         "total_found": len(plans) + len(excluded_items),
         "count": len(plans),
@@ -1193,7 +1224,7 @@ def plan_media_organization(
         "items": plans,
     }
 
-def analyze_media_organizer_file(source, destination=None):
+def analyze_media_organizer_file(source, destination=None, folder_mode="type"):
     source = Path(source).expanduser().resolve()
     if not source.exists() or not source.is_file():
         raise SystemExit(f"Media organizer file not found: {source}")
@@ -1212,7 +1243,14 @@ def analyze_media_organizer_file(source, destination=None):
         else {"status": "not-needed", "frames": []}
     )
     folder_name = INTERSTITIAL_TYPE_FOLDERS[identity["type"]]
-    target = destination_root / folder_name / f'{identity["title"]}{source.suffix.casefold()}'
+    target_dir = media_target_directory(
+        source,
+        destination_root,
+        folder_mode,
+        identity["type"],
+        identity["title"],
+    )
+    target = target_dir / f'{identity["title"]}{source.suffix.casefold()}'
     return {
         "source": str(source),
         "target": str(target),
@@ -1220,7 +1258,7 @@ def analyze_media_organizer_file(source, destination=None):
         "proposed_name": target.name,
         "title": identity["title"],
         "type": identity["type"],
-        "folder": folder_name,
+        "folder": target.parent.name if target.parent != destination_root else "",
         "confidence": identity["confidence"],
         "title_source": identity["title_source"],
         "metadata_title": identity["metadata_title"],
@@ -1326,7 +1364,7 @@ def print_media_organizer_plan(plan):
         marker = "REVIEW" if item["confidence"] == "low" else item["confidence"].upper()
         print(
             f'[{marker:6}] {item["original_name"]} -> '
-            f'{item["folder"]}/{item["proposed_name"]}'
+            f'{(item["folder"] + "/") if item.get("folder") else ""}{item["proposed_name"]}'
         )
 
 def cmd_media_organize(args):
