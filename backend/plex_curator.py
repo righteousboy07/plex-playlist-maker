@@ -1046,15 +1046,26 @@ RAR_COMPANION_EXTENSIONS = {".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".nf
 
 def rar_extractor():
     candidates = [
-        ("bsdtar", shutil.which("bsdtar") or ("/usr/bin/bsdtar" if Path("/usr/bin/bsdtar").exists() else None)),
-        ("unar", shutil.which("unar")),
-        ("unrar", shutil.which("unrar")),
-        ("7zz", shutil.which("7zz")),
-        ("7z", shutil.which("7z")),
+        ("unrar", shutil.which("unrar"), None),
+        ("7zz", shutil.which("7zz"), None),
+        ("7z", shutil.which("7z"), None),
+        ("unar", shutil.which("unar"), shutil.which("lsar")),
+        (
+            "bsdtar",
+            shutil.which("bsdtar") or ("/usr/bin/bsdtar" if Path("/usr/bin/bsdtar").exists() else None),
+            None,
+        ),
     ]
-    for name, executable in candidates:
-        if executable:
-            return {"name": name, "path": str(executable)}
+    for name, executable, list_executable in candidates:
+        if not executable:
+            continue
+        if name == "unar" and not list_executable:
+            continue
+        return {
+            "name": name,
+            "path": str(executable),
+            "list_path": str(list_executable) if list_executable else None,
+        }
     return None
 
 
@@ -1110,7 +1121,7 @@ def _rar_command(extractor, action, archive, destination=None):
         if name in {"7zz", "7z"}:
             return [exe, "l", "-ba", "-slt", archive]
         if name == "unar":
-            return [exe, "-l", archive]
+            return [extractor["list_path"], "-json", archive]
     if action == "extract":
         destination = str(Path(destination))
         if name == "bsdtar":
@@ -1143,13 +1154,28 @@ def list_rar_members(archive, extractor=None):
         if raw_members and Path(raw_members[0]).name == Path(archive).name:
             raw_members = raw_members[1:]
     elif extractor["name"] == "unar":
-        for line in output.splitlines():
-            line = line.strip()
-            if not line or line.startswith(("Archive:", "Contents:", "  Size", "--------")):
-                continue
-            match = re.match(r"^\s*\d+\s+\S+\s+(.+)$", line)
-            if match:
-                raw_members.append(match.group(1).strip())
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"Could not parse lsar output for {Path(archive).name}: {exc}") from exc
+
+        def collect_lsar_entries(node):
+            if isinstance(node, dict):
+                name = (
+                    node.get("XADFileName")
+                    or node.get("FileName")
+                    or node.get("Name")
+                    or node.get("name")
+                )
+                if isinstance(name, str) and name.strip():
+                    raw_members.append(name.strip())
+                for value in node.values():
+                    collect_lsar_entries(value)
+            elif isinstance(node, list):
+                for value in node:
+                    collect_lsar_entries(value)
+
+        collect_lsar_entries(payload)
     else:
         raw_members = [line.strip() for line in output.splitlines() if line.strip()]
 
