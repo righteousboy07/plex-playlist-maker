@@ -1156,6 +1156,8 @@ def list_rar_members(archive, extractor=None):
     safe_members = []
     unsafe_members = []
     for raw in raw_members:
+        if str(raw).replace("\\", "/").rstrip().endswith("/"):
+            continue
         member = safe_archive_member(raw)
         if member is None:
             unsafe_members.append(raw)
@@ -1191,10 +1193,11 @@ def plan_rar_import(source_root, destination_root, recursive=True, media_only=Tr
             if media_only and suffix not in VIDEO_EXTENSIONS and suffix not in RAR_COMPANION_EXTENSIONS:
                 continue
             files.append(member)
+        relative_parent = archive.parent.relative_to(source_root)
         base = archive_destination_base(source_root, archive, destination_root)
         items.append({
             "archive": str(archive),
-            "relative_parent": archive.parent.relative_to(source_root).as_posix(),
+            "relative_parent": "" if relative_parent == Path(".") else relative_parent.as_posix(),
             "destination_parent": str(base),
             "file_count": len(files),
             "files": [member.as_posix() for member in files],
