@@ -65,3 +65,18 @@ def test_copy_extracted_tree_never_overwrites_existing_files(tmp_path):
     assert len(skipped) == 1
     assert skipped[0]["reason"] == "target-exists"
     assert (target / "movie.mp4").read_bytes() == b"existing"
+
+
+def test_split_rar_sets_only_process_first_volume(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "movie.part01.rar").write_bytes(b"part1")
+    (source / "movie.part02.rar").write_bytes(b"part2")
+    (source / "standalone.rar").write_bytes(b"single")
+
+    archives = core.iter_rar_archives(source)
+
+    assert [path.name for path in archives] == [
+        "movie.part01.rar",
+        "standalone.rar",
+    ]
