@@ -1159,23 +1159,25 @@ def list_rar_members(archive, extractor=None):
         except json.JSONDecodeError as exc:
             raise SystemExit(f"Could not parse lsar output for {Path(archive).name}: {exc}") from exc
 
-        def collect_lsar_entries(node):
-            if isinstance(node, dict):
-                name = (
-                    node.get("XADFileName")
-                    or node.get("FileName")
-                    or node.get("Name")
-                    or node.get("name")
-                )
-                if isinstance(name, str) and name.strip():
-                    raw_members.append(name.strip())
-                for value in node.values():
-                    collect_lsar_entries(value)
-            elif isinstance(node, list):
-                for value in node:
-                    collect_lsar_entries(value)
+        def collect_lsar_entries(entries, prefix=None):
+            prefix = prefix or Path()
+            for entry in entries or []:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("XADFileName")
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                current = prefix / name.strip()
+                is_directory = bool(entry.get("XADIsDirectory"))
+                children = entry.get("lsarContents") or entry.get("XADContents") or []
+                if is_directory:
+                    collect_lsar_entries(children, current)
+                else:
+                    raw_members.append(current.as_posix())
+                    if children:
+                        collect_lsar_entries(children, current.parent)
 
-        collect_lsar_entries(payload)
+        collect_lsar_entries(payload.get("lsarContents", []))
     else:
         raw_members = [line.strip() for line in output.splitlines() if line.strip()]
 
