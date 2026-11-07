@@ -118,6 +118,7 @@ class MediaOrganizerRequest(BaseModel):
     destination: Optional[str] = Field(default=None, max_length=4096)
     recursive: bool = True
     exclude_patterns: list[str] = Field(default_factory=list)
+    folder_mode: str = Field(default="type", pattern="^(none|alpha|type)$")
 
 class MediaOrganizerScanJobRequest(MediaOrganizerRequest):
     pass
@@ -130,10 +131,12 @@ class MediaOrganizerOverride(BaseModel):
 class MediaOrganizerAnalyzeRequest(BaseModel):
     source: str = Field(min_length=1, max_length=4096)
     destination: Optional[str] = Field(default=None, max_length=4096)
+    folder_mode: str = Field(default="type", pattern="^(none|alpha|type)$")
 
 class MediaOrganizerApplyRequest(MediaOrganizerRequest):
     include_low_confidence: bool = False
     delete_excluded: bool = False
+    rescan_plex: bool = False
     overrides: list[MediaOrganizerOverride] = Field(default_factory=list)
 
 class BackupRequest(BaseModel):
@@ -1030,6 +1033,7 @@ def _run_media_scan_job(job_id, request_data):
             extract_review_frames=False,
             metadata_workers=8,
             exclude_patterns=request_data.get("exclude_patterns") or [],
+            folder_mode=request_data.get("folder_mode") or "type",
             progress_callback=progress,
             cancel_check=cancel_event.is_set,
         )
@@ -1199,6 +1203,7 @@ def media_organizer_scan(request: MediaOrganizerRequest):
             extract_review_frames=False,
             metadata_workers=8,
             exclude_patterns=request.exclude_patterns,
+            folder_mode=request.folder_mode,
         )
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -1210,6 +1215,7 @@ def media_organizer_analyze(request: MediaOrganizerAnalyzeRequest):
         return core.analyze_media_organizer_file(
             request.source,
             destination=request.destination,
+            folder_mode=request.folder_mode,
         )
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -1231,6 +1237,25 @@ def media_organizer_frame(cache_key: str, frame_name: str):
         raise HTTPException(status_code=404, detail="Review frame not found.")
     return FileResponse(candidate, media_type="image/jpeg")
 
+def refresh_plex_libraries():
+    plex = core.connect()
+    refreshed = []
+    errors = []
+    try:
+        sections = list(plex.library.sections())
+    except Exception as exc:
+        return {"refreshed": refreshed, "errors": [str(exc)]}
+
+    for section in sections:
+        try:
+            section.update()
+            refreshed.append(getattr(section, "title", "Library"))
+        except Exception as exc:
+            errors.append(f'{getattr(section, "title", "Library")}: {exc}')
+
+    return {"refreshed": refreshed, "errors": errors}
+
+
 @app.post("/api/v1/media-organizer/apply")
 def media_organizer_apply(
     request: MediaOrganizerApplyRequest,
@@ -1245,12 +1270,23 @@ def media_organizer_apply(
             extract_review_frames=False,
             metadata_workers=8,
             exclude_patterns=request.exclude_patterns,
+            folder_mode=request.folder_mode,
         )
-        return core.apply_media_organization(
+        result = core.apply_media_organization(
             plan,
             include_low_confidence=request.include_low_confidence,
             delete_excluded=request.delete_excluded,
         )
+        if request.rescan_plex:
+            refresh = refresh_plex_libraries()
+            result["plex_rescan_requested"] = True
+            result["plex_libraries_refreshed"] = refresh["refreshed"]
+            result["plex_rescan_errors"] = refresh["errors"]
+        else:
+            result["plex_rescan_requested"] = False
+            result["plex_libraries_refreshed"] = []
+            result["plex_rescan_errors"] = []
+        return result
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
