@@ -11,6 +11,7 @@ import random
 import re
 import shutil
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import sqlite3
 import sys
@@ -1037,6 +1038,278 @@ def unique_media_target(target, reserved):
         counter += 1
     reserved.add(str(candidate).casefold())
     return candidate
+
+
+RAR_PART_RE = re.compile(r"^(?P<base>.+)\.part(?P<part>\d+)\.rar$", re.IGNORECASE)
+RAR_COMPANION_EXTENSIONS = {".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".nfo"}
+
+
+def rar_extractor():
+    candidates = [
+        ("unrar", shutil.which("unrar"), None),
+        ("7zz", shutil.which("7zz"), None),
+        ("7z", shutil.which("7z"), None),
+        ("unar", shutil.which("unar"), shutil.which("lsar")),
+        (
+            "bsdtar",
+            shutil.which("bsdtar") or ("/usr/bin/bsdtar" if Path("/usr/bin/bsdtar").exists() else None),
+            None,
+        ),
+    ]
+    for name, executable, list_executable in candidates:
+        if not executable:
+            continue
+        if name == "unar" and not list_executable:
+            continue
+        return {
+            "name": name,
+            "path": str(executable),
+            "list_path": str(list_executable) if list_executable else None,
+        }
+    return None
+
+
+def is_primary_rar_archive(path):
+    path = Path(path)
+    if path.suffix.casefold() != ".rar":
+        return False
+    match = RAR_PART_RE.match(path.name)
+    if not match:
+        return True
+    try:
+        return int(match.group("part")) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def find_rar_archives(root, recursive=True):
+    root = Path(root).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise SystemExit(f"RAR source folder not found: {root}")
+    iterator = root.rglob("*") if recursive else root.glob("*")
+    archives = []
+    for path in iterator:
+        try:
+            if path.is_file() and is_primary_rar_archive(path):
+                archives.append(path.resolve())
+        except OSError:
+            continue
+    return sorted(archives)
+
+
+def safe_archive_member(name):
+    raw = str(name or "").replace("\\", "/").strip()
+    if not raw or raw.startswith("/") or raw.startswith("\\"):
+        return None
+    parts = [part for part in raw.split("/") if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        return None
+    if re.match(r"^[A-Za-z]:", parts[0]):
+        return None
+    return Path(*parts)
+
+
+def _rar_command(extractor, action, archive, destination=None):
+    name = extractor["name"]
+    exe = extractor["path"]
+    archive = str(Path(archive))
+    if action == "list":
+        if name == "bsdtar":
+            return [exe, "-tf", archive]
+        if name == "unrar":
+            return [exe, "lb", "-idq", archive]
+        if name in {"7zz", "7z"}:
+            return [exe, "l", "-ba", "-slt", archive]
+        if name == "unar":
+            return [extractor["list_path"], "-json", archive]
+    if action == "extract":
+        destination = str(Path(destination))
+        if name == "bsdtar":
+            return [exe, "-xf", archive, "-C", destination]
+        if name == "unrar":
+            return [exe, "x", "-idq", "-o+", archive, destination + os.sep]
+        if name in {"7zz", "7z"}:
+            return [exe, "x", "-y", f"-o{destination}", archive]
+        if name == "unar":
+            return [exe, "-quiet", "-force-overwrite", "-output-directory", destination, archive]
+    raise SystemExit(f"Unsupported RAR extractor action: {name} {action}")
+
+
+def list_rar_members(archive, extractor=None):
+    extractor = extractor or rar_extractor()
+    if not extractor:
+        raise SystemExit("No RAR extractor found. Install unar, unrar, or 7-Zip; macOS bsdtar is also supported.")
+    command = _rar_command(extractor, "list", archive)
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "unknown extractor error").strip()
+        raise SystemExit(f"Could not inspect {Path(archive).name}: {detail}")
+
+    output = completed.stdout or ""
+    raw_members = []
+    if extractor["name"] in {"7zz", "7z"}:
+        for line in output.splitlines():
+            if line.startswith("Path = "):
+                raw_members.append(line[7:].strip())
+        if raw_members and Path(raw_members[0]).name == Path(archive).name:
+            raw_members = raw_members[1:]
+    elif extractor["name"] == "unar":
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"Could not parse lsar output for {Path(archive).name}: {exc}") from exc
+
+        def collect_lsar_entries(entries, prefix=None):
+            prefix = prefix or Path()
+            for entry in entries or []:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("XADFileName")
+                if not isinstance(name, str) or not name.strip():
+                    continue
+                current = prefix / name.strip()
+                is_directory = bool(entry.get("XADIsDirectory"))
+                children = entry.get("lsarContents") or entry.get("XADContents") or []
+                if is_directory:
+                    collect_lsar_entries(children, current)
+                else:
+                    raw_members.append(current.as_posix())
+                    if children:
+                        collect_lsar_entries(children, current.parent)
+
+        collect_lsar_entries(payload.get("lsarContents", []))
+    else:
+        raw_members = [line.strip() for line in output.splitlines() if line.strip()]
+
+    safe_members = []
+    unsafe_members = []
+    for raw in raw_members:
+        if str(raw).replace("\\", "/").rstrip().endswith("/"):
+            continue
+        member = safe_archive_member(raw)
+        if member is None:
+            unsafe_members.append(raw)
+        else:
+            safe_members.append(member)
+    return safe_members, unsafe_members
+
+
+def archive_destination_base(source_root, archive, destination_root):
+    source_root = Path(source_root).expanduser().resolve()
+    archive = Path(archive).expanduser().resolve()
+    destination_root = Path(destination_root).expanduser().resolve()
+    try:
+        relative_parent = archive.parent.relative_to(source_root)
+    except ValueError as exc:
+        raise SystemExit(f"Archive is outside the selected source folder: {archive}") from exc
+    return destination_root / relative_parent
+
+
+def plan_rar_import(source_root, destination_root, recursive=True, media_only=True):
+    source_root = Path(source_root).expanduser().resolve()
+    destination_root = Path(destination_root).expanduser().resolve()
+    extractor = rar_extractor()
+    if not extractor:
+        raise SystemExit("No RAR extractor found. Install unar, unrar, or 7-Zip; macOS bsdtar is also supported.")
+
+    items = []
+    for archive in find_rar_archives(source_root, recursive=recursive):
+        members, unsafe = list_rar_members(archive, extractor=extractor)
+        files = []
+        for member in members:
+            suffix = member.suffix.casefold()
+            if media_only and suffix not in VIDEO_EXTENSIONS and suffix not in RAR_COMPANION_EXTENSIONS:
+                continue
+            files.append(member)
+        relative_parent = archive.parent.relative_to(source_root)
+        base = archive_destination_base(source_root, archive, destination_root)
+        items.append({
+            "archive": str(archive),
+            "relative_parent": "" if relative_parent == Path(".") else relative_parent.as_posix(),
+            "destination_parent": str(base),
+            "file_count": len(files),
+            "files": [member.as_posix() for member in files],
+            "unsafe_members": unsafe,
+            "status": "blocked" if unsafe else ("ready" if files else "empty"),
+        })
+
+    return {
+        "source": str(source_root),
+        "destination": str(destination_root),
+        "recursive": bool(recursive),
+        "media_only": bool(media_only),
+        "extractor": extractor["name"],
+        "archive_count": len(items),
+        "ready_count": sum(1 for item in items if item["status"] == "ready"),
+        "blocked_count": sum(1 for item in items if item["status"] == "blocked"),
+        "items": items,
+    }
+
+
+def apply_rar_import(source_root, destination_root, recursive=True, media_only=True):
+    plan = plan_rar_import(
+        source_root,
+        destination_root,
+        recursive=recursive,
+        media_only=media_only,
+    )
+    extractor = rar_extractor()
+    copied = []
+    errors = []
+    reserved = set()
+
+    for item in plan["items"]:
+        archive = Path(item["archive"])
+        if item["status"] == "blocked":
+            errors.append({
+                "archive": str(archive),
+                "error": "Archive contains unsafe absolute or parent-traversal paths.",
+            })
+            continue
+        if item["status"] == "empty":
+            continue
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="plex-curator-rar-") as temp_name:
+                temp_root = Path(temp_name).resolve()
+                command = _rar_command(extractor, "extract", archive, temp_root)
+                completed = subprocess.run(command, capture_output=True, text=True, check=False)
+                if completed.returncode != 0:
+                    detail = (completed.stderr or completed.stdout or "unknown extractor error").strip()
+                    raise RuntimeError(detail)
+
+                destination_base = Path(item["destination_parent"])
+                for relative_text in item["files"]:
+                    relative = safe_archive_member(relative_text)
+                    if relative is None:
+                        continue
+                    extracted = (temp_root / relative).resolve()
+                    try:
+                        extracted.relative_to(temp_root)
+                    except ValueError:
+                        raise RuntimeError(f"Unsafe extracted path: {relative_text}")
+                    if not extracted.is_file():
+                        continue
+
+                    target = destination_base / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target = unique_media_target(target, reserved)
+                    shutil.copy2(extracted, target)
+                    copied.append({
+                        "archive": str(archive),
+                        "source_member": relative.as_posix(),
+                        "target": str(target),
+                    })
+        except Exception as exc:
+            errors.append({"archive": str(archive), "error": str(exc)})
+
+    return {
+        **plan,
+        "copied_count": len(copied),
+        "error_count": len(errors),
+        "copied": copied,
+        "errors": errors,
+    }
 
 def plan_media_organization(
     root,

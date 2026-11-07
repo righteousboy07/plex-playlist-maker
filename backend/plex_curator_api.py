@@ -137,6 +137,13 @@ class MediaOrganizerApplyRequest(MediaOrganizerRequest):
     delete_excluded: bool = False
     overrides: list[MediaOrganizerOverride] = Field(default_factory=list)
 
+
+class ArchiveImportRequest(BaseModel):
+    source: str = Field(min_length=1, max_length=4096)
+    destination: str = Field(min_length=1, max_length=4096)
+    recursive: bool = True
+    media_only: bool = True
+
 class BackupRequest(BaseModel):
     reason: str = Field(default="api", min_length=1, max_length=80)
 
@@ -1196,6 +1203,45 @@ def media_organizer_scan_job_cancel(
         job["status"] = "cancelling"
         job["updated_at"] = _iso_now()
         return _media_scan_job_payload(job)
+
+@app.get("/api/v1/media-organizer/archive-import/status")
+def archive_import_status():
+    extractor = core.rar_extractor()
+    return {
+        "available": extractor is not None,
+        "extractor": extractor["name"] if extractor else None,
+        "path": extractor["path"] if extractor else None,
+    }
+
+
+@app.post("/api/v1/media-organizer/archive-import/preview")
+def archive_import_preview(request: ArchiveImportRequest):
+    try:
+        return core.plan_rar_import(
+            request.source,
+            request.destination,
+            recursive=request.recursive,
+            media_only=request.media_only,
+        )
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/media-organizer/archive-import/apply")
+def archive_import_apply(
+    request: ArchiveImportRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        return core.apply_rar_import(
+            request.source,
+            request.destination,
+            recursive=request.recursive,
+            media_only=request.media_only,
+        )
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
 
 @app.post("/api/v1/media-organizer/scan")
 def media_organizer_scan(request: MediaOrganizerRequest):
