@@ -1311,6 +1311,36 @@ def apply_rar_import(source_root, destination_root, recursive=True, media_only=T
         "errors": errors,
     }
 
+
+def media_alpha_folder(title):
+    """Return the A-Z bucket for a media title, or # for non-letter starts."""
+    text = str(title or "").strip()
+    if not text:
+        return "#"
+    first = text[0].upper()
+    return first if "A" <= first <= "Z" else "#"
+
+
+def media_target_directory(source, destination_root, folder_mode, media_type, title):
+    """Resolve the destination directory for a Media Organizer item."""
+    source = Path(source).expanduser().resolve()
+    destination_root = Path(destination_root).expanduser().resolve()
+    mode = str(folder_mode or "type").strip().casefold()
+
+    if mode == "none":
+        return destination_root
+    if mode == "alpha":
+        return destination_root / media_alpha_folder(title)
+    if mode == "type":
+        try:
+            return destination_root / INTERSTITIAL_TYPE_FOLDERS[media_type]
+        except KeyError as exc:
+            raise SystemExit(f'Invalid media organizer type "{media_type}" for {source.name}.') from exc
+    raise SystemExit(
+        f'Invalid media organizer folder mode "{folder_mode}". '
+        'Expected one of: none, alpha, type.'
+    )
+
 def plan_media_organization(
     root,
     destination=None,
