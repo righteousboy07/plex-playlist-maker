@@ -137,8 +137,9 @@ class MediaOrganizerApplyRequest(MediaOrganizerRequest):
     delete_excluded: bool = False
     overrides: list[MediaOrganizerOverride] = Field(default_factory=list)
 
-class MediaRarImportRequest(BaseModel):
-    path: str = Field(min_length=1, max_length=4096)
+
+class ArchiveImportRequest(BaseModel):
+    source: str = Field(min_length=1, max_length=4096)
     destination: str = Field(min_length=1, max_length=4096)
     recursive: bool = True
     media_only: bool = True
@@ -1203,6 +1204,45 @@ def media_organizer_scan_job_cancel(
         job["updated_at"] = _iso_now()
         return _media_scan_job_payload(job)
 
+@app.get("/api/v1/media-organizer/archive-import/status")
+def archive_import_status():
+    extractor = core.rar_extractor()
+    return {
+        "available": extractor is not None,
+        "extractor": extractor["name"] if extractor else None,
+        "path": extractor["path"] if extractor else None,
+    }
+
+
+@app.post("/api/v1/media-organizer/archive-import/preview")
+def archive_import_preview(request: ArchiveImportRequest):
+    try:
+        return core.plan_rar_import(
+            request.source,
+            request.destination,
+            recursive=request.recursive,
+            media_only=request.media_only,
+        )
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/media-organizer/archive-import/apply")
+def archive_import_apply(
+    request: ArchiveImportRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    try:
+        return core.apply_rar_import(
+            request.source,
+            request.destination,
+            recursive=request.recursive,
+            media_only=request.media_only,
+        )
+    except SystemExit as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @app.post("/api/v1/media-organizer/scan")
 def media_organizer_scan(request: MediaOrganizerRequest):
     try:
@@ -1265,37 +1305,6 @@ def media_organizer_apply(
             include_low_confidence=request.include_low_confidence,
             delete_excluded=request.delete_excluded,
         )
-    except SystemExit as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-@app.post("/api/v1/media-organizer/rar-import/preview")
-def media_rar_import_preview(request: MediaRarImportRequest):
-    try:
-        return {
-            **core.plan_rar_import(
-                request.path,
-                request.destination,
-                recursive=request.recursive,
-                media_only=request.media_only,
-            ),
-            "read_only": True,
-        }
-    except SystemExit as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-@app.post("/api/v1/media-organizer/rar-import/apply")
-def media_rar_import_apply(
-    request: MediaRarImportRequest,
-    _authorized: bool = Depends(require_api_key),
-):
-    try:
-        plan = core.plan_rar_import(
-            request.path,
-            request.destination,
-            recursive=request.recursive,
-            media_only=request.media_only,
-        )
-        return core.apply_rar_import(plan)
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 

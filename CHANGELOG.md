@@ -2,15 +2,6 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
-## 13.2.25
-
-- Added Media Organizer RAR import with recursive archive discovery and source-folder hierarchy preservation.
-- Added preview/apply controls in the macOS app with separate source and destination folder pickers.
-- Extracted files are staged in temporary folders, copied without overwriting existing destination files, and original RAR archives are left untouched.
-- Preserves child folders stored inside archives and defaults to copying supported video formats only, with an option to include all extracted files.
-- Added focused backend tests for hierarchy mapping, child-folder preservation, media filtering, and overwrite protection.
-
-
 ## 13.2.18
 
 - Restored clear Enable/Disable controls on Station detail screens while preserving every other station setting during the toggle.
@@ -99,6 +90,8 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
+- Media Organizer: add a preview-first RAR Archive Import workflow that scans nested folders, preserves source parent hierarchy and archive child folders, and copies extracted media to a chosen destination.
+- Media Organizer: support multipart `.part01.rar` sets, collision-safe copies, unsafe path blocking, and multiple RAR extractors (`unrar`, 7-Zip, `unar`/`lsar`, and `bsdtar`).
 - 13.2.24: add an explicit Edit action for regular playlists from the Playlists list.
 - 13.2.24: move Kids Scary Wishlist into the Library section directly beneath Playlists.
 - 13.2.24: make Kids Scary Wishlist persistent and editable with Add, Edit, Delete, and Save behavior.

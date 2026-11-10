@@ -122,7 +122,8 @@ The native macOS app now includes:
 - playlist usage classification, sorting, filtering, and duplicate/runtime diagnostics
 - movie curation and wishlist tools
 - schedule programming
-- Media Organizer scans with progress, cancellation, exclusions, presets, review frames, safe apply workflows, and recursive RAR extraction that preserves source folder hierarchy
+- Media Organizer scans with progress, cancellation, exclusions, presets, review frames, and safe apply workflows
+- RAR Archive Import with recursive archive discovery, preserved parent/child hierarchy, safe preview, and no-overwrite extraction
 - automation/LaunchAgent management
 - searchable History with station filtering and copy/export support
 - searchable Logs with job selection, stdout/stderr selection, severity highlighting, line limits, copy, and Finder reveal
@@ -342,22 +343,18 @@ plex-curator media-preset-save "Movie Cleanup" \
 plex-curator media-preset-delete <preset-id>
 ```
 
-RAR import preview, preserving the source parent/child hierarchy under a new destination:
+#### RAR Archive Import
 
-```bash
-plex-curator media-rar-import "/path/to/source" \
-  --destination "/path/to/destination"
+The native app includes a dedicated **RAR Archive Import** tool under Tools. It recursively scans a source folder for primary RAR archives, previews the destination layout, and recreates the source parent/child hierarchy beneath a separate destination.
+
+Example:
+
+```text
+Source/Show/Season 1/archive.rar
+→ Destination/Show/Season 1/<extracted contents>
 ```
 
-Extract and copy supported video files:
-
-```bash
-plex-curator media-rar-import "/path/to/source" \
-  --destination "/path/to/destination" \
-  --apply
-```
-
-Use `--include-all-files` to copy every extracted file instead of only supported video formats. Existing destination files are skipped and the original RAR archives are never deleted. The workflow uses an available `unar`, `unrar`, `bsdtar`, or `tar` extractor.
+Child folders stored inside each archive are preserved. Existing destination files are never overwritten, unsafe archive paths are blocked, and the original RAR files remain untouched.
 
 ### LaunchAgent automation manager
 
