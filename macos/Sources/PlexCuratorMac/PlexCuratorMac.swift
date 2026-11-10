@@ -5552,17 +5552,17 @@ struct MediaOrganizerView: View {
             }
     }
 
-    var body: some View {
+    private var organizerContent: some View {
         ScrollView {
-        VStack(alignment: .leading, spacing: 16) {
-            organizerHeader
-            mediaFolderSelectionSection
-            mediaScanProgressSection
-            mediaPlanSection
-        }
-        .padding(24)
-        .frame(maxWidth: 1100, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+            VStack(alignment: .leading, spacing: 16) {
+                organizerHeader
+                mediaFolderSelectionSection
+                mediaScanProgressSection
+                mediaPlanSection
+            }
+            .padding(24)
+            .frame(maxWidth: 1100, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .background(PlexTheme.pageBackground)
         .groupBoxStyle(PlexCardGroupBoxStyle())
@@ -5572,35 +5572,51 @@ struct MediaOrganizerView: View {
                 await model.loadMediaOrganizerPresets()
             }
         }
-        .alert("Apply file organization?", isPresented: $confirmApply) {
-            Button("Cancel", role: .cancel) {}
-            Button(confirmActionTitle, role: .destructive) {
-                Task {
-                    guard authorizedForStoreOperation() else { return }
-                    let ok = await model.applyMediaOrganizer(
-                        path: sourcePath,
-                        destination: normalizedDestination,
-                        recursive: recursive,
-                        folderMode: folderMode,
-                        includeLowConfidence: includeLowConfidence,
-                        deleteExcluded: deleteExcluded,
-                        rescanPlex: rescanPlex,
-                        excludePatterns: excludePatterns,
-                        overrides: reviewedOverrides
-                    )
-                    if ok {
-                        await scan()
+    }
+
+    private var applyConfirmationMessage: String {
+        var message = confirmationSummary
+        if deleteExcluded && excludedCount > 0 {
+            let suffix = excludedCount == 1 ? "" : "s"
+            message += " It will also permanently delete \(excludedCount) excluded file\(suffix)."
+        }
+        if rescanPlex {
+            message += " Plex will be asked to rescan its libraries afterward."
+        }
+        message += " Existing files are never overwritten, and a JSON manifest is saved for the operation."
+        return message
+    }
+
+    private func applyConfirmedOrganization() async {
+        guard authorizedForStoreOperation() else { return }
+        let ok = await model.applyMediaOrganizer(
+            path: sourcePath,
+            destination: normalizedDestination,
+            recursive: recursive,
+            folderMode: folderMode,
+            includeLowConfidence: includeLowConfidence,
+            deleteExcluded: deleteExcluded,
+            rescanPlex: rescanPlex,
+            excludePatterns: excludePatterns,
+            overrides: reviewedOverrides
+        )
+        if ok {
+            await scan()
+        }
+    }
+
+    var body: some View {
+        organizerContent
+            .alert("Apply file organization?", isPresented: $confirmApply) {
+                Button("Cancel", role: .cancel) {}
+                Button(confirmActionTitle, role: .destructive) {
+                    Task {
+                        await applyConfirmedOrganization()
                     }
                 }
+            } message: {
+                Text(applyConfirmationMessage)
             }
-        } message: {
-            Text(
-                confirmationSummary +
-                (deleteExcluded && excludedCount > 0 ? " It will also permanently delete \(excludedCount) excluded file\(excludedCount == 1 ? "" : "s")." : "") +
-                (rescanPlex ? " Plex will be asked to rescan its libraries afterward." : "") +
-                " Existing files are never overwritten, and a JSON manifest is saved for the operation."
-            )
-        }
     }
 
     private func scanProgressTitle(_ job: MediaOrganizerScanJob) -> String {
