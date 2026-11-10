@@ -90,12 +90,8 @@ This project uses milestone tags for major Plex Curator releases.
 
 ## Unreleased
 
-- 13.2.25: make the Media Organizer page vertically scrollable so all review and confirmation controls remain reachable.
-- 13.2.25: replace the problematic Advanced Exclusion Rules disclosure with an inline preset dropdown and optional rule editor.
-- 13.2.25: expose low-confidence filename/type editing directly in the review rows.
-- 13.2.25: add source-location rename/organize versus move-to-destination workflows.
-- 13.2.25: add No folders, A–Z/# folders, and Media type folder organization modes.
-- 13.2.25: add an optional Plex library rescan after Media Organizer file changes.
+- Media Organizer: add a preview-first RAR Archive Import workflow that scans nested folders, preserves source parent hierarchy and archive child folders, and copies extracted media to a chosen destination.
+- Media Organizer: support multipart `.part01.rar` sets, collision-safe copies, unsafe path blocking, and multiple RAR extractors (`unrar`, 7-Zip, `unar`/`lsar`, and `bsdtar`).
 - 13.2.24: add an explicit Edit action for regular playlists from the Playlists list.
 - 13.2.24: move Kids Scary Wishlist into the Library section directly beneath Playlists.
 - 13.2.24: make Kids Scary Wishlist persistent and editable with Add, Edit, Delete, and Save behavior.

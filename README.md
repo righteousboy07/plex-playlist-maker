@@ -123,6 +123,7 @@ The native macOS app now includes:
 - movie curation and wishlist tools
 - schedule programming
 - Media Organizer scans with progress, cancellation, exclusions, presets, review frames, and safe apply workflows
+- RAR Archive Import with recursive archive discovery, preserved parent/child hierarchy, safe preview, and no-overwrite extraction
 - automation/LaunchAgent management
 - searchable History with station filtering and copy/export support
 - searchable Logs with job selection, stdout/stderr selection, severity highlighting, line limits, copy, and Finder reveal
@@ -341,6 +342,19 @@ plex-curator media-preset-save "Movie Cleanup" \
   --exclude "*/sample/*"
 plex-curator media-preset-delete <preset-id>
 ```
+
+#### RAR Archive Import
+
+The native app includes a dedicated **RAR Archive Import** tool under Tools. It recursively scans a source folder for primary RAR archives, previews the destination layout, and recreates the source parent/child hierarchy beneath a separate destination.
+
+Example:
+
+```text
+Source/Show/Season 1/archive.rar
+→ Destination/Show/Season 1/<extracted contents>
+```
+
+Child folders stored inside each archive are preserved. Existing destination files are never overwritten, unsafe archive paths are blocked, and the original RAR files remain untouched.
 
 ### LaunchAgent automation manager
 

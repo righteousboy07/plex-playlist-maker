@@ -738,6 +738,60 @@ struct MediaOrganizerResponse: Codable {
     let plexRescanErrors: [String]?
 }
 
+
+struct ArchiveImportStatus: Codable {
+    let available: Bool
+    let extractor: String?
+    let path: String?
+}
+
+struct ArchiveImportRequest: Encodable {
+    let source: String
+    let destination: String
+    let recursive: Bool
+    let mediaOnly: Bool
+}
+
+struct ArchiveImportItem: Codable, Identifiable, Hashable {
+    var id: String { archive }
+    let archive: String
+    let relativeParent: String
+    let destinationParent: String
+    let fileCount: Int
+    let files: [String]
+    let unsafeMembers: [String]
+    let status: String
+}
+
+struct ArchiveImportCopiedItem: Codable, Identifiable, Hashable {
+    var id: String { target }
+    let archive: String
+    let sourceMember: String
+    let target: String
+}
+
+struct ArchiveImportErrorItem: Codable, Identifiable, Hashable {
+    var id: String { archive + error }
+    let archive: String
+    let error: String
+}
+
+struct ArchiveImportResponse: Codable {
+    let source: String
+    let destination: String
+    let recursive: Bool
+    let mediaOnly: Bool
+    let extractor: String
+    let archiveCount: Int
+    let readyCount: Int
+    let blockedCount: Int
+    let items: [ArchiveImportItem]
+    let copiedCount: Int?
+    let errorCount: Int?
+    let copied: [ArchiveImportCopiedItem]?
+    let errors: [ArchiveImportErrorItem]?
+}
+
 struct APIErrorResponse: Codable { let detail: String }
 struct PreviewRequest: Codable { let total: Int? }
 struct RefreshRequest: Codable { let total: Int?; let dryRun: Bool; let force: Bool }
@@ -1305,6 +1359,55 @@ final class APIClient {
             "/api/v1/media-organizer/scan-jobs",
             method: "POST",
             body: body
+        )
+    }
+
+    func archiveImportStatus() async throws -> ArchiveImportStatus {
+        try await request("/api/v1/media-organizer/archive-import/status")
+    }
+
+    func previewArchiveImport(
+        source: String,
+        destination: String,
+        recursive: Bool,
+        mediaOnly: Bool
+    ) async throws -> ArchiveImportResponse {
+        let body = try encoder.encode(
+            ArchiveImportRequest(
+                source: source,
+                destination: destination,
+                recursive: recursive,
+                mediaOnly: mediaOnly
+            )
+        )
+        return try await request(
+            "/api/v1/media-organizer/archive-import/preview",
+            method: "POST",
+            body: body,
+            timeout: 300
+        )
+    }
+
+    func applyArchiveImport(
+        source: String,
+        destination: String,
+        recursive: Bool,
+        mediaOnly: Bool
+    ) async throws -> ArchiveImportResponse {
+        let body = try encoder.encode(
+            ArchiveImportRequest(
+                source: source,
+                destination: destination,
+                recursive: recursive,
+                mediaOnly: mediaOnly
+            )
+        )
+        return try await request(
+            "/api/v1/media-organizer/archive-import/apply",
+            method: "POST",
+            body: body,
+            authenticated: true,
+            timeout: 1800
         )
     }
 
@@ -5033,6 +5136,10 @@ struct MediaOrganizerView: View {
                         .foregroundColor(.secondary)
                 }
                 Spacer()
+                NavigationLink(destination: ArchiveImportView()) {
+                    Label("Import RAR Archives", systemImage: "archivebox")
+                }
+                .buttonStyle(.bordered)
             }
     }
 
@@ -5651,6 +5758,337 @@ struct MediaOrganizerView: View {
         .background(PlexTheme.softFill, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
+
+
+struct ArchiveImportView: View {
+    @EnvironmentObject var model: AppModel
+
+    @State private var sourcePath = ""
+    @State private var destinationPath = ""
+    @State private var recursive = true
+    @State private var mediaOnly = true
+    @State private var status: ArchiveImportStatus?
+    @State private var preview: ArchiveImportResponse?
+    @State private var loading = false
+    @State private var applying = false
+    @State private var confirmImport = false
+
+    private var archiveHeader: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text("RAR Archive Import")
+                .font(.largeTitle.bold())
+            Text("Unpack RAR archives from a folder tree, preserve the source hierarchy, and copy extracted media into a new destination.")
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var archiveSourceSection: some View {
+        GroupBox("1 · Source and Destination") {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    TextField("Source folder containing RAR files", text: $sourcePath)
+                        .disabled(BuildFlavor.current.isAppStore)
+                    Button("Browse…") { chooseFolder { sourcePath = $0 } }
+                }
+
+                HStack {
+                    TextField("Destination folder", text: $destinationPath)
+                        .disabled(BuildFlavor.current.isAppStore)
+                    Button("Browse…") { chooseFolder { destinationPath = $0 } }
+                }
+
+                Toggle("Scan subfolders recursively", isOn: $recursive)
+                Toggle("Copy media and companion files only", isOn: $mediaOnly)
+                    .help("Copies supported video files plus subtitles/NFO files. Turn off to copy every extracted file.")
+
+                if let status {
+                    if status.available {
+                        Label(
+                            "RAR extraction available via \(status.extractor ?? "system extractor")",
+                            systemImage: "checkmark.circle"
+                        )
+                        .foregroundColor(.green)
+                    } else {
+                        Label(
+                            "No supported RAR extractor was found. Install unar, unrar, or 7-Zip.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .foregroundColor(.orange)
+                    }
+                }
+
+                Text("Example: Source/Show/Season 1/archive.rar → Destination/Show/Season 1/<files from archive>. Child folders stored inside the archive are preserved too.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                HStack {
+                    Button {
+                        Task { await loadPreview() }
+                    } label: {
+                        Label("Scan RAR Archives", systemImage: "magnifyingglass")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+                    .disabled(
+                        loading
+                        || sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || destinationPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || status?.available == false
+                    )
+
+                    if loading {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+
+                    Spacer()
+                }
+            }
+            .padding(4)
+        }
+    }
+
+    @ViewBuilder
+    private var archivePreviewSection: some View {
+        if let preview {
+            HStack(spacing: 12) {
+                metric("Archives", preview.archiveCount)
+                metric("Ready", preview.readyCount)
+                metric("Blocked", preview.blockedCount)
+                Spacer()
+                Text("Extractor: \(preview.extractor)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            GroupBox("2 · Preview Import Layout") {
+                if preview.items.isEmpty {
+                    Text("No primary .rar archives were found.")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 100)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(preview.items) { item in
+                            archivePreviewRow(item)
+                        }
+                    }
+                }
+            }
+
+            GroupBox("3 · Import") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("RAR archives remain untouched. Extracted files are copied to the destination; existing files are never overwritten.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+
+                    Button(role: .destructive) {
+                        confirmImport = true
+                    } label: {
+                        Label(
+                            applying ? "Importing…" : "Extract & Copy \(preview.readyCount) Archive\(preview.readyCount == 1 ? "" : "s")",
+                            systemImage: "square.and.arrow.down"
+                        )
+                    }
+                    .disabled(applying || preview.readyCount == 0)
+                }
+                .padding(4)
+            }
+
+            if let copied = preview.copiedCount, copied > 0 {
+                Label("Copied \(copied) extracted file\(copied == 1 ? "" : "s").", systemImage: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+            }
+
+            if let errors = preview.errors, !errors.isEmpty {
+                GroupBox("Import Errors") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(errors) { item in
+                            Text("\(URL(fileURLWithPath: item.archive).lastPathComponent): \(item.error)")
+                                .font(.caption)
+                                .foregroundColor(.red)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func archivePreviewRow(_ item: ArchiveImportItem) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Image(systemName: item.status == "blocked" ? "exclamationmark.triangle.fill" : "archivebox")
+                    .foregroundColor(item.status == "blocked" ? .red : .secondary)
+                Text(URL(fileURLWithPath: item.archive).lastPathComponent)
+                    .font(.headline)
+                Spacer()
+                Text("\(item.fileCount) file\(item.fileCount == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Text("Source parent: \(item.relativeParent.isEmpty ? "(source root)" : item.relativeParent)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text("Destination: \(item.destinationParent)")
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+
+            if item.status == "blocked" {
+                Text("Blocked: archive contains unsafe paths and will not be extracted.")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.red)
+            } else if !item.files.isEmpty {
+                Text(item.files.prefix(6).joined(separator: " • "))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+                if item.files.count > 6 {
+                    Text("+ \(item.files.count - 6) more")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(10)
+        .background(PlexTheme.softFill, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                archiveHeader
+                archiveSourceSection
+                archivePreviewSection
+            }
+            .padding(24)
+            .frame(maxWidth: 1050, alignment: .topLeading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .background(PlexTheme.pageBackground)
+        .navigationTitle("RAR Archive Import")
+        .groupBoxStyle(PlexCardGroupBoxStyle())
+        .task {
+            await loadStatus()
+        }
+        .alert("Extract and copy RAR contents?", isPresented: $confirmImport) {
+            Button("Cancel", role: .cancel) {}
+            Button("Extract & Copy", role: .destructive) {
+                Task { await applyImport() }
+            }
+        } message: {
+            Text("The original RAR archives will not be deleted. Extracted files will be copied to the destination while preserving the source parent folders and archive child folders.")
+        }
+    }
+
+    private func metric(_ label: String, _ value: Int) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(.title2.bold())
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(PlexTheme.softFill, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func loadStatus() async {
+        do {
+            status = try await model.api.archiveImportStatus()
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
+    private func loadPreview() async {
+        guard authorizedFolders() else { return }
+        loading = true
+        defer { loading = false }
+
+        do {
+            preview = try await model.api.previewArchiveImport(
+                source: sourcePath.trimmingCharacters(in: .whitespacesAndNewlines),
+                destination: destinationPath.trimmingCharacters(in: .whitespacesAndNewlines),
+                recursive: recursive,
+                mediaOnly: mediaOnly
+            )
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
+    private func applyImport() async {
+        guard authorizedFolders() else { return }
+        applying = true
+        defer { applying = false }
+
+        do {
+            let result = try await model.api.applyArchiveImport(
+                source: sourcePath.trimmingCharacters(in: .whitespacesAndNewlines),
+                destination: destinationPath.trimmingCharacters(in: .whitespacesAndNewlines),
+                recursive: recursive,
+                mediaOnly: mediaOnly
+            )
+            preview = result
+            model.message = "RAR import copied \(result.copiedCount ?? 0) file(s) with \(result.errorCount ?? 0) error(s)."
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
+    private func authorizedFolders() -> Bool {
+        guard BuildFlavor.current.isAppStore else { return true }
+        let source = sourcePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let destination = destinationPath.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard SecurityScopedMediaAccess.shared.isAuthorized(path: source) else {
+            model.error = "Choose the archive source folder with Browse so Plex Curator can access it."
+            return false
+        }
+        guard SecurityScopedMediaAccess.shared.isAuthorized(path: destination) else {
+            model.error = "Choose the archive destination folder with Browse so Plex Curator can access it."
+            return false
+        }
+        return true
+    }
+
+    private func chooseFolder(_ completion: (String) -> Void) {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Folder"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let path = try SecurityScopedMediaAccess.shared.authorize(url)
+            completion(path)
+            model.error = nil
+
+            if BuildFlavor.current.isAppStore {
+                Task {
+                    do {
+                        try await AppStoreBackendRuntime.shared.reloadMediaFolderAccess()
+                    } catch {
+                        model.error = error.localizedDescription
+                    }
+                }
+            }
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+}
+
 
 struct MediaOrganizerRow: View {
     @EnvironmentObject var model: AppModel
