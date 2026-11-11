@@ -1293,8 +1293,11 @@ def media_organizer_frame(cache_key: str, frame_name: str):
 
 def _normalized_media_path(value):
     try:
-        return Path(value).expanduser().resolve(strict=False)
-    except (OSError, RuntimeError, TypeError, ValueError):
+        text = os.fspath(value)
+        if not text:
+            return None
+        return Path(os.path.abspath(os.path.normpath(os.path.expanduser(text))))
+    except (OSError, TypeError, ValueError):
         return None
 
 
