@@ -1845,19 +1845,21 @@ def resolved_wishlist(wishlist):
     }
 
 
-def matching_plex_playlists(wishlist):
-    keywords = [value.casefold() for value in wishlist.get("keywords", []) if value.strip()]
+def matching_plex_playlists(wishlist, playlists=None):
+    keywords = _normalize_keywords(wishlist.get("keywords", []))
     if not keywords:
         return []
-    plex = core.connect()
+    if playlists is None:
+        playlists = list(core.connect().playlists())
+
     matches = []
-    for playlist in plex.playlists():
+    for playlist in playlists:
         title = str(getattr(playlist, "title", "") or "")
         folded = title.casefold()
         matched_keywords = [
-            original
-            for original in wishlist.get("keywords", [])
-            if original.casefold() in folded
+            keyword
+            for keyword in keywords
+            if keyword.casefold() in folded
         ]
         if not matched_keywords:
             continue
@@ -1958,7 +1960,8 @@ def import_wishlist_playlists(
 ):
     data, wishlist = wishlist_or_404(wishlist_id)
     plex = core.connect()
-    matches = matching_plex_playlists(wishlist)
+    playlists = list(plex.playlists())
+    matches = matching_plex_playlists(wishlist, playlists=playlists)
     allowed = {item["title"] for item in matches}
     requested = set(request.playlist_names) if request.playlist_names else allowed
     selected = allowed & requested
@@ -1968,7 +1971,7 @@ def import_wishlist_playlists(
     existing = _normalize_wishlist_entries(wishlist.get("entries", []))
     seen = {(item["title"].casefold(), item.get("year")) for item in existing}
 
-    for playlist in plex.playlists():
+    for playlist in playlists:
         title = str(getattr(playlist, "title", "") or "")
         if title not in selected:
             continue
