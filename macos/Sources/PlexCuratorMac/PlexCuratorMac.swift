@@ -8209,12 +8209,16 @@ struct WishlistView: View {
                 } label: {
                     Label("New Wishlist", systemImage: "plus")
                 }
+                .buttonStyle(.bordered)
+                .foregroundColor(PlexTheme.contentPrimary)
 
                 Button {
                     beginEditSettings()
                 } label: {
                     Label("Settings", systemImage: "slider.horizontal.3")
                 }
+                .buttonStyle(.bordered)
+                .foregroundColor(PlexTheme.contentPrimary)
                 .disabled(response == nil)
 
                 Spacer()
@@ -8227,6 +8231,8 @@ struct WishlistView: View {
                         systemImage: "magnifyingglass"
                     )
                 }
+                .buttonStyle(.bordered)
+                .foregroundColor(PlexTheme.contentPrimary)
                 .disabled(response == nil || isDiscovering || (response?.keywords.isEmpty ?? true))
 
                 if !playlistMatches.isEmpty {
@@ -8267,6 +8273,8 @@ struct WishlistView: View {
                     .tint(PlexTheme.accent)
 
                     Button("Reload") { Task { await loadSelectedWishlist() } }
+                        .buttonStyle(.bordered)
+                        .foregroundColor(PlexTheme.contentPrimary)
                 }
                 .padding(.horizontal)
                 .padding(.bottom)
@@ -8333,6 +8341,7 @@ struct WishlistView: View {
                             Label("Edit", systemImage: "pencil")
                         }
                         .buttonStyle(.bordered)
+                        .foregroundColor(PlexTheme.contentPrimary)
 
                         Button(role: .destructive) {
                             delete(entry)
@@ -8346,6 +8355,11 @@ struct WishlistView: View {
             }
         }
         .navigationTitle("Wishlist")
+        .background(PlexTheme.pageBackground)
+        .foregroundColor(PlexTheme.contentPrimary)
+        .tint(PlexTheme.accent)
+        .environment(\.colorScheme, .light)
+        .groupBoxStyle(PlexCardGroupBoxStyle())
         .searchable(text: $searchText, prompt: "Search selected wishlist")
         .toolbar {
             Picker("Status", selection: $filter) {
@@ -8388,6 +8402,10 @@ struct WishlistView: View {
             }
             .padding(22)
             .frame(width: 440)
+            .background(PlexTheme.pageBackground)
+            .foregroundColor(PlexTheme.contentPrimary)
+            .tint(PlexTheme.accent)
+            .environment(\.colorScheme, .light)
         }
         .sheet(isPresented: $settingsPresented) {
             VStack(alignment: .leading, spacing: 16) {
@@ -8436,6 +8454,10 @@ struct WishlistView: View {
             }
             .padding(22)
             .frame(width: 520)
+            .background(PlexTheme.pageBackground)
+            .foregroundColor(PlexTheme.contentPrimary)
+            .tint(PlexTheme.accent)
+            .environment(\.colorScheme, .light)
         }
         .alert("Delete this wishlist?", isPresented: $confirmDeleteWishlist) {
             Button("Cancel", role: .cancel) {}
