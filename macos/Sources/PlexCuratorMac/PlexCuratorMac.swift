@@ -736,6 +736,7 @@ struct MediaOrganizerResponse: Codable {
     let plexRescanRequested: Bool?
     let plexLibrariesRefreshed: [String]?
     let plexRescanErrors: [String]?
+    let plexRescanScope: String?
 }
 
 
@@ -2577,9 +2578,19 @@ final class AppModel: ObservableObject {
             let deleted = result.deletedExcludedCount ?? 0
             let rescanText: String
             if result.plexRescanRequested == true {
-                let refreshed = result.plexLibrariesRefreshed?.count ?? 0
+                let libraries = result.plexLibrariesRefreshed ?? []
                 let rescanErrors = result.plexRescanErrors?.count ?? 0
-                rescanText = " Plex refresh requested for \(refreshed) librar\(refreshed == 1 ? "y" : "ies")\(rescanErrors > 0 ? " with \(rescanErrors) error(s)" : "")."
+                if result.plexRescanScope == "none" {
+                    rescanText = " No Plex library refresh was needed."
+                } else if libraries.isEmpty {
+                    rescanText = " Plex refresh completed with no matching library updates."
+                } else {
+                    let names = libraries.joined(separator: ", ")
+                    let fallback = result.plexRescanScope == "all-fallback"
+                        ? " (safe full-library fallback)"
+                        : ""
+                    rescanText = " Refreshed Plex: \(names)\(fallback)\(rescanErrors > 0 ? " with \(rescanErrors) error(s)" : "")."
+                }
             } else {
                 rescanText = ""
             }
