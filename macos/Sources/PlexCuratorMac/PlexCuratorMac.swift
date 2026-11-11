@@ -8668,16 +8668,20 @@ struct WishlistView: View {
         do {
             wishlists = try await model.api.wishlists()
             let candidate = preferredID ?? selectedWishlistID
-            if wishlists.contains(where: { $0.id == candidate }) {
-                selectedWishlistID = candidate
-            } else {
-                selectedWishlistID = wishlists.first?.id ?? ""
-            }
-            if !selectedWishlistID.isEmpty {
-                await loadSelectedWishlist()
-            } else {
+            let nextID = wishlists.contains(where: { $0.id == candidate })
+                ? candidate
+                : (wishlists.first?.id ?? "")
+
+            if nextID.isEmpty {
+                selectedWishlistID = ""
                 response = nil
                 drafts = []
+            } else if selectedWishlistID == nextID {
+                await loadSelectedWishlist()
+            } else {
+                // Updating the Picker selection triggers its onChange handler,
+                // which performs the detail fetch exactly once.
+                selectedWishlistID = nextID
             }
             model.error = nil
         } catch {
