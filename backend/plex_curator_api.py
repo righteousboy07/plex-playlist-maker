@@ -1291,23 +1291,99 @@ def media_organizer_frame(cache_key: str, frame_name: str):
         raise HTTPException(status_code=404, detail="Review frame not found.")
     return FileResponse(candidate, media_type="image/jpeg")
 
-def refresh_plex_libraries():
+def _normalized_media_path(value):
+    try:
+        return Path(value).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+
+
+def _path_is_within(path, root):
+    path = _normalized_media_path(path)
+    root = _normalized_media_path(root)
+    if path is None or root is None:
+        return False
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _changed_media_paths(result):
+    paths = set()
+    for item in result.get("applied_items", []):
+        for key in ("source", "target"):
+            value = item.get(key)
+            if value:
+                paths.add(str(value))
+    for item in result.get("deleted_excluded_items", []):
+        value = item.get("source")
+        if value:
+            paths.add(str(value))
+    return sorted(paths)
+
+
+def refresh_plex_libraries(changed_paths=None):
     plex = core.connect()
     refreshed = []
     errors = []
     try:
         sections = list(plex.library.sections())
     except Exception as exc:
-        return {"refreshed": refreshed, "errors": [str(exc)]}
+        return {
+            "refreshed": refreshed,
+            "errors": [str(exc)],
+            "scope": "error",
+        }
 
-    for section in sections:
+    selected_sections = sections
+    scope = "all"
+    if changed_paths is not None:
+        normalized_changes = [
+            path for path in (_normalized_media_path(value) for value in changed_paths)
+            if path is not None
+        ]
+        matched = []
+        mapping_uncertain = False
+
+        for section in sections:
+            try:
+                locations = list(getattr(section, "locations", []) or [])
+            except Exception:
+                mapping_uncertain = True
+                break
+
+            if not locations:
+                mapping_uncertain = True
+                break
+
+            if any(
+                _path_is_within(changed_path, location)
+                for changed_path in normalized_changes
+                for location in locations
+            ):
+                matched.append(section)
+
+        if mapping_uncertain:
+            selected_sections = sections
+            scope = "all-fallback"
+        else:
+            selected_sections = matched
+            scope = "targeted" if matched else "none"
+
+    for section in selected_sections:
         try:
             section.update()
             refreshed.append(getattr(section, "title", "Library"))
         except Exception as exc:
             errors.append(f'{getattr(section, "title", "Library")}: {exc}')
 
-    return {"refreshed": refreshed, "errors": errors}
+    return {
+        "refreshed": refreshed,
+        "errors": errors,
+        "scope": scope,
+    }
 
 
 @app.post("/api/v1/media-organizer/apply")
@@ -1336,14 +1412,16 @@ def media_organizer_apply(
             + result.get("deleted_excluded_count", 0)
         )
         if request.rescan_plex and changed_count > 0:
-            refresh = refresh_plex_libraries()
+            refresh = refresh_plex_libraries(_changed_media_paths(result))
             result["plex_rescan_requested"] = True
             result["plex_libraries_refreshed"] = refresh["refreshed"]
             result["plex_rescan_errors"] = refresh["errors"]
+            result["plex_rescan_scope"] = refresh["scope"]
         else:
             result["plex_rescan_requested"] = bool(request.rescan_plex)
             result["plex_libraries_refreshed"] = []
             result["plex_rescan_errors"] = []
+            result["plex_rescan_scope"] = "none"
         return result
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
