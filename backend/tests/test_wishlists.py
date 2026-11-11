@@ -158,3 +158,41 @@ def test_import_matching_playlists_deduplicates_entries(tmp_path, monkeypatch):
         {"title": "Coraline", "year": 2009},
         {"title": "Monster House", "year": 2006},
     ]
+
+
+def test_import_matching_playlists_enumerates_plex_once(tmp_path, monkeypatch):
+    _patch_wishlist_paths(tmp_path, monkeypatch)
+    api.save_wishlists({
+        "version": 1,
+        "wishlists": [{
+            "id": "halloween",
+            "name": "Halloween",
+            "description": "",
+            "library": "Movies",
+            "keywords": ["halloween"],
+            "entries": [],
+        }],
+    })
+
+    calls = {"playlists": 0}
+
+    class Plex:
+        def playlists(self):
+            calls["playlists"] += 1
+            return [
+                FakePlaylist(
+                    "Halloween Favorites",
+                    items=[SimpleNamespace(title="Coraline", year=2009)],
+                )
+            ]
+
+    monkeypatch.setattr(api.core, "connect", lambda: Plex())
+
+    result = api.import_wishlist_playlists(
+        "halloween",
+        api.WishlistImportRequest(playlist_names=[]),
+        _authorized=True,
+    )
+
+    assert result["imported_count"] == 1
+    assert calls["playlists"] == 1
