@@ -650,11 +650,13 @@ struct MediaOrganizerRequest: Encodable {
     let destination: String?
     let recursive: Bool
     let excludePatterns: [String]
+    let folderMode: String
 }
 
 struct MediaOrganizerAnalyzeRequest: Encodable {
     let source: String
     let destination: String?
+    let folderMode: String
 }
 
 struct MediaOrganizerOverrideRequest: Encodable {
@@ -668,8 +670,10 @@ struct MediaOrganizerApplyRequest: Encodable {
     let destination: String?
     let recursive: Bool
     let excludePatterns: [String]
+    let folderMode: String
     let includeLowConfidence: Bool
     let deleteExcluded: Bool
+    let rescanPlex: Bool
     let overrides: [MediaOrganizerOverrideRequest]
 }
 
@@ -716,6 +720,7 @@ struct MediaOrganizerResponse: Codable {
     let root: String
     let destination: String
     let recursive: Bool
+    let folderMode: String?
     let totalFound: Int?
     let count: Int
     let excludedCount: Int?
@@ -728,6 +733,10 @@ struct MediaOrganizerResponse: Codable {
     let deletedExcludedCount: Int?
     let errorCount: Int?
     let manifest: String?
+    let plexRescanRequested: Bool?
+    let plexLibrariesRefreshed: [String]?
+    let plexRescanErrors: [String]?
+    let plexRescanScope: String?
 }
 
 
@@ -1335,14 +1344,16 @@ final class APIClient {
         path: String,
         destination: String?,
         recursive: Bool,
-        excludePatterns: [String]
+        excludePatterns: [String],
+        folderMode: String
     ) async throws -> MediaOrganizerScanJob {
         let body = try encoder.encode(
             MediaOrganizerRequest(
                 path: path,
                 destination: destination,
                 recursive: recursive,
-                excludePatterns: excludePatterns
+                excludePatterns: excludePatterns,
+                folderMode: folderMode
             )
         )
         return try await request(
@@ -1421,14 +1432,16 @@ final class APIClient {
         path: String,
         destination: String?,
         recursive: Bool,
-        excludePatterns: [String]
+        excludePatterns: [String],
+        folderMode: String
     ) async throws -> MediaOrganizerResponse {
         let body = try encoder.encode(
             MediaOrganizerRequest(
                 path: path,
                 destination: destination,
                 recursive: recursive,
-                excludePatterns: excludePatterns
+                excludePatterns: excludePatterns,
+                folderMode: folderMode
             )
         )
         return try await request(
@@ -1441,12 +1454,14 @@ final class APIClient {
 
     func analyzeMediaOrganizerItem(
         source: String,
-        destination: String?
+        destination: String?,
+        folderMode: String
     ) async throws -> MediaOrganizerItem {
         let body = try encoder.encode(
             MediaOrganizerAnalyzeRequest(
                 source: source,
-                destination: destination
+                destination: destination,
+                folderMode: folderMode
             )
         )
         return try await request(
@@ -1461,8 +1476,10 @@ final class APIClient {
         path: String,
         destination: String?,
         recursive: Bool,
+        folderMode: String,
         includeLowConfidence: Bool,
         deleteExcluded: Bool,
+        rescanPlex: Bool,
         excludePatterns: [String],
         overrides: [MediaOrganizerOverrideRequest]
     ) async throws -> MediaOrganizerResponse {
@@ -1472,8 +1489,10 @@ final class APIClient {
                 destination: destination,
                 recursive: recursive,
                 excludePatterns: excludePatterns,
+                folderMode: folderMode,
                 includeLowConfidence: includeLowConfidence,
                 deleteExcluded: deleteExcluded,
+                rescanPlex: rescanPlex,
                 overrides: overrides
             )
         )
@@ -2447,7 +2466,8 @@ final class AppModel: ObservableObject {
         path: String,
         destination: String?,
         recursive: Bool,
-        excludePatterns: [String]
+        excludePatterns: [String],
+        folderMode: String
     ) async {
         analyzedMediaItems.removeAll()
         mediaOrganizer = nil
@@ -2460,7 +2480,8 @@ final class AppModel: ObservableObject {
                 path: path,
                 destination: destination,
                 recursive: recursive,
-                excludePatterns: excludePatterns
+                excludePatterns: excludePatterns,
+                folderMode: folderMode
             )
             mediaOrganizerScanJob = job
             error = nil
@@ -2508,12 +2529,14 @@ final class AppModel: ObservableObject {
 
     func analyzeMediaOrganizerItem(
         source: String,
-        destination: String?
+        destination: String?,
+        folderMode: String
     ) async -> MediaOrganizerItem? {
         do {
             let item = try await api.analyzeMediaOrganizerItem(
                 source: source,
-                destination: destination
+                destination: destination,
+                folderMode: folderMode
             )
             analyzedMediaItems[source] = item
             error = nil
@@ -2528,8 +2551,10 @@ final class AppModel: ObservableObject {
         path: String,
         destination: String?,
         recursive: Bool,
+        folderMode: String,
         includeLowConfidence: Bool,
         deleteExcluded: Bool,
+        rescanPlex: Bool,
         excludePatterns: [String],
         overrides: [MediaOrganizerOverrideRequest]
     ) async -> Bool {
@@ -2540,8 +2565,10 @@ final class AppModel: ObservableObject {
                 path: path,
                 destination: destination,
                 recursive: recursive,
+                folderMode: folderMode,
                 includeLowConfidence: includeLowConfidence,
                 deleteExcluded: deleteExcluded,
+                rescanPlex: rescanPlex,
                 excludePatterns: excludePatterns,
                 overrides: overrides
             )
@@ -2549,7 +2576,25 @@ final class AppModel: ObservableObject {
             let moved = result.appliedCount ?? 0
             let skipped = result.skippedCount ?? 0
             let deleted = result.deletedExcludedCount ?? 0
-            message = "Media Organizer moved \(moved) file\(moved == 1 ? "" : "s"); skipped \(skipped); deleted \(deleted) excluded."
+            let rescanText: String
+            if result.plexRescanRequested == true {
+                let libraries = result.plexLibrariesRefreshed ?? []
+                let rescanErrors = result.plexRescanErrors?.count ?? 0
+                if result.plexRescanScope == "none" {
+                    rescanText = " No Plex library refresh was needed."
+                } else if libraries.isEmpty {
+                    rescanText = " Plex refresh completed with no matching library updates."
+                } else {
+                    let names = libraries.joined(separator: ", ")
+                    let fallback = result.plexRescanScope == "all-fallback"
+                        ? " (safe full-library fallback)"
+                        : ""
+                    rescanText = " Refreshed Plex: \(names)\(fallback)\(rescanErrors > 0 ? " with \(rescanErrors) error(s)" : "")."
+                }
+            } else {
+                rescanText = ""
+            }
+            message = "Media Organizer changed \(moved) file\(moved == 1 ? "" : "s"); skipped \(skipped); deleted \(deleted) excluded." + rescanText
             error = nil
             return true
         } catch {
@@ -4921,8 +4966,11 @@ struct MediaOrganizerView: View {
 
     @State private var sourcePath = ""
     @State private var destinationPath = ""
+    @State private var operationMode = "source"
+    @State private var folderMode = "none"
     @State private var recursive = true
     @State private var includeLowConfidence = false
+    @State private var rescanPlex = false
     @State private var confirmApply = false
     @State private var showAdvancedRules = false
     @State private var reviewedSources: Set<String> = []
@@ -5089,9 +5137,9 @@ struct MediaOrganizerView: View {
         deleteExcluded = false
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
+
+    private var organizerHeader: some View {
+        HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Media Organizer")
                         .font(.largeTitle.bold())
@@ -5104,8 +5152,10 @@ struct MediaOrganizerView: View {
                 }
                 .buttonStyle(.bordered)
             }
+    }
 
-            GroupBox("1 · Select Media Folders") {
+    private var mediaFolderSelectionSection: some View {
+        GroupBox("1 · Select Media Folders") {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         TextField("Source folder", text: $sourcePath)
@@ -5113,12 +5163,41 @@ struct MediaOrganizerView: View {
                         Button("Browse…") { chooseFolder { sourcePath = $0 } }
                     }
 
-                    HStack {
-                        TextField("Destination folder (optional)", text: $destinationPath)
-                            .disabled(BuildFlavor.current.isAppStore)
-                        Button("Browse…") { chooseFolder { destinationPath = $0 } }
-                        Button("Use Source") { destinationPath = "" }
+                    Picker("File location", selection: $operationMode) {
+                        Text("Use source location").tag("source")
+                        Text("Move to new destination").tag("move")
                     }
+                    .pickerStyle(.segmented)
+                    .onChange(of: operationMode) { newValue in
+                        if newValue == "source" {
+                            destinationPath = ""
+                        }
+                    }
+
+                    if operationMode == "move" {
+                        HStack {
+                            TextField("Destination folder", text: $destinationPath)
+                                .disabled(BuildFlavor.current.isAppStore)
+                            Button("Browse…") { chooseFolder { destinationPath = $0 } }
+                        }
+
+                        if destinationPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Label("Choose a destination before scanning in move mode.", systemImage: "info.circle")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        Text("With No folders selected below, files stay in their current folders and are renamed in place.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Picker("Folder organization", selection: $folderMode) {
+                        Text("No folders — leave files where they are").tag("none")
+                        Text("A–Z / # folders").tag("alpha")
+                        Text("Media type folders").tag("type")
+                    }
+                    .pickerStyle(.menu)
 
                     if BuildFlavor.current.isAppStore {
                         Text("App Store builds use folders you explicitly authorize with Browse. Permission is retained securely for future launches.")
@@ -5128,110 +5207,117 @@ struct MediaOrganizerView: View {
 
                     Toggle("Scan subfolders recursively", isOn: $recursive)
 
-                    DisclosureGroup(isExpanded: $showAdvancedRules) {
-                        VStack(alignment: .leading, spacing: 8) {
-                        Text("Exclusion preset")
-                            .font(.headline)
-
-                        HStack {
-                            Picker("Preset", selection: $selectedPresetID) {
-                                Text("Custom / Unsaved").tag("")
-                                ForEach(model.mediaOrganizerPresets) { preset in
-                                    Text(preset.name).tag(preset.id)
-                                }
-                            }
-                            .frame(maxWidth: 260)
-                            .onChange(of: selectedPresetID) { newValue in
-                                guard !newValue.isEmpty,
-                                      let preset = model.mediaOrganizerPresets.first(where: { $0.id == newValue })
-                                else { return }
-                                loadPreset(preset)
-                            }
-
-                            TextField("Preset name", text: $presetName)
-                                .frame(maxWidth: 220)
-
-                            Button(selectedPresetID.isEmpty ? "Save New" : "Update") {
-                                Task {
-                                    if let saved = await model.saveMediaOrganizerPreset(
-                                        id: selectedPresetID.isEmpty ? nil : selectedPresetID,
-                                        name: presetName,
-                                        description: presetDescription,
-                                        excludePatterns: excludePatterns
-                                    ) {
-                                        loadPreset(saved)
+                    GroupBox("Exclusion Settings") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Picker("Preset", selection: $selectedPresetID) {
+                                    Text("Custom / Unsaved").tag("")
+                                    ForEach(model.mediaOrganizerPresets) { preset in
+                                        Text(preset.name).tag(preset.id)
                                     }
                                 }
-                            }
-                            .disabled(!canSavePreset)
+                                .pickerStyle(.menu)
+                                .frame(maxWidth: 280)
+                                .onChange(of: selectedPresetID) { newValue in
+                                    guard !newValue.isEmpty,
+                                          let preset = model.mediaOrganizerPresets.first(where: { $0.id == newValue })
+                                    else { return }
+                                    loadPreset(preset)
+                                }
 
-                            if !selectedPresetID.isEmpty {
-                                Button("Save As New") {
-                                    Task {
-                                        if let saved = await model.saveMediaOrganizerPreset(
-                                            id: nil,
-                                            name: presetName,
-                                            description: presetDescription,
-                                            excludePatterns: excludePatterns,
-                                            createNew: true
-                                        ) {
-                                            loadPreset(saved)
+                                Button(showAdvancedRules ? "Hide Rules" : "Edit Rules") {
+                                    showAdvancedRules.toggle()
+                                }
+
+                                Spacer()
+                            }
+
+                            if showAdvancedRules {
+                                TextField("Preset name", text: $presetName)
+                                    .textFieldStyle(.roundedBorder)
+
+                                TextField("Preset description (optional)", text: $presetDescription)
+                                    .textFieldStyle(.roundedBorder)
+
+                                HStack {
+                                    Text("Exclude patterns")
+                                        .font(.headline)
+                                    Spacer()
+                                    Button("Add Sample Rules") {
+                                        let preset = ["sample.*", "*/sample/*"]
+                                        let existing = Set(excludePatterns.map { $0.lowercased() })
+                                        let additions = preset.filter { !existing.contains($0.lowercased()) }
+                                        let current = excludePatternsText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        excludePatternsText = ([current].filter { !$0.isEmpty } + additions)
+                                            .joined(separator: "\n")
+                                        selectedPresetID = ""
+                                    }
+                                }
+
+                                TextEditor(text: $excludePatternsText)
+                                    .font(.system(.body, design: .monospaced))
+                                    .frame(minHeight: 90)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .stroke(.quaternary)
+                                    )
+
+                                HStack {
+                                    Button(selectedPresetID.isEmpty ? "Save New Preset" : "Update Preset") {
+                                        Task {
+                                            if let saved = await model.saveMediaOrganizerPreset(
+                                                id: selectedPresetID.isEmpty ? nil : selectedPresetID,
+                                                name: presetName,
+                                                description: presetDescription,
+                                                excludePatterns: excludePatterns
+                                            ) {
+                                                loadPreset(saved)
+                                            }
+                                        }
+                                    }
+                                    .disabled(!canSavePreset)
+
+                                    if !selectedPresetID.isEmpty {
+                                        Button("Save As New") {
+                                            Task {
+                                                if let saved = await model.saveMediaOrganizerPreset(
+                                                    id: nil,
+                                                    name: presetName,
+                                                    description: presetDescription,
+                                                    excludePatterns: excludePatterns,
+                                                    createNew: true
+                                                ) {
+                                                    loadPreset(saved)
+                                                }
+                                            }
+                                        }
+                                        .disabled(!canSavePreset)
+
+                                        Button("Delete Preset", role: .destructive) {
+                                            let deleting = selectedPresetID
+                                            Task {
+                                                if await model.deleteMediaOrganizerPreset(id: deleting) {
+                                                    selectedPresetID = ""
+                                                    presetName = ""
+                                                    presetDescription = ""
+                                                    excludePatternsText = ""
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                                .disabled(!canSavePreset)
 
-                                Button("Delete Preset", role: .destructive) {
-                                    let deleting = selectedPresetID
-                                    Task {
-                                        if await model.deleteMediaOrganizerPreset(id: deleting) {
-                                            selectedPresetID = ""
-                                            presetName = ""
-                                            presetDescription = ""
-                                        }
-                                    }
-                                }
+                                Text("Case-insensitive glob patterns, one per line or comma-separated. Example: sample.*, */sample/*")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            } else if let selectedPreset {
+                                Text(selectedPreset.description.isEmpty ? selectedPreset.excludePatterns.joined(separator: ", ") : selectedPreset.description)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(2)
                             }
                         }
-
-                        TextField("Preset description (optional)", text: $presetDescription)
-
-                        HStack {
-                            Text("Exclude patterns")
-                                .font(.headline)
-                            Spacer()
-                            Button("Add Sample Rules") {
-                                let preset = ["sample.*", "*/sample/*"]
-                                let existing = Set(excludePatterns.map { $0.lowercased() })
-                                let additions = preset.filter { !existing.contains($0.lowercased()) }
-                                let current = excludePatternsText.trimmingCharacters(in: .whitespacesAndNewlines)
-                                excludePatternsText = ([current].filter { !$0.isEmpty } + additions)
-                                    .joined(separator: "\n")
-                                selectedPresetID = ""
-                            }
-                        }
-
-                        TextEditor(text: $excludePatternsText)
-                            .font(.system(.body, design: .monospaced))
-                            .frame(minHeight: 58, maxHeight: 92)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(.quaternary)
-                            )
-
-                        if let selectedPreset {
-                            Text("Loaded preset: \(selectedPreset.name). Editing rules does not change the saved preset until Update is clicked.")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-
-                        Text("Case-insensitive glob patterns, one per line or comma-separated. Examples: Sample.avi, sample.*, */sample/*")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        }
-                    } label: {
-                        Label("Advanced exclusion rules and presets", systemImage: "slider.horizontal.3")
-                            .font(.headline)
+                        .padding(4)
                     }
 
                     HStack {
@@ -5240,7 +5326,11 @@ struct MediaOrganizerView: View {
                         } label: {
                             Label("Scan / Preview", systemImage: "magnifyingglass")
                         }
-                        .disabled(sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.mediaOrganizerScanning)
+                        .disabled(
+                            sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || model.mediaOrganizerScanning
+                            || (operationMode == "move" && destinationPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        )
 
                         if model.mediaOrganizerScanning {
                             ProgressView()
@@ -5257,8 +5347,11 @@ struct MediaOrganizerView: View {
                 .padding(4)
                 .disabled(model.mediaOrganizerScanning)
             }
+    }
 
-            if let scanJob = model.mediaOrganizerScanJob {
+    @ViewBuilder
+    private var mediaScanProgressSection: some View {
+        if let scanJob = model.mediaOrganizerScanJob {
                 GroupBox("Scan Progress") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
@@ -5327,8 +5420,11 @@ struct MediaOrganizerView: View {
                     .padding(4)
                 }
             }
+    }
 
-            if let plan {
+    @ViewBuilder
+    private var mediaPlanSection: some View {
+        if let plan {
                 HStack(spacing: 12) {
                     organizerMetric("Videos", plan.count)
                     organizerMetric("Excluded", excludedCount)
@@ -5411,6 +5507,7 @@ struct MediaOrganizerView: View {
                             MediaOrganizerRow(
                                 item: item,
                                 destination: normalizedDestination,
+                                folderMode: folderMode,
                                 reviewedTitle: titleBinding(item),
                                 reviewedType: typeBinding(item),
                                 reviewed: reviewedBinding(item),
@@ -5428,19 +5525,22 @@ struct MediaOrganizerView: View {
                 VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Toggle("Include low-confidence filename guesses", isOn: $includeLowConfidence)
-                        .help("Low-confidence files look like generic names such as video_0047.mp4 and are skipped by default.")
+                        .help("Low-confidence files look like generic names such as video_0047.mp4. Edit the title/type in Step 2 before applying when needed.")
 
                     if excludedCount > 0 {
                         Toggle("Delete excluded files", isOn: $deleteExcluded)
                             .help("Permanently deletes only files matched by the explicit exclude patterns when Apply is confirmed.")
                     }
 
+                    Toggle("Trigger Plex library rescan after changes", isOn: $rescanPlex)
+                        .help("Requests a refresh of Plex libraries after file operations finish.")
+
                     Spacer()
 
                     Button(role: .destructive) {
                         confirmApply = true
                     } label: {
-                        Label("Apply \(actionableCount) Changes", systemImage: "folder.badge.plus")
+                        Label(applyButtonTitle, systemImage: operationMode == "move" ? "folder.badge.plus" : "pencil")
                     }
                     .disabled(actionableCount == 0 || model.loading || model.mediaOrganizerScanning)
                 }
@@ -5460,24 +5560,22 @@ struct MediaOrganizerView: View {
                 }
                 }
                 }
-            } else {
-                VStack(spacing: 12) {
-                    Image(systemName: "folder")
-                        .font(.system(size: 42))
-                        .foregroundColor(.secondary)
-                    Text("Choose a Media Folder")
-                        .font(.title2.bold())
-                    Text("Curator will inspect supported videos and propose organized Station IDs, Bumpers, Commercials, Promos, and General folders.")
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 520)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+    }
+
+    private var organizerContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                organizerHeader
+                mediaFolderSelectionSection
+                mediaScanProgressSection
+                mediaPlanSection
+            }
+            .padding(24)
+            .frame(maxWidth: 1100, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(24)
-        .frame(maxWidth: 1100, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(PlexTheme.pageBackground)
         .groupBoxStyle(PlexCardGroupBoxStyle())
         .navigationTitle("Media Organizer")
         .task {
@@ -5485,32 +5583,51 @@ struct MediaOrganizerView: View {
                 await model.loadMediaOrganizerPresets()
             }
         }
-        .alert("Apply file organization?", isPresented: $confirmApply) {
-            Button("Cancel", role: .cancel) {}
-            Button("Move & Rename", role: .destructive) {
-                Task {
-                    guard authorizedForStoreOperation() else { return }
-                    let ok = await model.applyMediaOrganizer(
-                        path: sourcePath,
-                        destination: normalizedDestination,
-                        recursive: recursive,
-                        includeLowConfidence: includeLowConfidence,
-                        deleteExcluded: deleteExcluded,
-                        excludePatterns: excludePatterns,
-                        overrides: reviewedOverrides
-                    )
-                    if ok {
-                        await scan()
+    }
+
+    private var applyConfirmationMessage: String {
+        var message = confirmationSummary
+        if deleteExcluded && excludedCount > 0 {
+            let suffix = excludedCount == 1 ? "" : "s"
+            message += " It will also permanently delete \(excludedCount) excluded file\(suffix)."
+        }
+        if rescanPlex {
+            message += " Plex will be asked to rescan its libraries afterward."
+        }
+        message += " Existing files are never overwritten, and a JSON manifest is saved for the operation."
+        return message
+    }
+
+    private func applyConfirmedOrganization() async {
+        guard authorizedForStoreOperation() else { return }
+        let ok = await model.applyMediaOrganizer(
+            path: sourcePath,
+            destination: normalizedDestination,
+            recursive: recursive,
+            folderMode: folderMode,
+            includeLowConfidence: includeLowConfidence,
+            deleteExcluded: deleteExcluded,
+            rescanPlex: rescanPlex,
+            excludePatterns: excludePatterns,
+            overrides: reviewedOverrides
+        )
+        if ok {
+            await scan()
+        }
+    }
+
+    var body: some View {
+        organizerContent
+            .alert("Apply file organization?", isPresented: $confirmApply) {
+                Button("Cancel", role: .cancel) {}
+                Button(confirmActionTitle, role: .destructive) {
+                    Task {
+                        await applyConfirmedOrganization()
                     }
                 }
+            } message: {
+                Text(applyConfirmationMessage)
             }
-        } message: {
-            Text(
-                "Curator will move and rename \(actionableCount) file\(actionableCount == 1 ? "" : "s")." +
-                (deleteExcluded && excludedCount > 0 ? " It will also permanently delete \(excludedCount) excluded file\(excludedCount == 1 ? "" : "s")." : "") +
-                " Existing files are never overwritten, and a JSON manifest is saved for the operation."
-            )
-        }
     }
 
     private func scanProgressTitle(_ job: MediaOrganizerScanJob) -> String {
@@ -5553,8 +5670,39 @@ struct MediaOrganizerView: View {
     }
 
     private var normalizedDestination: String? {
+        guard operationMode == "move" else { return nil }
         let trimmed = destinationPath.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private var applyButtonTitle: String {
+        if operationMode == "source" && folderMode == "none" {
+            return "Rename \(actionableCount) File\(actionableCount == 1 ? "" : "s")"
+        }
+        if operationMode == "move" {
+            return "Move & Rename \(actionableCount)"
+        }
+        return "Organize & Rename \(actionableCount)"
+    }
+
+    private var confirmActionTitle: String {
+        if operationMode == "source" && folderMode == "none" {
+            return "Rename in Place"
+        }
+        if operationMode == "move" {
+            return "Move & Rename"
+        }
+        return "Organize & Rename"
+    }
+
+    private var confirmationSummary: String {
+        if operationMode == "source" && folderMode == "none" {
+            return "Curator will rename \(actionableCount) file\(actionableCount == 1 ? "" : "s") in place."
+        }
+        if operationMode == "move" {
+            return "Curator will move and rename \(actionableCount) file\(actionableCount == 1 ? "" : "s") into the selected destination."
+        }
+        return "Curator will organize and rename \(actionableCount) file\(actionableCount == 1 ? "" : "s") inside the source location."
     }
 
     private func scan() async {
@@ -5569,7 +5717,8 @@ struct MediaOrganizerView: View {
             path: sourcePath.trimmingCharacters(in: .whitespacesAndNewlines),
             destination: normalizedDestination,
             recursive: recursive,
-            excludePatterns: excludePatterns
+            excludePatterns: excludePatterns,
+            folderMode: folderMode
         )
     }
 
@@ -5972,6 +6121,7 @@ struct MediaOrganizerRow: View {
     @EnvironmentObject var model: AppModel
     let item: MediaOrganizerItem
     let destination: String?
+    let folderMode: String
     @Binding var reviewedTitle: String
     @Binding var reviewedType: String
     @Binding var reviewed: Bool
@@ -6040,7 +6190,7 @@ struct MediaOrganizerRow: View {
                 HStack(spacing: 6) {
                     Text("→")
                         .foregroundColor(.secondary)
-                    Text("\(item.folder)/\(item.proposedName)")
+                    Text(item.folder.isEmpty ? item.proposedName : "\(item.folder)/\(item.proposedName)")
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -6106,7 +6256,8 @@ struct MediaOrganizerRow: View {
                         Task {
                             if let analyzed = await model.analyzeMediaOrganizerItem(
                                 source: item.source,
-                                destination: destination
+                                destination: destination,
+                                folderMode: folderMode
                             ) {
                                 onAnalyzed(analyzed)
 
@@ -6160,7 +6311,13 @@ struct MediaOrganizerRow: View {
 
                 if item.confidence == "low" || item.reviewed == true {
                     VStack(alignment: .leading, spacing: 8) {
-                        TextField("Reviewed title", text: $reviewedTitle)
+                        if item.confidence == "low" {
+                            Label("Edit low-confidence guess", systemImage: "pencil")
+                                .font(.caption.bold())
+                                .foregroundColor(.orange)
+                        }
+                        TextField("Filename title", text: $reviewedTitle)
+                            .textFieldStyle(.roundedBorder)
 
                         HStack {
                             Picker("Type", selection: $reviewedType) {

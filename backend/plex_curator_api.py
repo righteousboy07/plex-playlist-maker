@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import re
 import secrets
 import sqlite3
@@ -23,7 +24,7 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.14"
+API_VERSION = "1.15"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = (
     core.APP_DIR / "plex-curator-launchd"
@@ -119,6 +120,7 @@ class MediaOrganizerRequest(BaseModel):
     destination: Optional[str] = Field(default=None, max_length=4096)
     recursive: bool = True
     exclude_patterns: list[str] = Field(default_factory=list)
+    folder_mode: str = Field(default="type", pattern="^(none|alpha|type)$")
 
 class MediaOrganizerScanJobRequest(MediaOrganizerRequest):
     pass
@@ -131,10 +133,12 @@ class MediaOrganizerOverride(BaseModel):
 class MediaOrganizerAnalyzeRequest(BaseModel):
     source: str = Field(min_length=1, max_length=4096)
     destination: Optional[str] = Field(default=None, max_length=4096)
+    folder_mode: str = Field(default="type", pattern="^(none|alpha|type)$")
 
 class MediaOrganizerApplyRequest(MediaOrganizerRequest):
     include_low_confidence: bool = False
     delete_excluded: bool = False
+    rescan_plex: bool = False
     overrides: list[MediaOrganizerOverride] = Field(default_factory=list)
 
 
@@ -1045,6 +1049,7 @@ def _run_media_scan_job(job_id, request_data):
             extract_review_frames=False,
             metadata_workers=8,
             exclude_patterns=request_data.get("exclude_patterns") or [],
+            folder_mode=request_data.get("folder_mode") or "type",
             progress_callback=progress,
             cancel_check=cancel_event.is_set,
         )
@@ -1253,6 +1258,7 @@ def media_organizer_scan(request: MediaOrganizerRequest):
             extract_review_frames=False,
             metadata_workers=8,
             exclude_patterns=request.exclude_patterns,
+            folder_mode=request.folder_mode,
         )
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -1264,6 +1270,7 @@ def media_organizer_analyze(request: MediaOrganizerAnalyzeRequest):
         return core.analyze_media_organizer_file(
             request.source,
             destination=request.destination,
+            folder_mode=request.folder_mode,
         )
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -1285,6 +1292,107 @@ def media_organizer_frame(cache_key: str, frame_name: str):
         raise HTTPException(status_code=404, detail="Review frame not found.")
     return FileResponse(candidate, media_type="image/jpeg")
 
+def _normalized_media_path(value):
+    try:
+        text = os.fspath(value)
+        if not text:
+            return None
+        return Path(os.path.abspath(os.path.normpath(os.path.expanduser(text))))
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _path_is_within_normalized(path, root):
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _changed_media_paths(result):
+    paths = set()
+    for item in result.get("applied_items", []):
+        for key in ("source", "target"):
+            value = item.get(key)
+            if value:
+                paths.add(str(value))
+    for item in result.get("deleted_excluded_items", []):
+        value = item.get("source")
+        if value:
+            paths.add(str(value))
+    return sorted(paths)
+
+
+def refresh_plex_libraries(changed_paths=None):
+    plex = core.connect()
+    refreshed = []
+    errors = []
+    try:
+        sections = list(plex.library.sections())
+    except Exception as exc:
+        return {
+            "refreshed": refreshed,
+            "errors": [str(exc)],
+            "scope": "error",
+        }
+
+    selected_sections = sections
+    scope = "all"
+    if changed_paths is not None:
+        normalized_changes = tuple(
+            path for path in (_normalized_media_path(value) for value in changed_paths)
+            if path is not None
+        )
+        matched = []
+        mapping_uncertain = False
+
+        for section in sections:
+            try:
+                locations = tuple(
+                    path
+                    for path in (
+                        _normalized_media_path(value)
+                        for value in (getattr(section, "locations", []) or [])
+                    )
+                    if path is not None
+                )
+            except Exception:
+                mapping_uncertain = True
+                break
+
+            if not locations:
+                mapping_uncertain = True
+                break
+
+            if any(
+                _path_is_within_normalized(changed_path, location)
+                for changed_path in normalized_changes
+                for location in locations
+            ):
+                matched.append(section)
+
+        if mapping_uncertain:
+            selected_sections = sections
+            scope = "all-fallback"
+        else:
+            selected_sections = matched
+            scope = "targeted" if matched else "none"
+
+    for section in selected_sections:
+        try:
+            section.update()
+            refreshed.append(getattr(section, "title", "Library"))
+        except Exception as exc:
+            errors.append(f'{getattr(section, "title", "Library")}: {exc}')
+
+    return {
+        "refreshed": refreshed,
+        "errors": errors,
+        "scope": scope,
+    }
+
+
 @app.post("/api/v1/media-organizer/apply")
 def media_organizer_apply(
     request: MediaOrganizerApplyRequest,
@@ -1299,12 +1407,29 @@ def media_organizer_apply(
             extract_review_frames=False,
             metadata_workers=8,
             exclude_patterns=request.exclude_patterns,
+            folder_mode=request.folder_mode,
         )
-        return core.apply_media_organization(
+        result = core.apply_media_organization(
             plan,
             include_low_confidence=request.include_low_confidence,
             delete_excluded=request.delete_excluded,
         )
+        changed_count = (
+            result.get("applied_count", 0)
+            + result.get("deleted_excluded_count", 0)
+        )
+        if request.rescan_plex and changed_count > 0:
+            refresh = refresh_plex_libraries(_changed_media_paths(result))
+            result["plex_rescan_requested"] = True
+            result["plex_libraries_refreshed"] = refresh["refreshed"]
+            result["plex_rescan_errors"] = refresh["errors"]
+            result["plex_rescan_scope"] = refresh["scope"]
+        else:
+            result["plex_rescan_requested"] = bool(request.rescan_plex)
+            result["plex_libraries_refreshed"] = []
+            result["plex_rescan_errors"] = []
+            result["plex_rescan_scope"] = "none"
+        return result
     except SystemExit as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
