@@ -1358,6 +1358,12 @@ def plan_media_organization(
         raise SystemExit(f"Media organizer source folder not found: {root}")
 
     destination_root = Path(destination).expanduser().resolve() if destination else root
+    normalized_folder_mode = str(folder_mode or "type").strip().casefold()
+    if normalized_folder_mode not in {"none", "alpha", "type"}:
+        raise SystemExit(
+            f'Invalid media organizer folder mode "{folder_mode}". '
+            'Expected one of: none, alpha, type.'
+        )
     plans = []
     reserved = set()
     def emit_progress(phase, current=0, total=None, detail=None, excluded_count=0):
@@ -1449,14 +1455,13 @@ def plan_media_organization(
                 "frames": [],
             }
         )
-        folder_name = INTERSTITIAL_TYPE_FOLDERS[identity["type"]]
         target_dir = (
             source.parent
-            if str(folder_mode or "type").strip().casefold() == "none" and not destination
+            if normalized_folder_mode == "none" and not destination
             else media_target_directory(
                 source,
                 destination_root,
-                folder_mode,
+                normalized_folder_mode,
                 identity["type"],
                 identity["title"],
             )
@@ -1502,7 +1507,7 @@ def plan_media_organization(
         "root": str(root),
         "destination": str(destination_root),
         "recursive": bool(recursive),
-        "folder_mode": str(folder_mode or "type").strip().casefold(),
+        "folder_mode": normalized_folder_mode,
         "exclude_patterns": normalize_exclude_patterns(exclude_patterns),
         "total_found": len(plans) + len(excluded_items),
         "count": len(plans),
@@ -1524,20 +1529,25 @@ def analyze_media_organizer_file(source, destination=None, folder_mode="type"):
         if destination
         else source.parent
     )
+    normalized_folder_mode = str(folder_mode or "type").strip().casefold()
+    if normalized_folder_mode not in {"none", "alpha", "type"}:
+        raise SystemExit(
+            f'Invalid media organizer folder mode "{folder_mode}". '
+            'Expected one of: none, alpha, type.'
+        )
     identity = infer_media_identity(source)
     review = (
         extract_media_review_frames(source, frame_count=3)
         if identity["confidence"] == "low"
         else {"status": "not-needed", "frames": []}
     )
-    folder_name = INTERSTITIAL_TYPE_FOLDERS[identity["type"]]
     target_dir = (
         source.parent
-        if str(folder_mode or "type").strip().casefold() == "none" and not destination
+        if normalized_folder_mode == "none" and not destination
         else media_target_directory(
             source,
             destination_root,
-            folder_mode,
+            normalized_folder_mode,
             identity["type"],
             identity["title"],
         )
