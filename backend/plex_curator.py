@@ -730,27 +730,101 @@ def probe_video_metadata(path):
     return {"title": None, "comment": None, "description": None, "source": None}
 
 def probe_video_duration_seconds(path):
-    ffprobe = shutil.which("ffprobe")
-    if not ffprobe:
+    ffprobe = find_media_tool("ffprobe")
+    if ffprobe:
+        try:
+            result = subprocess.run(
+                [
+                    ffprobe, "-v", "quiet", "-print_format", "json",
+                    "-show_entries", "format=duration", str(Path(path)),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                payload = json.loads(result.stdout)
+                duration = (payload.get("format") or {}).get("duration")
+                if duration is not None:
+                    return float(duration)
+        except Exception:
+            pass
+
+    mdls = shutil.which("mdls")
+    if mdls:
+        try:
+            result = subprocess.run(
+                [mdls, "-raw", "-name", "kMDItemDurationSeconds", str(Path(path))],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            value = result.stdout.strip() if result.returncode == 0 else ""
+            if value and value != "(null)":
+                return float(value)
+        except Exception:
+            pass
+
+    return None
+
+def native_media_preview_available():
+    return bool(
+        sys.platform == "darwin"
+        and shutil.which("qlmanage")
+        and shutil.which("sips")
+    )
+
+
+def extract_native_media_review_frame(path, cache_dir):
+    if not native_media_preview_available():
         return None
+
+    path = Path(path)
+    target = cache_dir / "frame-1.jpg"
+    if target.exists():
+        return target
+
+    qlmanage = shutil.which("qlmanage")
+    sips = shutil.which("sips")
+    temp_dir = cache_dir / "native-preview"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
     try:
         result = subprocess.run(
-            [
-                ffprobe, "-v", "quiet", "-print_format", "json",
-                "-show_entries", "format=duration", str(Path(path)),
-            ],
+            [qlmanage, "-t", "-s", "640", "-o", str(temp_dir), str(path)],
             capture_output=True,
             text=True,
-            timeout=8,
+            timeout=20,
             check=False,
         )
-        if result.returncode != 0 or not result.stdout.strip():
+        if result.returncode != 0:
             return None
-        payload = json.loads(result.stdout)
-        duration = (payload.get("format") or {}).get("duration")
-        return float(duration) if duration is not None else None
+
+        candidates = sorted(
+            temp_dir.glob("*.png"),
+            key=lambda candidate: candidate.stat().st_mtime_ns,
+            reverse=True,
+        )
+        if not candidates:
+            return None
+
+        converted = subprocess.run(
+            [sips, "-s", "format", "jpeg", str(candidates[0]), "--out", str(target)],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if converted.returncode != 0 or not target.exists():
+            return None
+        return target
     except Exception:
         return None
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 def media_review_cache_key(path):
     path = Path(path).resolve()
@@ -764,17 +838,28 @@ def media_review_cache_key(path):
 def extract_media_review_frames(path, frame_count=3):
     path = Path(path).resolve()
     ffmpeg = find_media_tool("ffmpeg")
-    if not ffmpeg:
-        return {"status": "ffmpeg-missing", "frames": []}
-
     duration = probe_video_duration_seconds(path)
-    if duration is None or duration <= 0:
-        return {"status": "duration-unavailable", "frames": []}
 
     frame_count = max(1, min(int(frame_count), 5))
     cache_key = media_review_cache_key(path)
     cache_dir = REVIEW_FRAMES_DIR / cache_key
     cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if not ffmpeg:
+        native_frame = extract_native_media_review_frame(path, cache_dir)
+        if native_frame:
+            return {
+                "status": "native-preview",
+                "frames": [{
+                    "id": f"{cache_key}/frame-1.jpg",
+                    "position": 0.5,
+                    "timestamp_seconds": round(duration * 0.5, 2) if duration else None,
+                }],
+            }
+        return {"status": "review-tools-missing", "frames": []}
+
+    if duration is None or duration <= 0:
+        return {"status": "duration-unavailable", "frames": []}
 
     if frame_count == 1:
         fractions = [0.5]
@@ -4277,7 +4362,19 @@ def cmd_doctor(args):
     ffmpeg_path = find_media_tool("ffmpeg")
     ffprobe_path = find_media_tool("ffprobe")
     if ffmpeg_path and ffprobe_path:
-        report("PASS", "ffmpeg / ffprobe", f"{ffmpeg_path}; {ffprobe_path}")
+        report("PASS", "Media review tools", f"ffmpeg: {ffmpeg_path}; ffprobe: {ffprobe_path}")
+    elif native_media_preview_available():
+        missing = [
+            name
+            for name, value in (("ffmpeg", ffmpeg_path), ("ffprobe", ffprobe_path))
+            if not value
+        ]
+        report(
+            "PASS",
+            "Media review tools",
+            "macOS native thumbnail fallback available"
+            + (f"; optional multi-frame tools missing: {', '.join(missing)}" if missing else ""),
+        )
     else:
         missing = []
         if not ffmpeg_path:

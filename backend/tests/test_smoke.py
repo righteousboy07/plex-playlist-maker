@@ -1758,3 +1758,60 @@ def test_media_scan_job_routes_registered():
     assert "/api/v1/media-organizer/scan-jobs" in paths
     assert "/api/v1/media-organizer/scan-jobs/{job_id}" in paths
     assert "/api/v1/media-organizer/scan-jobs/{job_id}/cancel" in paths
+
+
+def test_probe_video_duration_uses_media_tool_finder(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "find_media_tool",
+        lambda name: "/opt/homebrew/bin/ffprobe" if name == "ffprobe" else None,
+    )
+
+    class Result:
+        returncode = 0
+        stdout = '{"format":{"duration":"12.5"}}'
+
+    calls = []
+    monkeypatch.setattr(
+        core.subprocess,
+        "run",
+        lambda args, **_kwargs: calls.append(args) or Result(),
+    )
+
+    assert core.probe_video_duration_seconds("/tmp/video.mp4") == 12.5
+    assert calls[0][0] == "/opt/homebrew/bin/ffprobe"
+
+
+def test_native_media_preview_available_on_macos(monkeypatch):
+    monkeypatch.setattr(core.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        core.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in {"qlmanage", "sips"} else None,
+    )
+
+    assert core.native_media_preview_available() is True
+
+
+def test_media_review_uses_native_preview_when_ffmpeg_is_missing(tmp_path, monkeypatch):
+    source = tmp_path / "mystery.mp4"
+    source.write_bytes(b"video")
+    review_root = tmp_path / "review"
+    monkeypatch.setattr(core, "REVIEW_FRAMES_DIR", review_root)
+    monkeypatch.setattr(core, "find_media_tool", lambda _name: None)
+    monkeypatch.setattr(core, "probe_video_duration_seconds", lambda _path: 20.0)
+    monkeypatch.setattr(core, "media_review_cache_key", lambda _path: "abc123")
+
+    def fake_native(_path, cache_dir):
+        target = cache_dir / "frame-1.jpg"
+        target.write_bytes(b"jpeg")
+        return target
+
+    monkeypatch.setattr(core, "extract_native_media_review_frame", fake_native)
+
+    result = core.extract_media_review_frames(source, frame_count=3)
+
+    assert result["status"] == "native-preview"
+    assert len(result["frames"]) == 1
+    assert result["frames"][0]["id"] == "abc123/frame-1.jpg"
+    assert result["frames"][0]["timestamp_seconds"] == 10.0
