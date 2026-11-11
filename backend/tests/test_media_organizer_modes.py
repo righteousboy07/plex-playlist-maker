@@ -96,25 +96,114 @@ def test_media_request_accepts_folder_mode():
     assert request.folder_mode == "alpha"
 
 
-def test_plex_refresh_requests_all_library_sections(monkeypatch):
-    calls = []
+class _FakeSection:
+    def __init__(self, title, locations):
+        self.title = title
+        self.locations = locations
+        self.updated = False
 
-    class Section:
-        def __init__(self, title):
-            self.title = title
+    def update(self):
+        self.updated = True
 
-        def update(self):
-            calls.append(self.title)
 
-    fake_plex = SimpleNamespace(
-        library=SimpleNamespace(
-            sections=lambda: [Section("Movies"), Section("TV Shows")]
-        )
+def _fake_plex_with_sections(*sections):
+    return SimpleNamespace(
+        library=SimpleNamespace(sections=lambda: list(sections))
     )
-    monkeypatch.setattr(core, "connect", lambda: fake_plex)
 
-    result = api.refresh_plex_libraries()
 
-    assert result["refreshed"] == ["Movies", "TV Shows"]
+def test_plex_refresh_targets_only_matching_library(monkeypatch):
+    movies = _FakeSection("Movies", ["/media/movies"])
+    tv = _FakeSection("TV Shows", ["/media/tv"])
+    monkeypatch.setattr(
+        core,
+        "connect",
+        lambda: _fake_plex_with_sections(movies, tv),
+    )
+
+    result = api.refresh_plex_libraries(
+        ["/media/movies/Example/Example.mkv"]
+    )
+
+    assert result["scope"] == "targeted"
+    assert result["refreshed"] == ["Movies"]
     assert result["errors"] == []
-    assert calls == ["Movies", "TV Shows"]
+    assert movies.updated is True
+    assert tv.updated is False
+
+
+def test_plex_refresh_targets_multiple_affected_libraries(monkeypatch):
+    movies = _FakeSection("Movies", ["/media/movies"])
+    tv = _FakeSection("TV Shows", ["/media/tv"])
+    music = _FakeSection("Music", ["/media/music"])
+    monkeypatch.setattr(
+        core,
+        "connect",
+        lambda: _fake_plex_with_sections(movies, tv, music),
+    )
+
+    result = api.refresh_plex_libraries([
+        "/media/movies/Example.mkv",
+        "/media/tv/Show/Season 1/Episode.mkv",
+    ])
+
+    assert result["scope"] == "targeted"
+    assert result["refreshed"] == ["Movies", "TV Shows"]
+    assert movies.updated is True
+    assert tv.updated is True
+    assert music.updated is False
+
+
+def test_plex_refresh_skips_when_changes_are_outside_libraries(monkeypatch):
+    movies = _FakeSection("Movies", ["/media/movies"])
+    tv = _FakeSection("TV Shows", ["/media/tv"])
+    monkeypatch.setattr(
+        core,
+        "connect",
+        lambda: _fake_plex_with_sections(movies, tv),
+    )
+
+    result = api.refresh_plex_libraries(["/tmp/export/Example.mkv"])
+
+    assert result["scope"] == "none"
+    assert result["refreshed"] == []
+    assert result["errors"] == []
+    assert movies.updated is False
+    assert tv.updated is False
+
+
+def test_plex_refresh_falls_back_to_all_when_locations_are_unavailable(monkeypatch):
+    movies = _FakeSection("Movies", ["/media/movies"])
+    unknown = _FakeSection("Unknown", [])
+    monkeypatch.setattr(
+        core,
+        "connect",
+        lambda: _fake_plex_with_sections(movies, unknown),
+    )
+
+    result = api.refresh_plex_libraries(["/media/movies/Example.mkv"])
+
+    assert result["scope"] == "all-fallback"
+    assert result["refreshed"] == ["Movies", "Unknown"]
+    assert movies.updated is True
+    assert unknown.updated is True
+
+
+def test_changed_media_paths_include_move_sources_targets_and_deletions():
+    result = {
+        "applied_items": [
+            {
+                "source": "/old/Movies/A.mkv",
+                "target": "/new/Movies/A.mkv",
+            }
+        ],
+        "deleted_excluded_items": [
+            {"source": "/old/Movies/sample.avi"}
+        ],
+    }
+
+    assert api._changed_media_paths(result) == [
+        "/new/Movies/A.mkv",
+        "/old/Movies/A.mkv",
+        "/old/Movies/sample.avi",
+    ]
