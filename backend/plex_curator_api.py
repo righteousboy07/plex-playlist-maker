@@ -1298,11 +1298,7 @@ def _normalized_media_path(value):
         return None
 
 
-def _path_is_within(path, root):
-    path = _normalized_media_path(path)
-    root = _normalized_media_path(root)
-    if path is None or root is None:
-        return False
+def _path_is_within_normalized(path, root):
     try:
         path.relative_to(root)
         return True
@@ -1340,16 +1336,23 @@ def refresh_plex_libraries(changed_paths=None):
     selected_sections = sections
     scope = "all"
     if changed_paths is not None:
-        normalized_changes = [
+        normalized_changes = tuple(
             path for path in (_normalized_media_path(value) for value in changed_paths)
             if path is not None
-        ]
+        )
         matched = []
         mapping_uncertain = False
 
         for section in sections:
             try:
-                locations = list(getattr(section, "locations", []) or [])
+                locations = tuple(
+                    path
+                    for path in (
+                        _normalized_media_path(value)
+                        for value in (getattr(section, "locations", []) or [])
+                    )
+                    if path is not None
+                )
             except Exception:
                 mapping_uncertain = True
                 break
@@ -1359,7 +1362,7 @@ def refresh_plex_libraries(changed_paths=None):
                 break
 
             if any(
-                _path_is_within(changed_path, location)
+                _path_is_within_normalized(changed_path, location)
                 for changed_path in normalized_changes
                 for location in locations
             ):
