@@ -8121,7 +8121,7 @@ struct MovieCuratorView: View {
     }
 }
 
-struct KidsScaryWishlistView: View {
+struct WishlistView: View {
     @EnvironmentObject var model: AppModel
 
     struct Draft: Identifiable, Hashable {
@@ -8136,16 +8136,27 @@ struct KidsScaryWishlistView: View {
         }
     }
 
+    @State private var wishlists: [WishlistSummary] = []
+    @State private var selectedWishlistID = ""
     @State private var response: WishlistResponse?
     @State private var drafts: [Draft] = []
+    @State private var playlistMatches: [WishlistPlaylistMatch] = []
     @State private var searchText = ""
     @State private var filter = 0
     @State private var isLoading = false
     @State private var isSaving = false
+    @State private var isDiscovering = false
     @State private var editorPresented = false
+    @State private var settingsPresented = false
+    @State private var creatingWishlist = false
+    @State private var confirmDeleteWishlist = false
     @State private var editingID: UUID?
     @State private var editorTitle = ""
     @State private var editorYear = ""
+    @State private var settingsName = ""
+    @State private var settingsDescription = ""
+    @State private var settingsLibrary = "Movies"
+    @State private var settingsKeywords = ""
 
     private var filteredEntries: [WishlistEntry] {
         guard let entries = response?.entries else { return [] }
@@ -8173,31 +8184,142 @@ struct KidsScaryWishlistView: View {
         }
     }
 
+    private var keywordValues: [String] {
+        settingsKeywords
+            .split(whereSeparator: { $0 == "," || $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Picker("Wishlist", selection: $selectedWishlistID) {
+                    ForEach(wishlists) { wishlist in
+                        Text(wishlist.name).tag(wishlist.id)
+                    }
+                }
+                .frame(maxWidth: 300)
+                .onChange(of: selectedWishlistID) { _ in
+                    Task { await loadSelectedWishlist() }
+                }
+
+                Button {
+                    beginCreateWishlist()
+                } label: {
+                    Label("New Wishlist", systemImage: "plus")
+                }
+
+                Button {
+                    beginEditSettings()
+                } label: {
+                    Label("Settings", systemImage: "slider.horizontal.3")
+                }
+                .disabled(response == nil)
+
+                Spacer()
+
+                Button {
+                    Task { await discoverPlaylists() }
+                } label: {
+                    Label(
+                        isDiscovering ? "Searching…" : "Find Plex Playlists",
+                        systemImage: "magnifyingglass"
+                    )
+                }
+                .disabled(response == nil || isDiscovering || (response?.keywords.isEmpty ?? true))
+
+                if !playlistMatches.isEmpty {
+                    Button {
+                        Task { await importMatchingPlaylists() }
+                    } label: {
+                        Label("Import \(playlistMatches.count) Match\(playlistMatches.count == 1 ? "" : "es")", systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+                }
+            }
+            .padding()
+
             if let response {
                 HStack(spacing: 18) {
                     metric("FOUND", response.foundCount)
                     metric("MISSING", response.missingCount)
                     metric("TOTAL", response.totalCount)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(response.library)
+                            .font(.subheadline.bold())
+                        Text(response.keywords.isEmpty ? "No Plex playlist keywords" : response.keywords.joined(separator: ", "))
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                    }
+
                     Spacer()
+
                     Button {
                         beginAdd()
                     } label: {
-                        Label("Add Movie", systemImage: "plus")
+                        Label("Add Item", systemImage: "plus")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(PlexTheme.accent)
 
-                    Button("Reload") { Task { await load() } }
+                    Button("Reload") { Task { await loadSelectedWishlist() } }
                 }
-                .padding()
-                Divider()
+                .padding(.horizontal)
+                .padding(.bottom)
             }
 
+            if !playlistMatches.isEmpty {
+                GroupBox("Matching Plex Playlists") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(playlistMatches.prefix(8)) { playlist in
+                            HStack {
+                                Image(systemName: "rectangle.stack")
+                                Text(playlist.title)
+                                Spacer()
+                                Text(playlist.matchedKeywords.joined(separator: ", "))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        if playlistMatches.count > 8 {
+                            Text("+ \(playlistMatches.count - 8) more")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(4)
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 12)
+            }
+
+            Divider()
+
             if isLoading && response == nil {
-                ProgressView("Checking Plex library…")
+                ProgressView("Loading wishlist…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if wishlists.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "checklist")
+                        .font(.system(size: 42))
+                        .foregroundColor(.secondary)
+                    Text("No Wishlists Yet")
+                        .font(.title2.bold())
+                    Text("Create a wishlist, add entries manually, or use keywords to pull items from matching Plex playlists.")
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 520)
+                    Button("Create Wishlist") {
+                        beginCreateWishlist()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(filteredEntries) { entry in
                     HStack(spacing: 12) {
@@ -8223,8 +8345,8 @@ struct KidsScaryWishlistView: View {
                 }
             }
         }
-        .navigationTitle("Kids Scary Wishlist")
-        .searchable(text: $searchText, prompt: "Search wishlist")
+        .navigationTitle("Wishlist")
+        .searchable(text: $searchText, prompt: "Search selected wishlist")
         .toolbar {
             Picker("Status", selection: $filter) {
                 Text("All").tag(0)
@@ -8233,33 +8355,25 @@ struct KidsScaryWishlistView: View {
             }
             .pickerStyle(SegmentedPickerStyle())
             .frame(width: 230)
-
-            Button {
-                beginAdd()
-            } label: {
-                Label("Add", systemImage: "plus")
-            }
         }
         .sheet(isPresented: $editorPresented) {
             VStack(alignment: .leading, spacing: 16) {
-                Text(editingID == nil ? "Add Wishlist Movie" : "Edit Wishlist Movie")
+                Text(editingID == nil ? "Add Wishlist Item" : "Edit Wishlist Item")
                     .font(.title2.bold())
 
-                TextField("Movie title", text: $editorTitle)
+                TextField("Title", text: $editorTitle)
                     .textFieldStyle(.roundedBorder)
 
                 TextField("Year (optional)", text: $editorYear)
                     .textFieldStyle(.roundedBorder)
 
-                Text("The year helps Plex Curator distinguish remakes with the same title.")
+                Text("The year helps Plex Curator distinguish titles with the same name.")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
                 HStack {
                     Spacer()
-                    Button("Cancel") {
-                        editorPresented = false
-                    }
+                    Button("Cancel") { editorPresented = false }
                     Button(isSaving ? "Saving…" : "Save") {
                         saveEditor()
                     }
@@ -8275,7 +8389,63 @@ struct KidsScaryWishlistView: View {
             .padding(22)
             .frame(width: 440)
         }
-        .task { await load() }
+        .sheet(isPresented: $settingsPresented) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(creatingWishlist ? "Create Wishlist" : "Wishlist Settings")
+                    .font(.title2.bold())
+
+                TextField("Wishlist name", text: $settingsName)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("Description", text: $settingsDescription)
+                    .textFieldStyle(.roundedBorder)
+
+                TextField("Plex library", text: $settingsLibrary)
+                    .textFieldStyle(.roundedBorder)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Plex playlist keywords")
+                        .font(.headline)
+                    TextField("Example: kids, scary, halloween", text: $settingsKeywords)
+                        .textFieldStyle(.roundedBorder)
+                    Text("Any Plex playlist whose name contains one of these keywords can be discovered and imported into this wishlist.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                HStack {
+                    if !creatingWishlist {
+                        Button("Delete Wishlist", role: .destructive) {
+                            settingsPresented = false
+                            confirmDeleteWishlist = true
+                        }
+                    }
+                    Spacer()
+                    Button("Cancel") { settingsPresented = false }
+                    Button(isSaving ? "Saving…" : "Save") {
+                        Task { await saveWishlistSettings() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(PlexTheme.accent)
+                    .disabled(
+                        isSaving
+                        || settingsName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || settingsLibrary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    )
+                }
+            }
+            .padding(22)
+            .frame(width: 520)
+        }
+        .alert("Delete this wishlist?", isPresented: $confirmDeleteWishlist) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                Task { await deleteSelectedWishlist() }
+            }
+        } message: {
+            Text("This removes the wishlist definition and its entries from Plex Curator. It does not delete Plex media or playlists.")
+        }
+        .task { await loadWishlists() }
     }
 
     private func metric(_ label: String, _ value: Int) -> some View {
@@ -8283,6 +8453,25 @@ struct KidsScaryWishlistView: View {
             Text("\(value)").font(.title2.bold())
             Text(label).font(.caption).foregroundColor(.secondary)
         }
+    }
+
+    private func beginCreateWishlist() {
+        creatingWishlist = true
+        settingsName = ""
+        settingsDescription = ""
+        settingsLibrary = "Movies"
+        settingsKeywords = ""
+        settingsPresented = true
+    }
+
+    private func beginEditSettings() {
+        guard let response else { return }
+        creatingWishlist = false
+        settingsName = response.name
+        settingsDescription = response.description
+        settingsLibrary = response.library
+        settingsKeywords = response.keywords.joined(separator: ", ")
+        settingsPresented = true
     }
 
     private func beginAdd() {
@@ -8322,7 +8511,7 @@ struct KidsScaryWishlistView: View {
         }
 
         Task {
-            await persist()
+            await persistEntries()
             editorPresented = false
         }
     }
@@ -8332,44 +8521,166 @@ struct KidsScaryWishlistView: View {
             $0.title.caseInsensitiveCompare(entry.requestedTitle) == .orderedSame
                 && $0.year == entry.requestedYear
         }
-        Task { await persist() }
+        Task { await persistEntries() }
     }
 
-    private func persist() async {
+    private var entryRequests: [WishlistItemRequest] {
+        drafts.map {
+            WishlistItemRequest(
+                title: $0.title.trimmingCharacters(in: .whitespacesAndNewlines),
+                year: $0.year
+            )
+        }
+        .filter { !$0.title.isEmpty }
+    }
+
+    private func persistEntries() async {
+        guard let response else { return }
         isSaving = true
         defer { isSaving = false }
 
         do {
-            let entries = drafts.map {
-                WishlistItemRequest(
-                    title: $0.title.trimmingCharacters(in: .whitespacesAndNewlines),
-                    year: $0.year
-                )
-            }
-            let result = try await model.api.saveKidsScaryWishlist(entries)
-            model.message = "Saved Kids Scary Wishlist (\(result.count) movies)."
+            _ = try await model.api.updateWishlist(
+                id: response.id,
+                name: response.name,
+                description: response.description,
+                library: response.library,
+                keywords: response.keywords,
+                entries: entryRequests
+            )
+            model.message = "Saved \(response.name) (\(entryRequests.count) items)."
             model.error = nil
-            await load()
+            await loadWishlists(selecting: response.id)
         } catch {
             model.error = error.localizedDescription
         }
     }
 
-    private func load() async {
+    private func saveWishlistSettings() async {
+        isSaving = true
+        defer { isSaving = false }
+
+        do {
+            if creatingWishlist {
+                let created = try await model.api.createWishlist(
+                    name: settingsName.trimmingCharacters(in: .whitespacesAndNewlines),
+                    description: settingsDescription.trimmingCharacters(in: .whitespacesAndNewlines),
+                    library: settingsLibrary.trimmingCharacters(in: .whitespacesAndNewlines),
+                    keywords: keywordValues
+                )
+                settingsPresented = false
+                await loadWishlists(selecting: created.id)
+                model.message = "Created wishlist \(created.name)."
+            } else if let response {
+                let updated = try await model.api.updateWishlist(
+                    id: response.id,
+                    name: settingsName.trimmingCharacters(in: .whitespacesAndNewlines),
+                    description: settingsDescription.trimmingCharacters(in: .whitespacesAndNewlines),
+                    library: settingsLibrary.trimmingCharacters(in: .whitespacesAndNewlines),
+                    keywords: keywordValues,
+                    entries: entryRequests
+                )
+                settingsPresented = false
+                await loadWishlists(selecting: updated.id)
+                model.message = "Updated wishlist \(updated.name)."
+            }
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
+    private func deleteSelectedWishlist() async {
+        guard let response else { return }
+        do {
+            try await model.api.deleteWishlist(id: response.id)
+            model.message = "Deleted wishlist \(response.name)."
+            model.error = nil
+            selectedWishlistID = ""
+            self.response = nil
+            drafts = []
+            playlistMatches = []
+            await loadWishlists()
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
+    private func discoverPlaylists() async {
+        guard let response else { return }
+        isDiscovering = true
+        defer { isDiscovering = false }
+        do {
+            let result = try await model.api.wishlistPlaylistMatches(id: response.id)
+            playlistMatches = result.playlists
+            model.message = result.count == 0
+                ? "No Plex playlists matched this wishlist's keywords."
+                : "Found \(result.count) matching Plex playlist\(result.count == 1 ? "" : "s")."
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
+    private func importMatchingPlaylists() async {
+        guard let response else { return }
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            let result = try await model.api.importWishlistPlaylists(
+                id: response.id,
+                playlistNames: playlistMatches.map(\.title)
+            )
+            model.message = "Imported \(result.importedCount) new item\(result.importedCount == 1 ? "" : "s") from \(result.playlistCount) Plex playlist\(result.playlistCount == 1 ? "" : "s")."
+            model.error = nil
+            playlistMatches = []
+            await loadWishlists(selecting: response.id)
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
+    private func loadWishlists(selecting preferredID: String? = nil) async {
         isLoading = true
         defer { isLoading = false }
         do {
-            let loaded = try await model.api.kidsScaryWishlist()
+            wishlists = try await model.api.wishlists()
+            let candidate = preferredID ?? selectedWishlistID
+            if wishlists.contains(where: { $0.id == candidate }) {
+                selectedWishlistID = candidate
+            } else {
+                selectedWishlistID = wishlists.first?.id ?? ""
+            }
+            if !selectedWishlistID.isEmpty {
+                await loadSelectedWishlist()
+            } else {
+                response = nil
+                drafts = []
+            }
+            model.error = nil
+        } catch {
+            model.error = error.localizedDescription
+        }
+    }
+
+    private func loadSelectedWishlist() async {
+        guard !selectedWishlistID.isEmpty else { return }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let loaded = try await model.api.wishlist(id: selectedWishlistID)
             response = loaded
             drafts = loaded.entries.map {
                 Draft(title: $0.requestedTitle, year: $0.requestedYear)
             }
+            playlistMatches = []
             model.error = nil
         } catch {
             model.error = error.localizedDescription
         }
     }
 }
+
 
 struct WishlistRow: View {
     @EnvironmentObject var model: AppModel
