@@ -33,6 +33,7 @@ LAUNCHD_MANAGER = (
 )
 KIDS_SCARY_WISHLIST = core.CONFIG_DIR / "kids-scary-wishlist.txt"
 KIDS_SCARY_WISHLIST_SEED = core.EXAMPLES_DIR / "kids-scary-missing-wishlist.txt"
+WISHLISTS_FILE = core.CONFIG_DIR / "wishlists.json"
 TITLE_ALIASES_FILE = core.EXAMPLES_DIR / "title-aliases.json"
 
 app = FastAPI(
@@ -175,6 +176,16 @@ class WishlistItemRequest(BaseModel):
 
 class WishlistUpdateRequest(BaseModel):
     entries: list[WishlistItemRequest] = Field(default_factory=list, max_length=1000)
+
+class WishlistDefinitionRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    library: str = Field(default="Movies", min_length=1, max_length=120)
+    keywords: list[str] = Field(default_factory=list, max_length=50)
+    entries: list[WishlistItemRequest] = Field(default_factory=list, max_length=2000)
+
+class WishlistImportRequest(BaseModel):
+    playlist_names: list[str] = Field(default_factory=list, max_length=200)
 
 class PlaylistRenameRequest(BaseModel):
     current_name: str = Field(min_length=1, max_length=120)
@@ -1694,21 +1705,117 @@ def serialize_wishlist_entries(entries):
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-@app.get("/api/v1/wishlist/kids-scary")
-def kids_scary_wishlist():
+def _wishlist_slug(value):
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().casefold()).strip("-")
+    return slug or uuid.uuid4().hex[:12]
+
+
+def _normalize_wishlist_entries(entries):
+    normalized = []
+    seen = set()
+    for raw in entries or []:
+        if hasattr(raw, "model_dump"):
+            raw = raw.model_dump()
+        title = str((raw or {}).get("title") or "").strip()
+        if not title:
+            continue
+        year = (raw or {}).get("year")
+        key = (title.casefold(), year)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append({"title": title, "year": year})
+    return normalized
+
+
+def _normalize_keywords(values):
+    result = []
+    seen = set()
+    for raw in values or []:
+        value = str(raw or "").strip()
+        key = value.casefold()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return result
+
+
+def _default_kids_scary_wishlist():
+    ensure_kids_scary_wishlist_file()
+    entries = [
+        {"title": title, "year": year}
+        for title, year in core.parse_wishlist(KIDS_SCARY_WISHLIST)
+    ]
+    return {
+        "id": "kids-scary",
+        "name": "Kids Scary",
+        "description": "Migrated from the original Kids Scary Wishlist.",
+        "library": "Movies",
+        "keywords": ["kids", "scary", "halloween"],
+        "entries": _normalize_wishlist_entries(entries),
+    }
+
+
+def load_wishlists():
+    core.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if not WISHLISTS_FILE.exists():
+        data = {"version": 1, "wishlists": [_default_kids_scary_wishlist()]}
+        save_wishlists(data)
+        return data
+
+    try:
+        data = json.loads(WISHLISTS_FILE.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not read wishlists: {exc}") from exc
+
+    if not isinstance(data, dict) or not isinstance(data.get("wishlists"), list):
+        raise HTTPException(status_code=500, detail="Wishlist configuration is malformed.")
+    return data
+
+
+def save_wishlists(data):
+    core.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = WISHLISTS_FILE.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp.replace(WISHLISTS_FILE)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not save wishlists: {exc}") from exc
+
+
+def wishlist_or_404(wishlist_id):
+    data = load_wishlists()
+    for wishlist in data["wishlists"]:
+        if wishlist.get("id") == wishlist_id:
+            return data, wishlist
+    raise HTTPException(status_code=404, detail=f'Unknown wishlist "{wishlist_id}".')
+
+
+def wishlist_summary(wishlist):
+    return {
+        "id": wishlist["id"],
+        "name": wishlist.get("name", wishlist["id"]),
+        "description": wishlist.get("description", ""),
+        "library": wishlist.get("library", "Movies"),
+        "keywords": wishlist.get("keywords", []),
+        "entry_count": len(wishlist.get("entries", [])),
+    }
+
+
+def resolved_wishlist(wishlist):
     plex = core.connect()
     try:
-        section = core.get_section(plex, "Movies")
+        section = core.get_section(plex, wishlist.get("library", "Movies"))
     except SystemExit as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-    ensure_kids_scary_wishlist_file()
 
     entries = []
     found_count = 0
     missing_count = 0
-
-    for title, year in core.parse_wishlist(KIDS_SCARY_WISHLIST):
+    for raw in wishlist.get("entries", []):
+        title = raw.get("title", "")
+        year = raw.get("year")
         item = resolve_title_with_aliases(section, title, year)
         if item:
             found_count += 1
@@ -1730,42 +1837,186 @@ def kids_scary_wishlist():
             })
 
     return {
+        **wishlist_summary(wishlist),
         "found_count": found_count,
         "missing_count": missing_count,
         "total_count": len(entries),
         "entries": entries,
     }
 
+
+def matching_plex_playlists(wishlist):
+    keywords = [value.casefold() for value in wishlist.get("keywords", []) if value.strip()]
+    if not keywords:
+        return []
+    plex = core.connect()
+    matches = []
+    for playlist in plex.playlists():
+        title = str(getattr(playlist, "title", "") or "")
+        folded = title.casefold()
+        matched_keywords = [
+            original
+            for original in wishlist.get("keywords", [])
+            if original.casefold() in folded
+        ]
+        if not matched_keywords:
+            continue
+        matches.append({
+            "title": title,
+            "item_count": getattr(playlist, "leafCount", None),
+            "rating_key": str(getattr(playlist, "ratingKey", "") or ""),
+            "matched_keywords": matched_keywords,
+        })
+    return sorted(matches, key=lambda item: item["title"].casefold())
+
+
+@app.get("/api/v1/wishlists")
+def wishlists():
+    data = load_wishlists()
+    return {
+        "wishlists": [
+            wishlist_summary(item)
+            for item in sorted(data["wishlists"], key=lambda item: item.get("name", "").casefold())
+        ]
+    }
+
+
+@app.post("/api/v1/wishlists")
+def create_wishlist(
+    request: WishlistDefinitionRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    data = load_wishlists()
+    base = _wishlist_slug(request.name)
+    wishlist_id = base
+    suffix = 2
+    existing = {item.get("id") for item in data["wishlists"]}
+    while wishlist_id in existing:
+        wishlist_id = f"{base}-{suffix}"
+        suffix += 1
+
+    wishlist = {
+        "id": wishlist_id,
+        "name": request.name.strip(),
+        "description": request.description.strip(),
+        "library": request.library.strip(),
+        "keywords": _normalize_keywords(request.keywords),
+        "entries": _normalize_wishlist_entries(request.entries),
+    }
+    data["wishlists"].append(wishlist)
+    save_wishlists(data)
+    return {"ok": True, "wishlist": wishlist_summary(wishlist)}
+
+
+@app.get("/api/v1/wishlists/{wishlist_id}")
+def get_wishlist(wishlist_id: str):
+    _data, wishlist = wishlist_or_404(wishlist_id)
+    return resolved_wishlist(wishlist)
+
+
+@app.put("/api/v1/wishlists/{wishlist_id}")
+def update_wishlist(
+    wishlist_id: str,
+    request: WishlistDefinitionRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    data, wishlist = wishlist_or_404(wishlist_id)
+    wishlist.update({
+        "name": request.name.strip(),
+        "description": request.description.strip(),
+        "library": request.library.strip(),
+        "keywords": _normalize_keywords(request.keywords),
+        "entries": _normalize_wishlist_entries(request.entries),
+    })
+    save_wishlists(data)
+    return {"ok": True, "wishlist": wishlist_summary(wishlist)}
+
+
+@app.delete("/api/v1/wishlists/{wishlist_id}")
+def delete_wishlist(
+    wishlist_id: str,
+    _authorized: bool = Depends(require_api_key),
+):
+    data, _wishlist = wishlist_or_404(wishlist_id)
+    data["wishlists"] = [item for item in data["wishlists"] if item.get("id") != wishlist_id]
+    save_wishlists(data)
+    return {"ok": True}
+
+
+@app.get("/api/v1/wishlists/{wishlist_id}/playlist-matches")
+def wishlist_playlist_matches(wishlist_id: str):
+    _data, wishlist = wishlist_or_404(wishlist_id)
+    matches = matching_plex_playlists(wishlist)
+    return {"count": len(matches), "playlists": matches}
+
+
+@app.post("/api/v1/wishlists/{wishlist_id}/import-playlists")
+def import_wishlist_playlists(
+    wishlist_id: str,
+    request: WishlistImportRequest,
+    _authorized: bool = Depends(require_api_key),
+):
+    data, wishlist = wishlist_or_404(wishlist_id)
+    plex = core.connect()
+    matches = matching_plex_playlists(wishlist)
+    allowed = {item["title"] for item in matches}
+    requested = set(request.playlist_names) if request.playlist_names else allowed
+    selected = allowed & requested
+
+    imported = []
+    source_playlists = []
+    existing = _normalize_wishlist_entries(wishlist.get("entries", []))
+    seen = {(item["title"].casefold(), item.get("year")) for item in existing}
+
+    for playlist in plex.playlists():
+        title = str(getattr(playlist, "title", "") or "")
+        if title not in selected:
+            continue
+        source_playlists.append(title)
+        try:
+            items = list(playlist.items())
+        except Exception:
+            continue
+        for item in items:
+            item_title = str(getattr(item, "title", "") or "").strip()
+            if not item_title:
+                continue
+            year = getattr(item, "year", None)
+            key = (item_title.casefold(), year)
+            if key in seen:
+                continue
+            seen.add(key)
+            entry = {"title": item_title, "year": year}
+            existing.append(entry)
+            imported.append(entry)
+
+    wishlist["entries"] = existing
+    save_wishlists(data)
+    return {
+        "ok": True,
+        "imported_count": len(imported),
+        "playlist_count": len(source_playlists),
+        "playlists": sorted(source_playlists, key=str.casefold),
+        "entry_count": len(existing),
+    }
+
+
+# Legacy compatibility endpoints.
+@app.get("/api/v1/wishlist/kids-scary")
+def kids_scary_wishlist():
+    _data, wishlist = wishlist_or_404("kids-scary")
+    return resolved_wishlist(wishlist)
+
+
 @app.put("/api/v1/wishlist/kids-scary")
 def update_kids_scary_wishlist(
     request: WishlistUpdateRequest,
     _authorized: bool = Depends(require_api_key),
 ):
-    ensure_kids_scary_wishlist_file()
-
-    normalized = []
-    seen = set()
-    for entry in request.entries:
-        title = entry.title.strip()
-        if not title:
-            continue
-        key = (title.casefold(), entry.year)
-        if key in seen:
-            continue
-        seen.add(key)
-        normalized.append(WishlistItemRequest(title=title, year=entry.year))
-
-    try:
-        tmp = KIDS_SCARY_WISHLIST.with_suffix(".tmp")
-        tmp.write_text(serialize_wishlist_entries(normalized), encoding="utf-8")
-        tmp.replace(KIDS_SCARY_WISHLIST)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Could not save wishlist: {exc}") from exc
-
-    return {
-        "ok": True,
-        "count": len(normalized),
-    }
+    data, wishlist = wishlist_or_404("kids-scary")
+    wishlist["entries"] = _normalize_wishlist_entries(request.entries)
+    save_wishlists(data)
+    return {"ok": True, "count": len(wishlist["entries"])}
 
 
 @app.get("/api/v1/playlists")
