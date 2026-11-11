@@ -2,6 +2,15 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.25
+
+- Added Media Organizer placement modes for rename-in-place, A-Z/# folders, media-type folders, and moves to a separate destination.
+- Added optional Plex rescanning after file changes, targeted to only the library sections whose configured locations contain changed source or destination paths.
+- Added a safe full-library refresh fallback when Plex library locations cannot be mapped reliably, while skipping refreshes entirely when no Plex library is affected.
+- Added clear Media Organizer feedback showing which Plex libraries were refreshed and whether a safe fallback was required.
+- Split the large SwiftUI Media Organizer view into smaller compiler-friendly sections to eliminate Swift type-check timeouts.
+- Restored and tested Media Organizer folder-routing helpers and expanded regression coverage for placement modes and targeted Plex refresh behavior.
+
 ## 13.2.18
 
 - Restored clear Enable/Disable controls on Station detail screens while preserving every other station setting during the toggle.
