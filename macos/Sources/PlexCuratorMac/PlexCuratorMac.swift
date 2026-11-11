@@ -230,14 +230,33 @@ struct WishlistEntry: Codable, Identifiable {
     let item: MediaItem?
 }
 
+struct WishlistSummary: Codable, Identifiable, Hashable {
+    let id: String
+    let name: String
+    let description: String
+    let library: String
+    let keywords: [String]
+    let entryCount: Int
+}
+
+struct WishlistsResponse: Codable {
+    let wishlists: [WishlistSummary]
+}
+
 struct WishlistResponse: Codable {
+    let id: String
+    let name: String
+    let description: String
+    let library: String
+    let keywords: [String]
+    let entryCount: Int
     let foundCount: Int
     let missingCount: Int
     let totalCount: Int
     let entries: [WishlistEntry]
 }
 
-struct WishlistItemRequest: Encodable, Hashable {
+struct WishlistItemRequest: Codable, Hashable {
     let title: String
     let year: Int?
 }
@@ -246,9 +265,47 @@ struct WishlistUpdateRequest: Encodable {
     let entries: [WishlistItemRequest]
 }
 
+struct WishlistDefinitionRequest: Encodable {
+    let name: String
+    let description: String
+    let library: String
+    let keywords: [String]
+    let entries: [WishlistItemRequest]
+}
+
+struct WishlistMutationResponse: Decodable {
+    let ok: Bool
+    let wishlist: WishlistSummary?
+}
+
 struct WishlistUpdateResponse: Decodable {
     let ok: Bool
     let count: Int
+}
+
+struct WishlistPlaylistMatch: Codable, Identifiable, Hashable {
+    var id: String { ratingKey.isEmpty ? title : ratingKey }
+    let title: String
+    let itemCount: Int?
+    let ratingKey: String
+    let matchedKeywords: [String]
+}
+
+struct WishlistPlaylistMatchesResponse: Codable {
+    let count: Int
+    let playlists: [WishlistPlaylistMatch]
+}
+
+struct WishlistImportRequest: Encodable {
+    let playlistNames: [String]
+}
+
+struct WishlistImportResponse: Decodable {
+    let ok: Bool
+    let importedCount: Int
+    let playlistCount: Int
+    let playlists: [String]
+    let entryCount: Int
 }
 
 struct ScheduleBlockDefinition: Codable, Identifiable, Hashable {
@@ -1264,15 +1321,93 @@ final class APIClient {
             .appendingPathComponent(String(parts[1]))
     }
 
-    func kidsScaryWishlist() async throws -> WishlistResponse {
-        try await request("/api/v1/wishlist/kids-scary")
+    func wishlists() async throws -> [WishlistSummary] {
+        let response: WishlistsResponse = try await request("/api/v1/wishlists")
+        return response.wishlists
     }
 
-    func saveKidsScaryWishlist(_ entries: [WishlistItemRequest]) async throws -> WishlistUpdateResponse {
-        let body = try encoder.encode(WishlistUpdateRequest(entries: entries))
-        return try await request(
-            "/api/v1/wishlist/kids-scary",
+    func wishlist(id: String) async throws -> WishlistResponse {
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await request("/api/v1/wishlists/\(escaped)")
+    }
+
+    func createWishlist(
+        name: String,
+        description: String,
+        library: String,
+        keywords: [String],
+        entries: [WishlistItemRequest] = []
+    ) async throws -> WishlistSummary {
+        let body = try encoder.encode(
+            WishlistDefinitionRequest(
+                name: name,
+                description: description,
+                library: library,
+                keywords: keywords,
+                entries: entries
+            )
+        )
+        let response: WishlistMutationResponse = try await request(
+            "/api/v1/wishlists",
+            method: "POST",
+            body: body,
+            authenticated: true
+        )
+        guard let wishlist = response.wishlist else { throw APIClientError.invalidResponse }
+        return wishlist
+    }
+
+    func updateWishlist(
+        id: String,
+        name: String,
+        description: String,
+        library: String,
+        keywords: [String],
+        entries: [WishlistItemRequest]
+    ) async throws -> WishlistSummary {
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let body = try encoder.encode(
+            WishlistDefinitionRequest(
+                name: name,
+                description: description,
+                library: library,
+                keywords: keywords,
+                entries: entries
+            )
+        )
+        let response: WishlistMutationResponse = try await request(
+            "/api/v1/wishlists/\(escaped)",
             method: "PUT",
+            body: body,
+            authenticated: true
+        )
+        guard let wishlist = response.wishlist else { throw APIClientError.invalidResponse }
+        return wishlist
+    }
+
+    func deleteWishlist(id: String) async throws {
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let _: WishlistMutationResponse = try await request(
+            "/api/v1/wishlists/\(escaped)",
+            method: "DELETE",
+            authenticated: true
+        )
+    }
+
+    func wishlistPlaylistMatches(id: String) async throws -> WishlistPlaylistMatchesResponse {
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        return try await request("/api/v1/wishlists/\(escaped)/playlist-matches")
+    }
+
+    func importWishlistPlaylists(
+        id: String,
+        playlistNames: [String] = []
+    ) async throws -> WishlistImportResponse {
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let body = try encoder.encode(WishlistImportRequest(playlistNames: playlistNames))
+        return try await request(
+            "/api/v1/wishlists/\(escaped)/import-playlists",
+            method: "POST",
             body: body,
             authenticated: true
         )
@@ -2734,7 +2869,7 @@ struct RootView: View {
                     NavigationLink(destination: StationsView()) { Label("Stations", systemImage: "tv") }
                     NavigationLink(destination: SchedulesView()) { Label("Schedules", systemImage: "calendar") }
                     NavigationLink(destination: PlaylistsView()) { Label("Playlists", systemImage: "rectangle.stack") }
-                    NavigationLink(destination: KidsScaryWishlistView()) { Label("Kids Scary Wishlist", systemImage: "checklist") }
+                    NavigationLink(destination: WishlistView()) { Label("Wishlist", systemImage: "checklist") }
                     NavigationLink(destination: HistoryView()) { Label("History", systemImage: "clock.arrow.circlepath") }
                 }
 
