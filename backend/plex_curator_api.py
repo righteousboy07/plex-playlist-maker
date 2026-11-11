@@ -1331,13 +1331,17 @@ def media_organizer_apply(
             include_low_confidence=request.include_low_confidence,
             delete_excluded=request.delete_excluded,
         )
-        if request.rescan_plex:
+        changed_count = (
+            result.get("applied_count", 0)
+            + result.get("deleted_excluded_count", 0)
+        )
+        if request.rescan_plex and changed_count > 0:
             refresh = refresh_plex_libraries()
             result["plex_rescan_requested"] = True
             result["plex_libraries_refreshed"] = refresh["refreshed"]
             result["plex_rescan_errors"] = refresh["errors"]
         else:
-            result["plex_rescan_requested"] = False
+            result["plex_rescan_requested"] = bool(request.rescan_plex)
             result["plex_libraries_refreshed"] = []
             result["plex_rescan_errors"] = []
         return result
