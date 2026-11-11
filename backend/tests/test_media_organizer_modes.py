@@ -154,6 +154,36 @@ def test_plex_refresh_targets_multiple_affected_libraries(monkeypatch):
     assert music.updated is False
 
 
+def test_plex_refresh_respects_path_boundaries(monkeypatch):
+    movies = _FakeSection("Movies", ["/media/movies"])
+    monkeypatch.setattr(
+        core,
+        "connect",
+        lambda: _fake_plex_with_sections(movies),
+    )
+
+    result = api.refresh_plex_libraries(["/media/movies2/Example.mkv"])
+
+    assert result["scope"] == "none"
+    assert result["refreshed"] == []
+    assert movies.updated is False
+
+
+def test_plex_refresh_matches_secondary_library_location(monkeypatch):
+    movies = _FakeSection("Movies", ["/media/movies-a", "/media/movies-b"])
+    monkeypatch.setattr(
+        core,
+        "connect",
+        lambda: _fake_plex_with_sections(movies),
+    )
+
+    result = api.refresh_plex_libraries(["/media/movies-b/Example.mkv"])
+
+    assert result["scope"] == "targeted"
+    assert result["refreshed"] == ["Movies"]
+    assert movies.updated is True
+
+
 def test_plex_refresh_skips_when_changes_are_outside_libraries(monkeypatch):
     movies = _FakeSection("Movies", ["/media/movies"])
     tv = _FakeSection("TV Shows", ["/media/tv"])
