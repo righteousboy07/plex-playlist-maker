@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 import plex_curator_api as api
 
 
@@ -196,3 +198,82 @@ def test_import_matching_playlists_enumerates_plex_once(tmp_path, monkeypatch):
 
     assert result["imported_count"] == 1
     assert calls["playlists"] == 1
+
+
+def test_wishlist_rejects_blank_name_and_library(tmp_path, monkeypatch):
+    _patch_wishlist_paths(tmp_path, monkeypatch)
+    api.save_wishlists({"version": 1, "wishlists": []})
+
+    with pytest.raises(api.HTTPException) as name_error:
+        api.create_wishlist(
+            api.WishlistDefinitionRequest(
+                name="   ",
+                library="Movies",
+            ),
+            _authorized=True,
+        )
+    assert name_error.value.status_code == 422
+    assert "name" in name_error.value.detail.lower()
+
+    with pytest.raises(api.HTTPException) as library_error:
+        api.create_wishlist(
+            api.WishlistDefinitionRequest(
+                name="Halloween",
+                library="   ",
+            ),
+            _authorized=True,
+        )
+    assert library_error.value.status_code == 422
+    assert "library" in library_error.value.detail.lower()
+
+
+def test_store_automation_uses_structured_kids_scary_wishlist(tmp_path, monkeypatch):
+    _patch_wishlist_paths(tmp_path, monkeypatch)
+    api.save_wishlists({
+        "version": 1,
+        "wishlists": [{
+            "id": "kids-scary",
+            "name": "Kids Scary",
+            "description": "",
+            "library": "Movies",
+            "keywords": ["kids", "scary"],
+            "entries": [
+                {"title": "Coraline", "year": 2009},
+                {"title": "Monster House", "year": 2006},
+            ],
+        }],
+    })
+
+    monkeypatch.setattr(
+        api,
+        "resolved_wishlist",
+        lambda wishlist: {
+            **api.wishlist_summary(wishlist),
+            "found_count": 1,
+            "missing_count": 1,
+            "total_count": 2,
+            "entries": [
+                {
+                    "requested_title": "Coraline",
+                    "requested_year": 2009,
+                    "found": True,
+                    "matched_title": "Coraline",
+                    "item": {},
+                },
+                {
+                    "requested_title": "Monster House",
+                    "requested_year": 2006,
+                    "found": False,
+                    "matched_title": None,
+                    "item": None,
+                },
+            ],
+        },
+    )
+
+    output = api._run_store_automation_job("kids-scary-wishlist")
+
+    assert "Coraline (2009)" in output
+    assert "Monster House (2006)" in output
+    assert api.STORE_AUTOMATION_JOBS["kids-scary-wishlist"]["wishlist_id"] == "kids-scary"
+    assert "args" not in api.STORE_AUTOMATION_JOBS["kids-scary-wishlist"]
