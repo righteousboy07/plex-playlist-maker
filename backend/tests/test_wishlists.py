@@ -196,3 +196,83 @@ def test_import_matching_playlists_enumerates_plex_once(tmp_path, monkeypatch):
 
     assert result["imported_count"] == 1
     assert calls["playlists"] == 1
+
+
+def test_wishlist_rejects_blank_name_and_library(tmp_path, monkeypatch):
+    _patch_wishlist_paths(tmp_path, monkeypatch)
+    api.save_wishlists({"version": 1, "wishlists": []})
+
+    try:
+        api.create_wishlist(
+            api.WishlistDefinitionRequest(
+                name="   ",
+                description="",
+                library="Movies",
+                keywords=[],
+                entries=[],
+            ),
+            _authorized=True,
+        )
+        assert False, "blank wishlist name should be rejected"
+    except api.HTTPException as exc:
+        assert exc.status_code == 422
+        assert "name" in exc.detail.lower()
+
+    try:
+        api.create_wishlist(
+            api.WishlistDefinitionRequest(
+                name="Valid",
+                description="",
+                library="   ",
+                keywords=[],
+                entries=[],
+            ),
+            _authorized=True,
+        )
+        assert False, "blank Plex library should be rejected"
+    except api.HTTPException as exc:
+        assert exc.status_code == 422
+        assert "library" in exc.detail.lower()
+
+
+def test_import_preserves_concurrent_wishlist_edit(tmp_path, monkeypatch):
+    _patch_wishlist_paths(tmp_path, monkeypatch)
+    api.save_wishlists({
+        "version": 1,
+        "wishlists": [{
+            "id": "halloween",
+            "name": "Halloween",
+            "description": "",
+            "library": "Movies",
+            "keywords": ["halloween"],
+            "entries": [{"title": "Coraline", "year": 2009}],
+        }],
+    })
+
+    class ConcurrentPlaylist(FakePlaylist):
+        def items(self):
+            data = api.load_wishlists()
+            data["wishlists"][0]["entries"].append(
+                {"title": "Concurrent Edit", "year": 2024}
+            )
+            api.save_wishlists(data)
+            return [SimpleNamespace(title="Monster House", year=2006)]
+
+    fake_plex = SimpleNamespace(
+        playlists=lambda: [ConcurrentPlaylist("Halloween Favorites")]
+    )
+    monkeypatch.setattr(api.core, "connect", lambda: fake_plex)
+
+    result = api.import_wishlist_playlists(
+        "halloween",
+        api.WishlistImportRequest(playlist_names=[]),
+        _authorized=True,
+    )
+
+    assert result["imported_count"] == 1
+    _data, wishlist = api.wishlist_or_404("halloween")
+    assert wishlist["entries"] == [
+        {"title": "Coraline", "year": 2009},
+        {"title": "Concurrent Edit", "year": 2024},
+        {"title": "Monster House", "year": 2006},
+    ]
