@@ -1448,25 +1448,25 @@ def _store_distribution() -> bool:
     return os.environ.get("PLEX_CURATOR_DISTRIBUTION", "").strip().lower() == "app-store"
 
 
+def _format_wishlist_check_entry(prefix, entry):
+    year = entry.get("requested_year")
+    suffix = f" ({year})" if year else ""
+    return f'{prefix} {entry["requested_title"]}{suffix}'
+
+
 def _wishlist_check_output(wishlist):
     resolved = resolved_wishlist(wishlist)
     found = [entry for entry in resolved["entries"] if entry["found"]]
     missing = [entry for entry in resolved["entries"] if not entry["found"]]
 
     lines = ["Now in Plex:"]
-    lines.extend(
-        f'  + {entry["requested_title"]}{f" ({entry["requested_year"]})" if entry["requested_year"] else ""}'
-        for entry in found
-    )
+    lines.extend(_format_wishlist_check_entry(" +", entry) for entry in found)
     if not found:
         lines.append("  none")
 
     lines.append("")
     lines.append("Still missing:")
-    lines.extend(
-        f'  - {entry["requested_title"]}{f" ({entry["requested_year"]})" if entry["requested_year"] else ""}'
-        for entry in missing
-    )
+    lines.extend(_format_wishlist_check_entry(" -", entry) for entry in missing)
     if not missing:
         lines.append("  none")
     return "\n".join(lines)
