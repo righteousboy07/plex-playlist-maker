@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 import plex_curator as core
 
-API_VERSION = "1.16"
+API_VERSION = "1.17"
 API_KEY_FILE = core.CONFIG_DIR / "api.key"
 LAUNCHD_MANAGER = (
     core.APP_DIR / "plex-curator-launchd"
@@ -81,7 +81,7 @@ STORE_AUTOMATION_JOBS = {
     },
     "kids-scary-wishlist": {
         "calendar": {"weekday": 1, "hour": 9, "minute": 0},
-        "args": ["wishlist-check", str(KIDS_SCARY_WISHLIST)],
+        "wishlist_id": "kids-scary",
         "description": "Sunday at 9:00 AM",
     },
     "stations-nightly": {
@@ -1449,10 +1449,39 @@ def _store_distribution() -> bool:
     return os.environ.get("PLEX_CURATOR_DISTRIBUTION", "").strip().lower() == "app-store"
 
 
+def _format_wishlist_check_entry(prefix, entry):
+    year = entry.get("requested_year")
+    suffix = f" ({year})" if year else ""
+    return f'{prefix} {entry["requested_title"]}{suffix}'
+
+
+def _wishlist_check_output(wishlist):
+    resolved = resolved_wishlist(wishlist)
+    found = [entry for entry in resolved["entries"] if entry["found"]]
+    missing = [entry for entry in resolved["entries"] if not entry["found"]]
+
+    lines = ["Now in Plex:"]
+    lines.extend(_format_wishlist_check_entry(" +", entry) for entry in found)
+    if not found:
+        lines.append("  none")
+
+    lines.append("")
+    lines.append("Still missing:")
+    lines.extend(_format_wishlist_check_entry(" -", entry) for entry in missing)
+    if not missing:
+        lines.append("  none")
+    return "\n".join(lines)
+
+
 def _run_store_automation_job(job_name: str):
     job = STORE_AUTOMATION_JOBS.get(job_name)
     if not job:
         raise HTTPException(status_code=404, detail=f'Unknown Store automation job "{job_name}".')
+
+    wishlist_id = job.get("wishlist_id")
+    if wishlist_id:
+        _data, wishlist = wishlist_or_404(wishlist_id)
+        return _wishlist_check_output(wishlist)
 
     parser = core.build_parser()
     try:
@@ -1791,6 +1820,22 @@ def wishlist_or_404(wishlist_id):
         if wishlist.get("id") == wishlist_id:
             return data, wishlist
     raise HTTPException(status_code=404, detail=f'Unknown wishlist "{wishlist_id}".')
+
+
+def _wishlist_definition_values(request):
+    name = request.name.strip()
+    library = request.library.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Wishlist name cannot be blank.")
+    if not library:
+        raise HTTPException(status_code=422, detail="Wishlist library cannot be blank.")
+    return {
+        "name": name,
+        "description": request.description.strip(),
+        "library": library,
+        "keywords": _normalize_keywords(request.keywords),
+        "entries": _normalize_wishlist_entries(request.entries),
+    }
 
 
 def wishlist_summary(wishlist):

@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 import plex_curator_api as api
 
 
