@@ -7,6 +7,8 @@ This project uses milestone tags for major Plex Curator releases.
 - Replaced the one-off Kids Scary Wishlist screen with a generalized Wishlist manager supporting multiple named lists, editable settings, and per-list Plex libraries.
 - Added keyword-based Plex playlist discovery and imports so matching Plex playlists can populate a wishlist with deduplicated title/year entries.
 - Added automatic migration of the legacy Kids Scary wishlist into the new structured wishlist store while keeping legacy API compatibility during the transition.
+- Updated the scheduled Kids Scary Wishlist automation to read the structured wishlist store instead of the retired legacy text file.
+- Hardened Wishlist API validation so whitespace-only names or Plex library values are rejected before they can be persisted.
 
 - Added Media Organizer placement modes for rename-in-place, A-Z/# folders, media-type folders, and moves to a separate destination.
 - Added optional Plex rescanning after file changes, targeted to only the library sections whose configured locations contain changed source or destination paths.
