@@ -46,6 +46,7 @@ MEDIA_SCAN_JOB_LIMIT = 20
 _media_scan_jobs = {}
 _media_scan_cancel_events = {}
 _media_scan_jobs_lock = threading.Lock()
+_wishlists_lock = threading.RLock()
 
 STORE_AUTOMATION_JOBS = {
     "saturday-morning": {
@@ -1917,6 +1918,22 @@ def matching_plex_playlists(wishlist, playlists=None):
     return sorted(matches, key=lambda item: item["title"].casefold())
 
 
+def _wishlist_request_payload(request):
+    name = request.name.strip()
+    library = request.library.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Wishlist name cannot be blank.")
+    if not library:
+        raise HTTPException(status_code=422, detail="Plex library cannot be blank.")
+    return {
+        "name": name,
+        "description": request.description.strip(),
+        "library": library,
+        "keywords": _normalize_keywords(request.keywords),
+        "entries": _normalize_wishlist_entries(request.entries),
+    }
+
+
 @app.get("/api/v1/wishlists")
 def wishlists():
     data = load_wishlists()
@@ -1933,23 +1950,21 @@ def create_wishlist(
     request: WishlistDefinitionRequest,
     _authorized: bool = Depends(require_api_key),
 ):
-    data = load_wishlists()
-    values = _wishlist_definition_values(request)
-    base = _wishlist_slug(values["name"])
-    wishlist_id = base
-    suffix = 2
-    existing = {item.get("id") for item in data["wishlists"]}
-    while wishlist_id in existing:
-        wishlist_id = f"{base}-{suffix}"
-        suffix += 1
+    payload = _wishlist_request_payload(request)
+    with _wishlists_lock:
+        data = load_wishlists()
+        base = _wishlist_slug(payload["name"])
+        wishlist_id = base
+        suffix = 2
+        existing = {item.get("id") for item in data["wishlists"]}
+        while wishlist_id in existing:
+            wishlist_id = f"{base}-{suffix}"
+            suffix += 1
 
-    wishlist = {
-        "id": wishlist_id,
-        **values,
-    }
-    data["wishlists"].append(wishlist)
-    save_wishlists(data)
-    return {"ok": True, "wishlist": wishlist_summary(wishlist)}
+        wishlist = {"id": wishlist_id, **payload}
+        data["wishlists"].append(wishlist)
+        save_wishlists(data)
+        return {"ok": True, "wishlist": wishlist_summary(wishlist)}
 
 
 @app.get("/api/v1/wishlists/{wishlist_id}")
@@ -1964,10 +1979,12 @@ def update_wishlist(
     request: WishlistDefinitionRequest,
     _authorized: bool = Depends(require_api_key),
 ):
-    data, wishlist = wishlist_or_404(wishlist_id)
-    wishlist.update(_wishlist_definition_values(request))
-    save_wishlists(data)
-    return {"ok": True, "wishlist": wishlist_summary(wishlist)}
+    payload = _wishlist_request_payload(request)
+    with _wishlists_lock:
+        data, wishlist = wishlist_or_404(wishlist_id)
+        wishlist.update(payload)
+        save_wishlists(data)
+        return {"ok": True, "wishlist": wishlist_summary(wishlist)}
 
 
 @app.delete("/api/v1/wishlists/{wishlist_id}")
@@ -1975,10 +1992,11 @@ def delete_wishlist(
     wishlist_id: str,
     _authorized: bool = Depends(require_api_key),
 ):
-    data, _wishlist = wishlist_or_404(wishlist_id)
-    data["wishlists"] = [item for item in data["wishlists"] if item.get("id") != wishlist_id]
-    save_wishlists(data)
-    return {"ok": True}
+    with _wishlists_lock:
+        data, _wishlist = wishlist_or_404(wishlist_id)
+        data["wishlists"] = [item for item in data["wishlists"] if item.get("id") != wishlist_id]
+        save_wishlists(data)
+        return {"ok": True}
 
 
 @app.get("/api/v1/wishlists/{wishlist_id}/playlist-matches")
@@ -1994,7 +2012,7 @@ def import_wishlist_playlists(
     request: WishlistImportRequest,
     _authorized: bool = Depends(require_api_key),
 ):
-    data, wishlist = wishlist_or_404(wishlist_id)
+    _data, wishlist = wishlist_or_404(wishlist_id)
     plex = core.connect()
     playlists = list(plex.playlists())
     matches = matching_plex_playlists(wishlist, playlists=playlists)
@@ -2029,14 +2047,27 @@ def import_wishlist_playlists(
             existing.append(entry)
             imported.append(entry)
 
-    wishlist["entries"] = existing
-    save_wishlists(data)
+    with _wishlists_lock:
+        data, current = wishlist_or_404(wishlist_id)
+        merged = _normalize_wishlist_entries(current.get("entries", []))
+        merged_seen = {(item["title"].casefold(), item.get("year")) for item in merged}
+        actually_imported = []
+        for entry in imported:
+            key = (entry["title"].casefold(), entry.get("year"))
+            if key in merged_seen:
+                continue
+            merged_seen.add(key)
+            merged.append(entry)
+            actually_imported.append(entry)
+        current["entries"] = merged
+        save_wishlists(data)
+
     return {
         "ok": True,
-        "imported_count": len(imported),
+        "imported_count": len(actually_imported),
         "playlist_count": len(source_playlists),
         "playlists": sorted(source_playlists, key=str.casefold),
-        "entry_count": len(existing),
+        "entry_count": len(merged),
     }
 
 
@@ -2052,10 +2083,11 @@ def update_kids_scary_wishlist(
     request: WishlistUpdateRequest,
     _authorized: bool = Depends(require_api_key),
 ):
-    data, wishlist = wishlist_or_404("kids-scary")
-    wishlist["entries"] = _normalize_wishlist_entries(request.entries)
-    save_wishlists(data)
-    return {"ok": True, "count": len(wishlist["entries"])}
+    with _wishlists_lock:
+        data, wishlist = wishlist_or_404("kids-scary")
+        wishlist["entries"] = _normalize_wishlist_entries(request.entries)
+        save_wishlists(data)
+        return {"ok": True, "count": len(wishlist["entries"])}
 
 
 @app.get("/api/v1/playlists")

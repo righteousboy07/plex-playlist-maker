@@ -8690,11 +8690,20 @@ struct WishlistView: View {
     }
 
     private func loadSelectedWishlist() async {
-        guard !selectedWishlistID.isEmpty else { return }
+        let requestedID = selectedWishlistID
+        guard !requestedID.isEmpty else { return }
+
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            if selectedWishlistID == requestedID {
+                isLoading = false
+            }
+        }
+
         do {
-            let loaded = try await model.api.wishlist(id: selectedWishlistID)
+            let loaded = try await model.api.wishlist(id: requestedID)
+            guard selectedWishlistID == requestedID else { return }
+
             response = loaded
             drafts = loaded.entries.map {
                 Draft(title: $0.requestedTitle, year: $0.requestedYear)
@@ -8702,6 +8711,7 @@ struct WishlistView: View {
             playlistMatches = []
             model.error = nil
         } catch {
+            guard selectedWishlistID == requestedID else { return }
             model.error = error.localizedDescription
         }
     }

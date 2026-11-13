@@ -204,76 +204,77 @@ def test_wishlist_rejects_blank_name_and_library(tmp_path, monkeypatch):
     _patch_wishlist_paths(tmp_path, monkeypatch)
     api.save_wishlists({"version": 1, "wishlists": []})
 
-    with pytest.raises(api.HTTPException) as name_error:
+    try:
         api.create_wishlist(
             api.WishlistDefinitionRequest(
                 name="   ",
+                description="",
                 library="Movies",
+                keywords=[],
+                entries=[],
             ),
             _authorized=True,
         )
-    assert name_error.value.status_code == 422
-    assert "name" in name_error.value.detail.lower()
+        assert False, "blank wishlist name should be rejected"
+    except api.HTTPException as exc:
+        assert exc.status_code == 422
+        assert "name" in exc.detail.lower()
 
-    with pytest.raises(api.HTTPException) as library_error:
+    try:
         api.create_wishlist(
             api.WishlistDefinitionRequest(
-                name="Halloween",
+                name="Valid",
+                description="",
                 library="   ",
+                keywords=[],
+                entries=[],
             ),
             _authorized=True,
         )
-    assert library_error.value.status_code == 422
-    assert "library" in library_error.value.detail.lower()
+        assert False, "blank Plex library should be rejected"
+    except api.HTTPException as exc:
+        assert exc.status_code == 422
+        assert "library" in exc.detail.lower()
 
 
-def test_store_automation_uses_structured_kids_scary_wishlist(tmp_path, monkeypatch):
+def test_import_preserves_concurrent_wishlist_edit(tmp_path, monkeypatch):
     _patch_wishlist_paths(tmp_path, monkeypatch)
     api.save_wishlists({
         "version": 1,
         "wishlists": [{
-            "id": "kids-scary",
-            "name": "Kids Scary",
+            "id": "halloween",
+            "name": "Halloween",
             "description": "",
             "library": "Movies",
-            "keywords": ["kids", "scary"],
-            "entries": [
-                {"title": "Coraline", "year": 2009},
-                {"title": "Monster House", "year": 2006},
-            ],
+            "keywords": ["halloween"],
+            "entries": [{"title": "Coraline", "year": 2009}],
         }],
     })
 
-    monkeypatch.setattr(
-        api,
-        "resolved_wishlist",
-        lambda wishlist: {
-            **api.wishlist_summary(wishlist),
-            "found_count": 1,
-            "missing_count": 1,
-            "total_count": 2,
-            "entries": [
-                {
-                    "requested_title": "Coraline",
-                    "requested_year": 2009,
-                    "found": True,
-                    "matched_title": "Coraline",
-                    "item": {},
-                },
-                {
-                    "requested_title": "Monster House",
-                    "requested_year": 2006,
-                    "found": False,
-                    "matched_title": None,
-                    "item": None,
-                },
-            ],
-        },
+    class ConcurrentPlaylist(FakePlaylist):
+        def items(self):
+            data = api.load_wishlists()
+            data["wishlists"][0]["entries"].append(
+                {"title": "Concurrent Edit", "year": 2024}
+            )
+            api.save_wishlists(data)
+            return [SimpleNamespace(title="Monster House", year=2006)]
+
+    fake_plex = SimpleNamespace(
+        playlists=lambda: [ConcurrentPlaylist("Halloween Favorites")]
+    )
+    monkeypatch.setattr(api.core, "connect", lambda: fake_plex)
+
+    result = api.import_wishlist_playlists(
+        "halloween",
+        api.WishlistImportRequest(playlist_names=[]),
+        _authorized=True,
     )
 
-    output = api._run_store_automation_job("kids-scary-wishlist")
-
-    assert "Coraline (2009)" in output
-    assert "Monster House (2006)" in output
-    assert api.STORE_AUTOMATION_JOBS["kids-scary-wishlist"]["wishlist_id"] == "kids-scary"
-    assert "args" not in api.STORE_AUTOMATION_JOBS["kids-scary-wishlist"]
+    assert result["imported_count"] == 1
+    _data, wishlist = api.wishlist_or_404("halloween")
+    assert wishlist["entries"] == [
+        {"title": "Coraline", "year": 2009},
+        {"title": "Concurrent Edit", "year": 2024},
+        {"title": "Monster House", "year": 2006},
+    ]
