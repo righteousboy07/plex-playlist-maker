@@ -2,6 +2,15 @@
 
 This project uses milestone tags for major Plex Curator releases.
 
+## 13.2.26
+
+- Hardened Wishlist updates against concurrent edits and imports so newer changes are preserved.
+- Prevented stale asynchronous Wishlist detail responses from replacing a more recently selected list.
+- Added validation for blank Wishlist names and Plex library values.
+- Added regression coverage for concurrent Wishlist import safety and validation behavior.
+- Updated macOS and App Store CI path triggers so application version changes in the backend version source always rebuild both client flavors.
+- Rebuilt the full test matrix to produce fresh versioned artifacts for validation.
+
 ## 13.2.25
 
 - Replaced the one-off Kids Scary Wishlist screen with a generalized Wishlist manager supporting multiple named lists, editable settings, and per-list Plex libraries.
