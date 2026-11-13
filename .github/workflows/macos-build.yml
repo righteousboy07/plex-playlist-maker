@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "macos/**"
+      - "backend/plex_curator.py"
       - ".github/workflows/macos-build.yml"
   pull_request:
     paths:
