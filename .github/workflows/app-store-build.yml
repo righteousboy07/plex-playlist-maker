@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "macos/**"
+      - "backend/plex_curator.py"
       - "docs/APP_STORE.md"
       - ".github/workflows/app-store-build.yml"
   pull_request:
